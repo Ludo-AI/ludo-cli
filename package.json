@@ -1,0 +1,43 @@
+{
+  "name": "@ludoai/cli",
+  "version": "0.1.0",
+  "description": "Command-line access to the Ludo AI API for humans and coding agents: game sprites, animations, 3D models, video and audio.",
+  "keywords": [
+    "ludo",
+    "ludo-ai",
+    "game-assets",
+    "sprites",
+    "cli",
+    "ai",
+    "agents"
+  ],
+  "homepage": "https://ludo.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ludo-AI/ludo-cli.git"
+  },
+  "license": "UNLICENSED",
+  "type": "module",
+  "bin": {
+    "ludo": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "spec",
+    "skills",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test",
+    "sync-spec": "node scripts/sync-spec.mjs",
+    "prepublishOnly": "npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,80 @@
+name: Release
+
+# Two ways to cut a release:
+#   - push a tag vX.Y.Z (a CLI change): test and publish that version;
+#   - the embedded API spec changed (daily check, or a `spec-updated`
+#     repository_dispatch from the backend deploy): commit it, bump the patch
+#     version, tag and publish.
+#
+# The CLI fetches the live spec at run time, so the embedded copy is only the
+# offline fallback: a stale one is harmless, which is why the check is daily.
+#
+# Repository variables gate the moving parts:
+#   SYNC_SPEC=true    enable the scheduled spec check (needs the backend route
+#                     /api-documentation/openapi.json live on api.ludo.ai)
+#   NPM_PUBLISH=true  publish to npm (needs npm trusted publishing configured
+#                     for this repo and workflow on the @ludoai/cli package)
+
+on:
+  push:
+    tags: ["v*"]
+  schedule:
+    - cron: "17 6 * * *"
+  repository_dispatch:
+    types: [spec-updated]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write # npm trusted publishing + provenance
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule' || vars.SYNC_SPEC == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install -g npm@latest
+      - run: npm ci
+
+      - name: Sync the embedded spec
+        id: sync
+        if: github.ref_type != 'tag'
+        run: |
+          npm run sync-spec
+          if git diff --quiet -- spec/openapi.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Test
+        if: github.ref_type == 'tag' || steps.sync.outputs.changed == 'true'
+        run: npm test
+
+      - name: Commit, bump and tag
+        if: steps.sync.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          API_VERSION=$(node -p "require('./spec/openapi.json').info.version")
+          git add spec/openapi.json
+          git commit -m "Update embedded API spec (API $API_VERSION)"
+          npm version patch -m "Release %s (API $API_VERSION)"
+          git push origin HEAD:main --follow-tags
+
+      - name: Publish to npm
+        if: vars.NPM_PUBLISH == 'true' && (github.ref_type == 'tag' || steps.sync.outputs.changed == 'true')
+        run: npm publish --provenance --access public

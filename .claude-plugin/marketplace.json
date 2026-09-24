@@ -1,0 +1,11 @@
+{
+  "name": "ludo",
+  "owner": { "name": "Ludo AI", "url": "https://ludo.ai" },
+  "plugins": [
+    {
+      "name": "ludo",
+      "source": "./",
+      "description": "Generate game assets (sprites, animations, 3D models, video, audio) with the Ludo AI `ludo` CLI."
+    }
+  ]
+}
