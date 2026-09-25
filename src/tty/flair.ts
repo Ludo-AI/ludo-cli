@@ -60,7 +60,7 @@ const q = (p: string) => (/[\s"'$]/.test(p) ? JSON.stringify(p) : p);
 // What to try next with a fresh result: teaches the pipeline, costs nothing.
 export function nextStep(taskType: string | undefined, files: { path: string }[], body?: Record<string, unknown>): string | undefined {
   const find = (re: RegExp) => files.find(f => re.test(f.path))?.path;
-  const png = find(/\.png$/i);
+  const png = find(/\.(png|webp|jpe?g)$/i);
   const glb = find(/\.glb$/i);
   switch (taskType) {
     case "createImage":

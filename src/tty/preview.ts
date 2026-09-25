@@ -1,5 +1,6 @@
 import fs from "node:fs";
-import { decodePng, readText, withText, type Image } from "./png.js";
+import { readText, withText, type Image } from "./png.js";
+import { loadImage } from "./image.js";
 import { renderLines, type Rect } from "./halfblock.js";
 import { armRestore, sleep, type Visuals } from "./visuals.js";
 
@@ -109,10 +110,9 @@ export async function playSheet(img: Image, grid: Grid, v: Visuals, loops = 3): 
 export async function previewFile(file: string, v: Visuals, gridOverride?: Grid): Promise<boolean> {
   if (!v.enabled) return false;
   try {
-    const buf = fs.readFileSync(file);
-    const img = decodePng(buf);
+    const img = loadImage(file);
     if (!img) return false;
-    const grid = gridOverride || readGrid(buf);
+    const grid = gridOverride || readGrid(fs.readFileSync(file));
     if (grid && (await playSheet(img, grid, v))) return true;
     drawStill(img, v);
     return true;

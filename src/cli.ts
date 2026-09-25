@@ -116,7 +116,7 @@ async function finishJob(ctx: Ctx, job: any, label: string, body?: Record<string
       for (const f of files) process.stdout.write(`  ${f.path}\n`);
       if (!files.length) printJson(job.result, true);
       if (ctx.vis.enabled) {
-        const still = sheet || files.find(f => /\.png$/i.test(f.path))?.path;
+        const still = sheet || files.find(f => IMAGE_EXT.test(f.path))?.path;
         if (still) await previewFile(still, ctx.vis);
       }
       const hint = !globals.quiet && nextStep(job.task_type, files, body);
@@ -356,7 +356,11 @@ async function preview(ctx: Ctx, parsed: Parsed, words: string[]): Promise<numbe
     grid = { ...g, frames, fps: Number(flag("--fps")) || 10 };
   }
   if (!(await previewFile(file, ctx.vis, grid))) {
-    throw new CliError(`Could not preview ${file}`, EXIT.USAGE, "Previews read PNG files (not interlaced).");
+    throw new CliError(
+      `Could not preview ${file}`,
+      EXIT.USAGE,
+      process.platform === "darwin" ? "Previews read PNG, WebP and JPEG images." : "Previews read PNG; for WebP or JPEG install dwebp (libwebp), ImageMagick or ffmpeg."
+    );
   }
   return EXIT.OK;
 }
