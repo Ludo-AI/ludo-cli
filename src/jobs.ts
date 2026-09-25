@@ -107,6 +107,12 @@ function extensionFor(buffer: Buffer, dataUrlMime?: string): string {
   return ".bin";
 }
 
+function looksLikeBase64(value: string): boolean {
+  if (/^https?:\/\//i.test(value)) return false;
+  const body = value.replace(/^data:[^,]*,/, "");
+  return /^[A-Za-z0-9+/_-]+={0,2}$/.test(body.slice(0, 4096).replace(/\s+/g, ""));
+}
+
 export function extractInlineFiles(
   result: unknown,
   save: { dir: string; prefix: string } | null,
@@ -114,7 +120,10 @@ export function extractInlineFiles(
 ): { result: unknown; files: SavedFile[] } {
   const files: SavedFile[] = [];
   const walk = (value: unknown, key: string): unknown => {
-    if (typeof value === "string" && /_b64$/.test(key) && value.length > 64) {
+    // Some *_b64 fields hold a URL once the API has uploaded the file (a
+    // spritesheet's audio_b64 is its mp3's URL); those are downloaded like any
+    // other result URL. Only real base64 is decoded here.
+    if (typeof value === "string" && /_b64$/.test(key) && value.length > 64 && looksLikeBase64(value)) {
       const m = /^data:([^;,]+)[^,]*,/.exec(value);
       const buffer = Buffer.from(m ? value.slice(m[0].length) : value, "base64");
       if (!save) return `<${buffer.length} bytes of base64 omitted; run without --no-download to save it>`;
