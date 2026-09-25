@@ -149,3 +149,42 @@ test("draws a credits bar", () => {
   assert.equal(creditsBar(50, 100, 10), "▰▰▰▰▰▱▱▱▱▱");
   assert.equal(creditsBar(0, 0, 4), "▱▱▱▱");
 });
+
+const { detectProtocol, kittySequence, itermSequence, cellSize } = await import("../dist/tty/graphics.js");
+const { isPixelArt } = await import("../dist/tty/preview.js");
+
+test("detects the terminal's image protocol, and none inside tmux", () => {
+  assert.equal(detectProtocol({ TERM_PROGRAM: "ghostty" }), "kitty");
+  assert.equal(detectProtocol({ KITTY_WINDOW_ID: "1" }), "kitty");
+  assert.equal(detectProtocol({ TERM_PROGRAM: "WezTerm" }), "kitty");
+  assert.equal(detectProtocol({ TERM_PROGRAM: "iTerm.app" }), "iterm");
+  assert.equal(detectProtocol({ LC_TERMINAL: "iTerm2" }), "iterm");
+  assert.equal(detectProtocol({ TERM_PROGRAM: "Apple_Terminal" }), undefined);
+  assert.equal(detectProtocol({ TERM_PROGRAM: "iTerm.app", TMUX: "/tmp/tmux" }), undefined);
+});
+
+test("kitty images go out as PNG in 4096-byte chunks, keyed only on the first", () => {
+  const seq = kittySequence(Buffer.alloc(5000, 7), 20, 10, 1);
+  const chunks = seq.split("\x1b\\").filter(Boolean);
+  assert.equal(chunks.length, 2);
+  assert.match(chunks[0], /^\x1b_Ga=T,f=100,q=2,C=1,c=20,r=10,i=1,p=1,m=1;/);
+  assert.match(chunks[1], /^\x1b_Gm=0;/);
+});
+
+test("iTerm2 images are one inline sequence sized in cells", () => {
+  const seq = itermSequence(Buffer.from("png"), 20, 10);
+  assert.equal(seq, `\x1b]1337;File=inline=1;size=3;width=20;height=10;preserveAspectRatio=1:${Buffer.from("png").toString("base64")}\x07`);
+});
+
+test("sizes images in cells, which are twice as tall as wide", () => {
+  assert.deepEqual(cellSize({ width: 100, height: 100 }, 48, 16), { cols: 32, rows: 16 });
+  assert.deepEqual(cellSize({ width: 400, height: 100 }, 48, 16), { cols: 48, rows: 6 });
+});
+
+test("only small or few-colour images count as pixel art", () => {
+  const flat = img(256, 256, (x, y) => [(x >> 5) * 30, (y >> 5) * 30, 0, 255]); // 8x8 blocks of colour
+  assert.equal(isPixelArt(flat, { x: 0, y: 0, w: 256, h: 256 }), true);
+  const painted = img(256, 256, (x, y) => [x, y, (x * y) & 255, 255]);
+  assert.equal(isPixelArt(painted, { x: 0, y: 0, w: 256, h: 256 }), false);
+  assert.equal(isPixelArt(painted, { x: 0, y: 0, w: 96, h: 96 }), true);
+});

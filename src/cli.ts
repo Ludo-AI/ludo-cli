@@ -119,7 +119,9 @@ async function finishJob(ctx: Ctx, job: any, label: string, body?: Record<string
       if (!files.length) printJson(job.result, true);
       if (ctx.vis.enabled) {
         const still = sheet || files.find(f => IMAGE_EXT.test(f.path))?.path;
-        if (still) await previewFile(still, ctx.vis);
+        if (still && (await previewFile(still, ctx.vis)) === "unsupported") {
+          process.stderr.write("  (add --open to view it full size)\n");
+        }
       }
       const hint = !globals.quiet && nextStep(job.task_type, files, body);
       if (hint) process.stderr.write(`${hint}\n`);
@@ -400,7 +402,7 @@ async function preview(ctx: Ctx, parsed: Parsed, words: string[]): Promise<numbe
     const frames = Number(flag("--frames")) || g.cols * g.rows;
     grid = { ...g, frames, fps: Number(flag("--fps")) || 10 };
   }
-  if (!(await previewFile(file, ctx.vis, grid))) {
+  if ((await previewFile(file, ctx.vis, grid, true)) !== "shown") {
     throw new CliError(
       `Could not preview ${file}`,
       EXIT.USAGE,

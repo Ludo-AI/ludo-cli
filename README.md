@@ -78,9 +78,11 @@ ludo docs search --query "which animation model should I use for pixel art?"
 
 ### In the terminal
 
-At a terminal, results show up right there: images as a small pixel preview, spritesheets as a
-looping animation, and `ludo preview <file.png>` shows any saved file again (Ludo spritesheets
-remember their grid; for other sheets pass `--grid 8x4 --fps 12`). A spinner shows the job's
+At a terminal, results show up right there, spritesheets as a looping animation. Terminals that
+draw real images (iTerm2, Kitty, Ghostty, WezTerm) show the actual picture; elsewhere pixel art is
+drawn with block characters and other images are left to `--open`, which opens them full size.
+`ludo preview <file>` shows any saved image again (Ludo spritesheets remember their grid; for
+other sheets pass `--grid 8x4 --fps 12`). A spinner shows the job's
 status while you wait, and each result suggests a next step.
 
 None of this reaches scripts or AI agents: it is drawn on stderr and only when both outputs are a
