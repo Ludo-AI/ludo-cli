@@ -1,6 +1,10 @@
 {
   "name": "ludo",
-  "owner": { "name": "Ludo AI", "url": "https://ludo.ai" },
+  "description": "Ludo AI plugins for Claude Code: generate game assets (sprites, animations, 3D models, video, audio) with the ludo CLI.",
+  "owner": {
+    "name": "Ludo AI",
+    "url": "https://ludo.ai"
+  },
   "plugins": [
     {
       "name": "ludo",
