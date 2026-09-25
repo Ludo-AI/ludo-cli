@@ -6,6 +6,7 @@ import { Api, uploadFile } from "./api.js";
 import { Globals, parseArgv, Parsed, resolveFlags } from "./args.js";
 import { buildCommands, Command, findCommand, groupsOf } from "./commands.js";
 import { readConfig, resolveApiKey, resolveApiUrl, VERSION, writeConfig } from "./config.js";
+import { reportCrash } from "./crash.js";
 import { CliError, EXIT, specMismatch } from "./errors.js";
 import { agentHelp, commandHelp, groupHelp, mainHelp } from "./help.js";
 import { collectUrls, downloadAll, extractInlineFiles, waitForJob } from "./jobs.js";
@@ -188,6 +189,9 @@ async function login(ctx: Ctx, parsed: Parsed, words: string[]): Promise<number>
   return EXIT.OK;
 }
 
+// What is running, for crash reports: a command name, never its arguments.
+let commandLabel: string | undefined;
+
 // The spec the current run was built from, for the stale-spec retry below.
 let specInUse: { apiUrl: string; source: string } | undefined;
 
@@ -211,6 +215,7 @@ async function main(argv: string[]): Promise<number> {
   const { globals, words } = parsed;
   const ctx = makeCtx(globals);
   const [first, second] = words;
+  if (["version", "login", "logout", "update", "spec", "help", "agent-help"].includes(first)) commandLabel = first;
 
   if (first === "version" || argv.includes("--version") || argv.includes("-v")) {
     process.stdout.write(`${VERSION}\n`);
@@ -255,6 +260,7 @@ async function main(argv: string[]): Promise<number> {
 
   // Built-ins living inside API groups.
   if (first === "files" && second === "upload") {
+    commandLabel = "files upload";
     if (globals.help || words.length < 3) {
       process.stdout.write("Usage: ludo files upload <path>...\n\nUploads local files and prints their public URLs (deleted after 7 days).\nYou rarely need this: file flags upload local paths for you.\n");
       return globals.help ? EXIT.OK : EXIT.USAGE;
@@ -267,6 +273,7 @@ async function main(argv: string[]): Promise<number> {
     return EXIT.OK;
   }
   if (first === "jobs" && second === "wait") {
+    commandLabel = "jobs wait";
     if (globals.help || !words[2]) {
       process.stdout.write("Usage: ludo jobs wait <id> [--out <dir>] [--timeout <s>] [--no-download]\n\nWaits for a job to finish, then saves its result files like a generation command does.\n");
       return globals.help ? EXIT.OK : EXIT.USAGE;
@@ -286,6 +293,7 @@ async function main(argv: string[]): Promise<number> {
     }
     throw specMismatch(`Unknown command: ${first}`, `Groups: ${groups.join(", ")}. Run \`ludo --help\`.`);
   }
+  commandLabel = `${command.group} ${command.name}`;
   if (globals.help) {
     process.stdout.write(commandHelp(command) + "\n");
     return EXIT.OK;
@@ -295,14 +303,17 @@ async function main(argv: string[]): Promise<number> {
 
 run(process.argv.slice(2)).then(
   code => process.exit(code),
-  (err: unknown) => {
+  async (err: unknown) => {
     const json = process.argv.includes("--json") || !process.stdout.isTTY;
     if (err instanceof CliError) {
       if (json) printJson({ error: { message: err.message, exit_code: err.exitCode, hint: err.hint, details: err.details } }, false);
       process.stderr.write(`Error: ${err.message}\n${err.hint ? `${err.hint}\n` : ""}`);
       process.exit(err.exitCode);
     }
+    // Anything else is a bug in the CLI.
     process.stderr.write(`Error: ${(err as Error)?.stack || err}\n`);
+    const eventId = await reportCrash(err, commandLabel);
+    if (eventId) process.stderr.write(`This looks like a bug in ludo; a crash report was sent (${eventId}). Set LUDO_TELEMETRY=0 to stop sending them.\n`);
     process.exit(EXIT.ERROR);
   }
 );

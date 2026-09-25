@@ -42,6 +42,10 @@ before(async () => {
       res.writeHead(200, { "Content-Type": "application/json", ETag: '"v2"' });
       return res.end(fs.readFileSync(SPEC));
     }
+    if (req.method === "POST" && url.pathname === "/api/42/envelope/") {
+      res.writeHead(200);
+      return res.end("{}");
+    }
     if (req.method === "POST" && url.pathname === "/api/assets/uploads") {
       const body = JSON.parse(raw);
       return json(res, 200, {
@@ -97,6 +101,7 @@ function run(args, extraEnv = {}, cwd = fs.mkdtempSync(path.join(os.tmpdir(), "l
         LUDO_API_KEY: "test-key",
         LUDO_CONFIG_DIR: path.join(cwd, ".config"),
         LUDO_CACHE_DIR: path.join(cwd, ".cache"),
+        LUDO_TELEMETRY: "0",
         ...extraEnv
       }
     });
@@ -213,4 +218,44 @@ test("no retry when the server says the cached spec is current", async () => {
   assert.match(stderr, /Unknown command: ludo image remove-background/);
   assert.equal(specFetches(from).length, 1);
   assert.ok(!seen.slice(from).some(s => s.path.startsWith("/api/assets/")));
+});
+
+test("a crash in the CLI sends a scrubbed report to Sentry", async () => {
+  const from = seen.length;
+  const bad = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-bad-")), "spec.json");
+  fs.writeFileSync(bad, "{ not json");
+  const { code, stderr } = await run(["image", "create", "--prompt", "secret prompt"], {
+    LUDO_SPEC: bad,
+    LUDO_TELEMETRY: "",
+    DO_NOT_TRACK: "",
+    LUDO_API_KEY: "sk-very-secret",
+    LUDO_SENTRY_DSN: `http://pubkey@${new URL(base).host}/42`
+  });
+  assert.equal(code, 1);
+  assert.match(stderr, /crash report was sent/);
+
+  const sent = seen.slice(from).find(s => s.path === "/api/42/envelope/");
+  assert.ok(sent, "an envelope was posted");
+  assert.match(sent.headers["x-sentry-auth"], /sentry_key=pubkey/);
+  const raw = sent.raw.toString();
+  const event = JSON.parse(raw.split("\n")[2]);
+  assert.equal(event.exception.values[0].type, "SyntaxError");
+  assert.equal(event.tags.command, "(none)");
+  assert.ok(event.exception.values[0].stacktrace.frames.some(f => f.in_app && f.filename === "dist/spec.js"));
+  for (const secret of ["sk-very-secret", "secret prompt", os.homedir(), bad]) assert.ok(!raw.includes(secret), `leaked ${secret}`);
+});
+
+test("crash reports honour DO_NOT_TRACK", async () => {
+  const from = seen.length;
+  const bad = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-bad-")), "spec.json");
+  fs.writeFileSync(bad, "{ not json");
+  const { code, stderr } = await run(["image", "--help"], {
+    LUDO_SPEC: bad,
+    LUDO_TELEMETRY: "",
+    DO_NOT_TRACK: "1",
+    LUDO_SENTRY_DSN: `http://pubkey@${new URL(base).host}/42`
+  });
+  assert.equal(code, 1);
+  assert.doesNotMatch(stderr, /crash report/);
+  assert.ok(!seen.slice(from).some(s => s.path === "/api/42/envelope/"));
 });
