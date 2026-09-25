@@ -11,6 +11,10 @@ import { CliError, EXIT, specMismatch } from "./errors.js";
 import { agentHelp, commandHelp, groupHelp, mainHelp } from "./help.js";
 import { collectUrls, downloadAll, extractInlineFiles, waitForJob } from "./jobs.js";
 import { embeddedSpecPath, loadSpec } from "./spec.js";
+import { visuals, type Visuals } from "./tty/visuals.js";
+import { gridFromResult, parseGrid, previewFile, stampGrid } from "./tty/preview.js";
+import { creditsBar, logo, nextStep, spinner } from "./tty/flair.js";
+import { AUDIO_EXT, copyText, IMAGE_EXT, openFile, playAudio } from "./tty/actions.js";
 import { accountLine, accountSummary, billingUrlFor, browserLogin, canOpenBrowser, openBrowser } from "./login.js";
 
 const DEFAULT_OUT = "ludo-output";
@@ -20,6 +24,7 @@ interface Ctx {
   globals: Globals;
   api: Api;
   jsonOut: boolean;
+  vis: Visuals;
   log: (msg: string) => void;
 }
 
@@ -28,7 +33,8 @@ function makeCtx(globals: Globals): Ctx {
   const log = (msg: string) => {
     if (!globals.quiet) process.stderr.write(msg + "\n");
   };
-  return { globals, api: new Api(resolveApiUrl(globals.apiUrl), resolveApiKey(globals.apiKey)), jsonOut, log };
+  const vis = visuals({ json: jsonOut, quiet: globals.quiet, plain: globals.plain });
+  return { globals, api: new Api(resolveApiUrl(globals.apiUrl), resolveApiKey(globals.apiKey)), jsonOut, vis, log };
 }
 
 function printJson(value: unknown, pretty: boolean) {
@@ -65,7 +71,7 @@ function expandPath(template: string, params: Record<string, string>): string {
   return template.replace(/\{([^}]+)\}/g, (_, name) => encodeURIComponent(params[name] ?? ""));
 }
 
-async function finishJob(ctx: Ctx, job: any, label: string): Promise<number> {
+async function finishJob(ctx: Ctx, job: any, label: string, body?: Record<string, unknown>): Promise<number> {
   const { globals } = ctx;
   const record: any = {
     job_id: job.id,
@@ -75,6 +81,7 @@ async function finishJob(ctx: Ctx, job: any, label: string): Promise<number> {
     result: job.result,
     error: job.error
   };
+  let sheet: string | undefined;
   if (job.status === "succeeded") {
     const dir = path.resolve(globals.out || DEFAULT_OUT);
     const prefix = `${job.task_type || label}-${String(job.id).slice(0, 8)}`;
@@ -82,25 +89,91 @@ async function finishJob(ctx: Ctx, job: any, label: string): Promise<number> {
     record.result = inline.result;
     const urls = collectUrls(record.result);
     const downloaded = globals.download && urls.length ? await downloadAll(urls, dir, prefix, ctx.log) : [];
+    // A spritesheet remembers its grid inside the PNG, for `ludo preview`
+    // and engine exports.
+    const grid = gridFromResult(job.result);
+    const sheetFile = downloaded.find(f => f.url === job.result?.spritesheet_url);
+    if (grid && sheetFile) {
+      stampGrid(sheetFile.path, grid);
+      sheet = sheetFile.path;
+    }
+    const engineFiles = globals.engine ? await engineExport(ctx, sheet, grid) : [];
     const rel = (p: string) => path.relative(process.cwd(), p) || p;
-    record.files = [...downloaded, ...inline.files].map(f => ({ ...f, path: rel(f.path) }));
+    record.files = [...downloaded, ...inline.files, ...engineFiles].map(f => ({ ...f, path: rel(f.path) }));
     // Inline files were replaced by their absolute path; show it relative too.
     for (const f of inline.files) record.result = replaceString(record.result, f.path, rel(f.path));
+    if (sheet) sheet = rel(sheet);
   }
+  const files: { path: string }[] = record.files || [];
   if (ctx.jsonOut) {
     printJson(record, !!ctx.globals.json && process.stdout.isTTY);
   } else {
     if (job.status === "succeeded") {
-      process.stdout.write(`✓ ${label} succeeded${job.credits_charged ? ` (${job.credits_charged} credits)` : ""}\n`);
-      for (const f of record.files || []) process.stdout.write(`  ${f.path}\n`);
-      if (!record.files?.length) printJson(job.result, true);
+      const cost = await costLine(ctx, job.credits_charged);
+      process.stdout.write(`✓ ${label} succeeded${cost ? ` (${cost})` : ""}\n`);
+      for (const f of files) process.stdout.write(`  ${f.path}\n`);
+      if (!files.length) printJson(job.result, true);
+      if (ctx.vis.enabled) {
+        const still = sheet || files.find(f => /\.png$/i.test(f.path))?.path;
+        if (still) await previewFile(still, ctx.vis);
+      }
+      const hint = !globals.quiet && nextStep(job.task_type, files, body);
+      if (hint) process.stderr.write(`${hint}\n`);
     } else {
       process.stdout.write(`✗ ${label} ${job.status}${job.error?.message ? `: ${job.error.message}` : ""}\n`);
     }
   }
+  if (job.status === "succeeded" && files.length) handOff(ctx, files, sheet);
   if (job.status === "failed") return EXIT.JOB_FAILED;
   if (job.status === "canceled") return EXIT.JOB_CANCELED;
   return EXIT.OK;
+}
+
+// "9 credits · 1,831 left", for people only (one extra request).
+async function costLine(ctx: Ctx, charged: unknown): Promise<string | undefined> {
+  const spent = typeof charged === "number" && charged > 0 ? `${charged.toLocaleString("en-US")} credits` : undefined;
+  const res = await ctx.api.request("GET", "/assets/account", { timeoutMs: 5_000 }).catch(() => undefined);
+  const left = res?.status === 200 ? res.body?.credits?.available : undefined;
+  const leftText = typeof left === "number" ? `${left.toLocaleString("en-US", { maximumFractionDigits: 2 })} left` : undefined;
+  return [spent, leftText].filter(Boolean).join(" · ") || undefined;
+}
+
+// --open, --play, --copy: explicit requests, so they run for agents too.
+function handOff(ctx: Ctx, files: { path: string }[], sheet?: string) {
+  const { globals } = ctx;
+  if (globals.copy) {
+    const ok = copyText(files.map(f => path.resolve(f.path)).join("\n"));
+    ctx.log(ok ? "Copied the file paths to the clipboard." : "Could not reach a clipboard tool (pbcopy, wl-copy, xclip, xsel or clip).");
+  }
+  if (globals.open) {
+    const target = sheet || files.find(f => IMAGE_EXT.test(f.path))?.path || files[0].path;
+    openFile(path.resolve(target));
+  }
+  if (globals.play) {
+    const audio = files.find(f => AUDIO_EXT.test(f.path));
+    if (audio) playAudio(path.resolve(audio.path));
+    else ctx.log("--play: this result has no audio.");
+  }
+}
+
+async function engineExport(ctx: Ctx, sheet: string | undefined, grid: ReturnType<typeof gridFromResult>): Promise<{ url: string; path: string }[]> {
+  if (!sheet || !grid) {
+    ctx.log("--engine godot: this result has no spritesheet, so there is nothing to export.");
+    return [];
+  }
+  try {
+    // TODO(godot): static import once src/tty/godot.ts lands.
+    const godotModule = "./tty/godot.js";
+    const { writeGodotSpriteFrames } = await import(godotModule);
+    const { decodePng } = await import("./tty/png.js");
+    const img = decodePng(fs.readFileSync(sheet));
+    if (!img) throw new Error("could not read the spritesheet");
+    const tres = writeGodotSpriteFrames(sheet, img.width, img.height, { cols: grid.cols, rows: grid.rows, frames: grid.frames, fps: grid.fps });
+    return [{ url: "(godot SpriteFrames)", path: tres }];
+  } catch (err) {
+    ctx.log(`--engine godot: ${(err as Error).message}`);
+    return [];
+  }
 }
 
 function replaceString(value: unknown, from: string, to: string): unknown {
@@ -110,33 +183,46 @@ function replaceString(value: unknown, from: string, to: string): unknown {
   return value;
 }
 
+// A one-line spinner for a person at a terminal; otherwise one plain line
+// per status change, as logs and agents expect.
 function progressReporter(ctx: Ctx, label: string) {
+  if (ctx.vis.enabled) {
+    const s = spinner(label, ctx.vis);
+    return { report: (job: any, elapsed: number) => s.update(job.status, elapsed), stop: () => s.stop() };
+  }
   let last = "";
-  return (job: any, elapsed: number) => {
-    const line = `${label}: ${job.status} (${Math.round(elapsed)}s)`;
-    if (line !== last && !ctx.globals.quiet) {
-      process.stderr.write(line + "\n");
-      last = line;
-    }
+  return {
+    report: (job: any, elapsed: number) => {
+      const line = `${label}: ${job.status} (${Math.round(elapsed)}s)`;
+      if (line !== last && !ctx.globals.quiet) {
+        process.stderr.write(line + "\n");
+        last = line;
+      }
+    },
+    stop: () => {}
   };
 }
 
-async function runJobWait(ctx: Ctx, id: string, label: string): Promise<number> {
+async function runJobWait(ctx: Ctx, id: string, label: string, body?: Record<string, unknown>): Promise<number> {
   ctx.api.requireKey();
+  const progress = progressReporter(ctx, label);
   const stopHint = () => {
+    progress.stop();
     process.stderr.write(`\nStopped waiting. The job keeps running; resume with: ludo jobs wait ${id}\n`);
     process.exit(EXIT.INTERRUPTED);
   };
   process.once("SIGINT", stopHint);
+  let job;
   try {
-    const job = await waitForJob(ctx.api, id, {
+    job = await waitForJob(ctx.api, id, {
       timeoutS: ctx.globals.timeout || DEFAULT_TIMEOUT_S,
-      progress: progressReporter(ctx, label)
+      progress: progress.report
     });
-    return await finishJob(ctx, job, label);
   } finally {
+    progress.stop();
     process.removeListener("SIGINT", stopHint);
   }
+  return finishJob(ctx, job, label, body);
 }
 
 async function runCommand(ctx: Ctx, command: Command, parsed: Parsed, positionals: string[]): Promise<number> {
@@ -161,10 +247,12 @@ async function runCommand(ctx: Ctx, command: Command, parsed: Parsed, positional
       printJson(response, !ctx.jsonOut || !!ctx.globals.json);
       return EXIT.OK;
     }
-    if (["succeeded", "failed", "canceled"].includes(response.status)) return finishJob(ctx, response, label);
-    return runJobWait(ctx, response.id, label);
+    if (["succeeded", "failed", "canceled"].includes(response.status)) return finishJob(ctx, response, label, resolved.body);
+    return runJobWait(ctx, response.id, label, resolved.body);
   }
   if (command.operationId === "getAccount" && !ctx.jsonOut) {
+    const c = response?.credits || {};
+    if (ctx.vis.enabled && typeof c.available === "number") process.stderr.write(`  ${creditsBar(c.available, (c.plan_credits || 0) + (c.extra || 0))}\n`);
     process.stdout.write(accountSummary(response) + "\n");
     return EXIT.OK;
   }
@@ -224,7 +312,7 @@ async function login(ctx: Ctx, parsed: Parsed, words: string[]): Promise<number>
     process.stderr.write("Note: LUDO_API_KEY is set in your environment and takes precedence over this login. Unset it to use the login.\n");
   }
   if (ctx.jsonOut) printJson({ ok: true, config: file, account }, false);
-  else process.stdout.write(`✓ Logged in${account ? `: ${accountLine(account)}` : ""}\n`);
+  else process.stdout.write(account ? `✓ Player 1 ready: ${accountLine(account)}\n` : "✓ Logged in\n");
   return EXIT.OK;
 }
 
@@ -244,6 +332,34 @@ async function logout(ctx: Ctx): Promise<number> {
   if (ctx.jsonOut) printJson({ ok: true, revoked }, false);
   else process.stdout.write(`Logged out${revoked ? " (this CLI login was revoked)" : ""}\n`);
   if (process.env.LUDO_API_KEY) ctx.log("Note: LUDO_API_KEY is still set in your environment.");
+  return EXIT.OK;
+}
+
+// `ludo preview <file> [--grid 8x4] [--fps 12] [--frames N]`: shows a PNG in
+// the terminal and plays it when it is a spritesheet (Ludo sheets carry their
+// grid; others take --grid).
+async function preview(ctx: Ctx, parsed: Parsed, words: string[]): Promise<number> {
+  const file = words[0];
+  const flag = (name: string) => parsed.flags.get(name)?.find(v => v !== "\u0000flag");
+  if (!file || ctx.globals.help) {
+    process.stdout.write("Usage: ludo preview <file.png> [--grid <cols>x<rows>] [--fps <n>] [--frames <n>]\n\nDraws a PNG in the terminal. Spritesheets saved by ludo play automatically;\nfor other sheets pass --grid (and --fps, default 10).\n");
+    return file ? EXIT.OK : EXIT.USAGE;
+  }
+  if (!fs.existsSync(file)) throw new CliError(`file not found: ${file}`, EXIT.USAGE);
+  if (!ctx.vis.enabled) {
+    throw new CliError("ludo preview draws in an interactive terminal", EXIT.USAGE, "It is off with --json, --plain, NO_COLOR, LUDO_PREVIEW=0, in pipes and for coding agents.");
+  }
+  let grid;
+  const gridFlag = flag("--grid");
+  if (gridFlag) {
+    const g = parseGrid(gridFlag);
+    if (!g) throw new CliError(`--grid expects <cols>x<rows>, e.g. 8x4 (got "${gridFlag}")`, EXIT.USAGE);
+    const frames = Number(flag("--frames")) || g.cols * g.rows;
+    grid = { ...g, frames, fps: Number(flag("--fps")) || 10 };
+  }
+  if (!(await previewFile(file, ctx.vis, grid))) {
+    throw new CliError(`Could not preview ${file}`, EXIT.USAGE, "Previews read PNG files (not interlaced).");
+  }
   return EXIT.OK;
 }
 
@@ -288,7 +404,7 @@ async function main(argv: string[]): Promise<number> {
   const { globals, words } = parsed;
   const ctx = makeCtx(globals);
   const [first, second] = words;
-  if (["version", "login", "logout", "billing", "update", "spec", "help", "agent-help"].includes(first)) commandLabel = first;
+  if (["version", "login", "logout", "billing", "update", "spec", "help", "agent-help", "preview"].includes(first)) commandLabel = first;
 
   if (first === "version" || argv.includes("--version") || argv.includes("-v")) {
     process.stdout.write(`${VERSION}\n`);
@@ -318,12 +434,18 @@ async function main(argv: string[]): Promise<number> {
   if (!first || first === "help") {
     const target = first === "help" ? words.slice(1) : [];
     if (target.length) return main([...target, "--help"]);
+    if (!first && ctx.vis.enabled) process.stderr.write(logo(ctx.vis) + "\n\n");
     process.stdout.write(mainHelp(commands) + "\n");
     return first || globals.help ? EXIT.OK : EXIT.USAGE;
   }
   if (first === "agent-help") {
     process.stdout.write(agentHelp(commands));
     return EXIT.OK;
+  }
+
+  if (first === "preview") {
+    commandLabel = "preview";
+    return preview(ctx, parsed, words.slice(1));
   }
 
   // Built-ins living inside API groups.

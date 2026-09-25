@@ -6,6 +6,8 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { encodePng } from "../dist/tty/png.js";
+import { readGrid } from "../dist/tty/preview.js";
 
 // Drives the built CLI against a fake Ludo API: upload, submit, long-poll and
 // download, the way a real generation runs.
@@ -20,6 +22,7 @@ let base;
 const seen = [];
 const blobs = new Map();
 let polls = 0;
+const SHEET = encodePng({ width: 4, height: 4, rgba: new Uint8Array(64).fill(200) });
 let loginPolls = 0;
 let loginOutcome = "approved";
 let flakyPolls = 0;
@@ -50,6 +53,19 @@ before(async () => {
       }
       res.writeHead(200, { "Content-Type": "application/json", ETag: '"v2"' });
       return res.end(fs.readFileSync(SPEC));
+    }
+    if (req.method === "POST" && url.pathname === "/api/assets/sprite/animate") {
+      return json(res, 200, {
+        id: "job-sheet001",
+        status: "succeeded",
+        task_type: "animateSprite",
+        credits_charged: 9,
+        result: { spritesheet_url: `${base}/files/sheet.png`, num_frames: 4, num_cols: 2, num_rows: 2, duration: 0.5 }
+      });
+    }
+    if (req.method === "GET" && url.pathname === "/files/sheet.png") {
+      res.writeHead(200);
+      return res.end(SHEET);
     }
     if (req.method === "POST" && url.pathname === "/api/cli/auth/start") {
       const body = JSON.parse(raw);
@@ -402,4 +418,30 @@ test("login warns when LUDO_API_KEY will override it", async () => {
   const { code, stderr } = await run(["login", "--json"], { LUDO_API_KEY: "test-key" });
   assert.equal(code, 0);
   assert.match(stderr, /LUDO_API_KEY is set/);
+});
+
+test("a spritesheet is saved with its grid inside, and machine output stays plain", async () => {
+  const from = seen.length;
+  const { code, stdout, stderr, cwd } = await run(["sprite", "animate", "--initial-image", "https://example.com/k.png", "--motion-prompt", "walk", "--json"]);
+  assert.equal(code, 0, stderr);
+  const out = JSON.parse(stdout);
+  const sheet = out.files.find(f => f.path.endsWith(".png"));
+  assert.deepEqual(readGrid(fs.readFileSync(path.join(cwd, sheet.path))), { cols: 2, rows: 2, frames: 4, fps: 8 });
+  // No escape codes, spinner or preview for a pipe, and no extra account call.
+  assert.doesNotMatch(stderr, /\x1b\[/);
+  assert.ok(!seen.slice(from).some(s => s.path === "/api/assets/account"));
+});
+
+test("--engine rejects engines it does not support", async () => {
+  const { code, stderr } = await run(["sprite", "animate", "--initial-image", "x", "--motion-prompt", "y", "--engine", "unity"]);
+  assert.equal(code, 2);
+  assert.match(stderr, /--engine supports: godot/);
+});
+
+test("preview refuses to draw for a non-terminal", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-"));
+  fs.writeFileSync(path.join(cwd, "s.png"), SHEET);
+  const { code, stderr } = await run(["preview", "s.png"], {}, cwd);
+  assert.equal(code, 2);
+  assert.match(stderr, /interactive terminal/);
 });

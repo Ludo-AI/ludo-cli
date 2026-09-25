@@ -71,6 +71,20 @@ ludo docs search --query "which animation model should I use for pixel art?"
 - `--no-wait` submits the job and prints `{id, status}`; `ludo jobs wait <id>` picks it up later.
 - `--json` prints JSON even on a terminal. It is the default when stdout is not a terminal.
 - `--timeout <s>` stops waiting (the job keeps running), `--quiet` silences progress on stderr.
+- `--open` opens the result in its default app (Aseprite, say), `--play` plays generated audio,
+  `--copy` puts the saved file paths on the clipboard.
+- `--engine godot` also writes a Godot 4 `SpriteFrames` resource (`.tres`) next to a spritesheet:
+  drop it on an `AnimatedSprite2D`. Inside a Godot project it uses a `res://` path.
+
+### In the terminal
+
+At a terminal, results show up right there: images as a small pixel preview, spritesheets as a
+looping animation, and `ludo preview <file.png>` shows any saved file again (Ludo spritesheets
+remember their grid; for other sheets pass `--grid 8x4 --fps 12`). A spinner shows the job's
+status while you wait, and each result suggests a next step.
+
+None of this reaches scripts or AI agents: it is drawn on stderr and only when both outputs are a
+terminal. `--plain`, `NO_COLOR` or `LUDO_PREVIEW=0` turn it off.
 
 ### Output
 

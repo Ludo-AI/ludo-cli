@@ -52,6 +52,7 @@ export function mainHelp(commands: Command[]): string {
       ["login", "Log in with your browser (--with-key to paste an API key instead)"],
       ["logout", "Log out and revoke this CLI login"],
       ["billing", "Open the billing page: buy credits, change plan or auto top-up"],
+      ["preview <file>", "Draw a PNG in the terminal; spritesheets play"],
       ["files upload <path>", "Upload a local file and print its URL"],
       ["jobs wait <id>", "Wait for a job and download its results"],
       ["agent-help", "A short guide for AI agents using this CLI"],
@@ -156,6 +157,7 @@ ${groups}
 - Files: pass a local path to any image/audio/video/model flag (\`--image ./knight.png\`); the CLI uploads it (15MB max). URLs work too. Never base64-encode files yourself.
 - Complex bodies: \`--input body.json\` (or \`--input -\` for stdin); flags override its fields.
 - Generations block until done, then save every result file to \`./ludo-output\` (\`--out <dir>\` to change).
+- Game engines: \`--engine godot\` also writes a Godot 4 SpriteFrames \`.tres\` next to a spritesheet (listed in \`files\`).
   Long jobs: \`--no-wait\` returns \`{id, status}\`; resume with \`ludo jobs wait <id>\`.
 
 ## Output

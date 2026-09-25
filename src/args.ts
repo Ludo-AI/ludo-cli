@@ -13,6 +13,11 @@ export const GLOBAL_FLAGS: Record<string, { value: boolean; description: string 
   "--api-key": { value: true, description: "API key to use (default: $LUDO_API_KEY, then `ludo login`)" },
   "--api-url": { value: true, description: "API base URL (default: $LUDO_API_URL, then https://api.ludo.ai)" },
   "--quiet": { value: false, description: "No progress output on stderr" },
+  "--plain": { value: false, description: "No previews, animation, spinner or colour, even at a terminal" },
+  "--open": { value: false, description: "Open the result in its default app when done" },
+  "--play": { value: false, description: "Play generated audio when done" },
+  "--copy": { value: false, description: "Copy the saved file paths to the clipboard when done" },
+  "--engine": { value: true, description: "Also write engine files next to results: godot (a SpriteFrames .tres for spritesheets, Godot 4)" },
   "--help": { value: false, description: "Show help for this command" }
 };
 
@@ -26,6 +31,11 @@ export interface Globals {
   apiKey?: string;
   apiUrl?: string;
   quiet: boolean;
+  plain: boolean;
+  open: boolean;
+  play: boolean;
+  copy: boolean;
+  engine?: string;
   help: boolean;
 }
 
@@ -36,7 +46,7 @@ export interface Parsed {
 }
 
 function defaultGlobals(): Globals {
-  return { json: false, wait: true, download: true, quiet: false, help: false };
+  return { json: false, wait: true, download: true, quiet: false, plain: false, open: false, play: false, copy: false, help: false };
 }
 
 // First pass: split argv into positionals, global flags and command flags.
@@ -81,6 +91,16 @@ export function parseArgv(argv: string[]): Parsed {
         case "--no-wait": globals.wait = false; break;
         case "--no-download": globals.download = false; break;
         case "--quiet": globals.quiet = true; break;
+        case "--plain": globals.plain = true; break;
+        case "--open": globals.open = true; break;
+        case "--play": globals.play = true; break;
+        case "--copy": globals.copy = true; break;
+        case "--engine": {
+          const engine = takeValue().toLowerCase();
+          if (engine !== "godot") throw new CliError(`--engine supports: godot (got "${engine}")`, EXIT.USAGE);
+          globals.engine = engine;
+          break;
+        }
         case "--help": globals.help = true; break;
         case "--out": globals.out = takeValue(); break;
         case "--input": globals.input = takeValue(); break;
