@@ -103,6 +103,9 @@ before(async () => {
       if (!["ApiKey ludo_minted", "ApiKey test-key"].includes(req.headers.authorization)) return json(res, 403, { message: "Unauthorized" });
       return json(res, 200, ACCOUNT);
     }
+    if (req.method === "POST" && url.pathname === "/api/assets/feedback") {
+      return json(res, 200, { ok: true, id: "fb-1" });
+    }
     if (req.method === "DELETE" && url.pathname === "/api/assets/cli-key") {
       return json(res, 200, { ok: true });
     }
@@ -160,7 +163,7 @@ before(async () => {
 
 after(() => server.close());
 
-function run(args, extraEnv = {}, cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-"))) {
+function run(args, extraEnv = {}, cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-")), input) {
   return new Promise(resolve => {
     const child = spawn(process.execPath, [CLI, ...args], {
       cwd,
@@ -183,6 +186,7 @@ function run(args, extraEnv = {}, cwd = fs.mkdtempSync(path.join(os.tmpdir(), "l
     child.stdout.on("data", d => (stdout += d));
     child.stderr.on("data", d => (stderr += d));
     child.on("close", code => resolve({ code, stdout, stderr, cwd }));
+    if (input !== undefined) child.stdin.end(input);
   });
 }
 
@@ -401,6 +405,47 @@ test("`ludo account` runs the group's only command and prints JSON for agents", 
   const { code, stdout } = await run(["account"]);
   assert.equal(code, 0);
   assert.deepEqual(JSON.parse(stdout), ACCOUNT);
+});
+
+test("feedback posts the message, category and the agent driving the CLI", async () => {
+  const from = seen.length;
+  const { code, stdout } = await run(
+    ["feedback", "Needed", "an", "8-direction", "walk", "--category", "feature-request", "--operation", "animateSprite", "--job", "job-1", "--json"],
+    { CURSOR_AGENT: "1" }
+  );
+  assert.equal(code, 0);
+  assert.deepEqual(JSON.parse(stdout), { ok: true, id: "fb-1" });
+  const sent = seen.slice(from).find(s => s.path === "/api/assets/feedback");
+  assert.deepEqual(JSON.parse(sent.raw), {
+    category: "feature_request",
+    message: "Needed an 8-direction walk",
+    operation: "animateSprite",
+    job_id: "job-1",
+    agent: "Cursor"
+  });
+});
+
+test("feedback reads the message from stdin with -", async () => {
+  const from = seen.length;
+  const { code } = await run(["feedback", "-", "--category", "praise"], {}, undefined, "Loved the walk cycle\n");
+  assert.equal(code, 0);
+  const sent = seen.slice(from).find(s => s.path === "/api/assets/feedback");
+  assert.deepEqual(JSON.parse(sent.raw), { category: "praise", message: "Loved the walk cycle" });
+});
+
+test("feedback rejects an unknown category and needs an account", async () => {
+  const bad = await run(["feedback", "hi", "--category", "rant"]);
+  assert.equal(bad.code, 2);
+  assert.match(bad.stderr, /--category must be one of/);
+  const anon = await run(["feedback", "hi"], { LUDO_API_KEY: "" });
+  assert.equal(anon.code, 3);
+  assert.match(anon.stderr, /ludo login/);
+});
+
+test("the feedback operation stays out of the account group", async () => {
+  const { code, stdout } = await run(["account", "--help"]);
+  assert.equal(code, 0);
+  assert.doesNotMatch(stdout, /feedback/);
 });
 
 test("billing prints the billing page without opening a browser for a non-terminal", async () => {

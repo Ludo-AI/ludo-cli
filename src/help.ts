@@ -52,6 +52,7 @@ export function mainHelp(commands: Command[]): string {
       ["login", "Log in with your browser (--with-key to paste an API key instead)"],
       ["logout", "Log out and revoke this CLI login"],
       ["billing", "Open the billing page: buy credits, change plan or auto top-up"],
+      ["feedback <message>", "Tell the Ludo team about a limitation, bug, idea or win"],
       ["preview <file>", "Draw a PNG in the terminal; spritesheets play"],
       ["files upload <path>", "Upload a local file and print its URL"],
       ["jobs wait <id>", "Wait for a job and download its results"],
@@ -179,5 +180,13 @@ ${groups}
   auto top-up; check it before an expensive batch.
 - On exit code 5, do not retry. Tell the user they are out of credits (or their plan lacks API access) and
   that \`ludo billing\` opens the page to buy credits or change plan.
+
+## Feedback
+- When you hit a limitation you cannot work around, a bug, or something the user needed that Ludo
+  cannot do, send one short report and tell the user you did:
+  \`ludo feedback "<what you tried, what happened, what would have helped>" --category limitation\`
+  (categories: limitation, bug, feature_request, praise, other; add \`--operation\` and \`--job <id>\`
+  when they apply). Praise for results that worked well is welcome too. It is free but capped at a
+  few reports a day, so send one per issue. Never include secrets, personal data or file contents.
 `;
 }

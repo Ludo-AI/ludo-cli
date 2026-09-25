@@ -40,6 +40,17 @@ export function isAgent(): boolean {
   return AGENT_ENV.some(name => !!process.env[name]);
 }
 
+// Which agent is driving the CLI, for feedback reports. Undefined for a person.
+export function agentName(env = process.env): string | undefined {
+  if (env.CLAUDECODE || env.CLAUDE_CODE_ENTRYPOINT) return "Claude Code";
+  if (env.CODEX_SANDBOX || env.CODEX_CI) return "Codex";
+  if (env.CURSOR_AGENT) return "Cursor";
+  if (env.GEMINI_CLI) return "Gemini CLI";
+  if (env.AIDER_MODEL) return "Aider";
+  if (env.AGENT) return env.AGENT.slice(0, 100);
+  return undefined;
+}
+
 export function canOpenBrowser(): boolean {
   if (process.env.LUDO_NO_BROWSER || process.env.CI || isAgent()) return false;
   if (process.env.TERM === "dumb") return false;

@@ -92,8 +92,9 @@ export const GROUP_INFO: Record<string, string> = {
 const CLI_NAMES: Record<string, string> = { getAccount: "show" };
 
 // Operations the CLI calls itself, behind its own commands: createUpload for
-// file flags and `ludo files upload`, revokeCurrentCliKey for `ludo logout`.
-const HIDDEN = new Set(["createUpload", "revokeCurrentCliKey"]);
+// file flags and `ludo files upload`, revokeCurrentCliKey for `ludo logout`,
+// submitApiFeedback for `ludo feedback`.
+const HIDDEN = new Set(["createUpload", "revokeCurrentCliKey", "submitApiFeedback"]);
 
 const SYNC_TAIL = /\s*The call returns 202 with a job id[\s\S]*$/;
 const MCP_TAIL = /\s*Async generation job:[\s\S]*$/;

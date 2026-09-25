@@ -19,7 +19,7 @@ import { AUDIO_EXT, copyText, IMAGE_EXT, openFile, playAudio } from "./tty/actio
 import { writeGodotSpriteFrames } from "./tty/godot.js";
 import { installSkill, isInstalled, skillTarget, uninstallSkill } from "./skill.js";
 import { convertToPng, loadImage } from "./tty/image.js";
-import { accountLine, accountSummary, billingUrlFor, browserLogin, canOpenBrowser, openBrowser } from "./login.js";
+import { accountLine, accountSummary, agentName, billingUrlFor, browserLogin, canOpenBrowser, openBrowser } from "./login.js";
 
 const DEFAULT_OUT = "ludo-output";
 const DEFAULT_TIMEOUT_S = 30 * 60;
@@ -139,6 +139,10 @@ async function finishJob(ctx: Ctx, job: any, label: string, body?: Record<string
       if (hint) process.stderr.write(`${hint}\n`);
     } else {
       process.stdout.write(`✗ ${label} ${job.status}${job.error?.message ? `: ${job.error.message}` : ""}\n`);
+      // A failure a retry will not fix is worth hearing about.
+      if (job.status === "failed" && job.error?.retriable === false && !globals.quiet) {
+        process.stderr.write(`Blocked by this? Tell us: ludo feedback "<what you needed>" --category limitation --job ${job.id}\n`);
+      }
     }
   }
   if (job.status === "succeeded" && files.length) handOff(ctx, files, sheet);
@@ -439,6 +443,58 @@ async function billing(ctx: Ctx): Promise<number> {
   return EXIT.OK;
 }
 
+const FEEDBACK_CATEGORIES = ["limitation", "bug", "feature_request", "praise", "other"];
+const FEEDBACK_HELP = [
+  "Usage: ludo feedback <message> [--category <c>] [--operation <id>] [--job <id>]",
+  "       echo <message> | ludo feedback - [...]",
+  "",
+  "Sends feedback to the Ludo team: a limitation you hit, a bug, something you'd like",
+  "Ludo to support, or something that worked well. Free.",
+  "",
+  `  --category   ${FEEDBACK_CATEGORIES.join(", ")} (default: other)`,
+  "  --operation  the command or operation it is about, e.g. animateSprite",
+  "  --job        the job id it is about, when there is one",
+  ""
+].join("\n");
+
+async function feedback(ctx: Ctx, parsed: Parsed, words: string[]): Promise<number> {
+  const flag = (name: string) => {
+    const v = parsed.flags.get(name)?.at(-1);
+    return v === undefined || v === "\u0000flag" ? undefined : v;
+  };
+  // The message is the remaining positionals, or stdin for `-` (only then:
+  // an agent's shell can leave stdin open and silent, and reading it would hang).
+  let message = words.join(" ").trim();
+  if (message === "-") message = fs.readFileSync(0, "utf8").trim();
+  if (ctx.globals.help || !message) {
+    process.stdout.write(FEEDBACK_HELP);
+    return ctx.globals.help ? EXIT.OK : EXIT.USAGE;
+  }
+  const category = (flag("--category") || "other").toLowerCase().replace(/-/g, "_");
+  if (!FEEDBACK_CATEGORIES.includes(category)) {
+    throw new CliError(`--category must be one of: ${FEEDBACK_CATEGORIES.join(", ")}`, EXIT.USAGE);
+  }
+  if (message.length > 4000) throw new CliError(`Feedback is limited to 4000 characters (got ${message.length})`, EXIT.USAGE);
+  if (!resolveApiKey(ctx.globals.apiKey)) {
+    throw new CliError(
+      "Sending feedback needs a Ludo account.",
+      EXIT.AUTH,
+      "Run `ludo login` (it can create an account), or open an issue at https://github.com/Ludo-AI/ludo-cli/issues"
+    );
+  }
+  const body: Record<string, string> = { category, message };
+  const operation = flag("--operation");
+  const job = flag("--job");
+  const agent = agentName();
+  if (operation) body.operation = operation.slice(0, 100);
+  if (job) body.job_id = job.slice(0, 64);
+  if (agent) body.agent = agent;
+  const res = await ctx.api.call("POST", "/assets/feedback", { body });
+  if (ctx.jsonOut) printJson(res.body, false);
+  else process.stdout.write(`✓ Feedback sent. Thank you! (${res.body?.id || "received"})\n`);
+  return EXIT.OK;
+}
+
 // What is running, for crash reports: a command name, never its arguments.
 let commandLabel: string | undefined;
 
@@ -465,7 +521,7 @@ async function main(argv: string[]): Promise<number> {
   const { globals, words } = parsed;
   const ctx = makeCtx(globals);
   const [first, second] = words;
-  if (["version", "login", "logout", "billing", "update", "spec", "help", "agent-help", "preview", "skill"].includes(first)) commandLabel = first;
+  if (["version", "login", "logout", "billing", "update", "spec", "help", "agent-help", "preview", "skill", "feedback"].includes(first)) commandLabel = first;
 
   if (first === "version" || argv.includes("--version") || argv.includes("-v")) {
     process.stdout.write(`${VERSION}\n`);
@@ -474,6 +530,7 @@ async function main(argv: string[]): Promise<number> {
   if (first === "login") return login(ctx, parsed, words.slice(1));
   if (first === "logout") return logout(ctx);
   if (first === "billing") return billing(ctx);
+  if (first === "feedback") return feedback(ctx, parsed, words.slice(1));
   if (first === "update") {
     process.stdout.write("Update with: npm install -g @ludoai/cli@latest\n(Commands follow the API automatically; updates are only needed for CLI fixes.)\n");
     return EXIT.OK;

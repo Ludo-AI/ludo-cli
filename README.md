@@ -142,6 +142,13 @@ by `ludo login` (in `~/.config/ludo/config.json`, readable only by you).
 buy credits, change plan or set up auto top-up. When a generation fails for lack of credits (exit
 code 5) at a terminal, the CLI offers to open that page.
 
+## Feedback
+
+`ludo feedback "<message>"` sends a note to the Ludo team: a limitation you hit, a bug, something
+you'd like Ludo to support, or something that worked well. Add `--category` (limitation, bug,
+feature_request, praise, other), `--operation` and `--job <id>` to point at what it is about, or
+pipe the message in with `ludo feedback -`. It needs a Ludo account (`ludo login`).
+
 ## Crash reports
 
 If the CLI itself crashes (a bug in `ludo`, not an API error, a failed generation or a mistyped
