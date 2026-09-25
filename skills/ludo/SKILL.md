@@ -6,8 +6,9 @@ description: Generate game assets with the Ludo AI `ludo` CLI - sprites, sprites
 # Ludo AI CLI
 
 Use the `ludo` command (install: `npm install -g @ludoai/cli`, or prefix commands with `npx @ludoai/cli`).
-It needs an API key in `LUDO_API_KEY` or a prior `ludo login`; if a command exits with code 3, ask the
-user for their key from https://app.ludo.ai.
+It needs a prior `ludo login` or an API key in `LUDO_API_KEY`. If a command exits with code 3, do not
+ask for a key in the chat: ask the user to run `! ludo login` themselves. It opens their browser, where
+they log in or create an account (and pick a plan with API access if needed) and approve the CLI.
 
 ## Workflow
 
@@ -20,7 +21,10 @@ user for their key from https://app.ludo.ai.
    JSON on stdout: `files[].path` are the saved files. Result URLs expire after 7 days, so use the
    saved files, not the URLs, in the user's project.
 5. Every generation costs credits. Do not loop on generations or retry failures blindly; exit code 6
-   means the job failed and its credits were refunded, 5 means not enough credits.
+   means the job failed and its credits were refunded. Before a large batch, check the balance with
+   `ludo account`.
+6. Exit code 5 means not enough credits, or a plan without API access. Do not retry: tell the user, and
+   that `! ludo billing` opens the page to buy credits, change plan or turn on auto top-up.
 
 ## Examples
 

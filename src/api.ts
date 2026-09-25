@@ -29,7 +29,7 @@ export class Api {
       throw new CliError(
         "No API key. Run `ludo login`, set LUDO_API_KEY, or pass --api-key.",
         EXIT.AUTH,
-        "Get a key at https://app.ludo.ai (Account > API)."
+        "`ludo login` logs you in with your browser, and can create an account."
       );
     }
   }
@@ -75,8 +75,12 @@ export function apiError(res: ApiResponse): CliError {
   const b = res.body;
   const message = (b && typeof b === "object" && (b.message || b.error)) || (typeof b === "string" && b.slice(0, 300)) || `HTTP ${res.status}`;
   let hint: string | undefined;
-  if (res.status === 401 || res.status === 403) hint = "Check your API key: `ludo auth validate-api-key`.";
-  if (res.status === 402) hint = "Not enough credits. Top up at https://app.ludo.ai.";
+  if (res.status === 401 || res.status === 403) hint = "Your API key was rejected. Log in again with `ludo login`.";
+  if (res.status === 402) {
+    hint = /API access/i.test(String(message))
+      ? "Your plan does not include API access. Change plan with `ludo billing`."
+      : "Not enough credits. Buy credits or set up auto top-up with `ludo billing`; `ludo account` shows your balance.";
+  }
   if (res.status === 429) hint = b?.code === "PENDING_JOBS_LIMIT" ? "Too many jobs queued at once; wait for some to finish (`ludo jobs list`)." : "Rate limited; slow down and retry shortly.";
   return new CliError(String(message).replace(/^Error:\s*/, ""), exitCodeForStatus(res.status), hint, b);
 }

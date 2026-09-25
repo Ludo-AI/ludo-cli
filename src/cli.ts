@@ -11,6 +11,7 @@ import { CliError, EXIT, specMismatch } from "./errors.js";
 import { agentHelp, commandHelp, groupHelp, mainHelp } from "./help.js";
 import { collectUrls, downloadAll, extractInlineFiles, waitForJob } from "./jobs.js";
 import { embeddedSpecPath, loadSpec } from "./spec.js";
+import { accountLine, accountSummary, billingUrlFor, browserLogin, canOpenBrowser, CLI_KEY_PREFIX, openBrowser } from "./login.js";
 
 const DEFAULT_OUT = "ludo-output";
 const DEFAULT_TIMEOUT_S = 30 * 60;
@@ -163,6 +164,10 @@ async function runCommand(ctx: Ctx, command: Command, parsed: Parsed, positional
     if (["succeeded", "failed", "canceled"].includes(response.status)) return finishJob(ctx, response, label);
     return runJobWait(ctx, response.id, label);
   }
+  if (command.operationId === "getAccount" && !ctx.jsonOut) {
+    process.stdout.write(accountSummary(response) + "\n");
+    return EXIT.OK;
+  }
   // Some operations answer 200 with no body (validate-api-key).
   printJson(response === null || response === "" ? { ok: true } : response, !ctx.jsonOut || (!!ctx.globals.json && process.stdout.isTTY));
   return EXIT.OK;
@@ -176,16 +181,76 @@ async function promptSecret(question: string): Promise<string> {
   return answer.trim();
 }
 
+function flagSet(parsed: Parsed, name: string): boolean {
+  return parsed.flags.has(name);
+}
+
+async function fetchAccount(apiUrl: string, key: string): Promise<any | undefined> {
+  const res = await new Api(apiUrl, key).request("GET", "/assets/account", { timeoutMs: 10_000 });
+  return res.status === 200 ? res.body : undefined;
+}
+
+// `ludo login` opens the browser login. `ludo login --with-key` (key from the
+// prompt or stdin), `ludo login <key>` and `--api-key <key>` save a key
+// instead, for CI and machines without a browser.
 async function login(ctx: Ctx, parsed: Parsed, words: string[]): Promise<number> {
-  const key = parsed.globals.apiKey || words[0] || (await promptSecret("Ludo API key (from https://app.ludo.ai): "));
-  if (!key) throw new CliError("No key given", EXIT.USAGE);
-  const api = new Api(resolveApiUrl(parsed.globals.apiUrl), key);
-  const res = await api.request("GET", "/auth/validate-api-key");
-  if (res.status !== 200) throw new CliError("That API key was rejected", EXIT.AUTH);
+  const apiUrl = resolveApiUrl(parsed.globals.apiUrl);
+  let key = parsed.globals.apiKey || words[0];
+  if (!key && flagSet(parsed, "--with-key")) {
+    const given = parsed.flags.get("--with-key")?.find(v => v !== "\u0000flag");
+    key = given || (await promptSecret("Ludo API key: "));
+    if (!key) throw new CliError("No key given", EXIT.USAGE);
+  }
+
+  if (key) {
+    const res = await new Api(apiUrl, key).request("GET", "/auth/validate-api-key");
+    if (res.status === 402) throw new CliError("That key is valid, but your plan has no API access", EXIT.CREDITS, `Change plan at ${billingUrlFor(apiUrl)}`);
+    if (res.status < 200 || res.status >= 300) throw new CliError("That API key was rejected", EXIT.AUTH);
+  } else {
+    // Progress goes to stderr even with --quiet: the person needs the URL.
+    const log = (msg: string) => process.stderr.write(msg + "\n");
+    const noBrowser = flagSet(parsed, "--no-browser");
+    ({ key } = await browserLogin(apiUrl, { log, openBrowser: !noBrowser && canOpenBrowser() }));
+  }
+
   const file = writeConfig({ ...readConfig(), api_key: key, ...(parsed.globals.apiUrl ? { api_url: parsed.globals.apiUrl } : {}) });
+  const account = await fetchAccount(apiUrl, key!).catch(() => undefined);
   ctx.log(`Saved to ${file}`);
-  if (ctx.jsonOut) printJson({ ok: true, config: file }, false);
-  else process.stdout.write("✓ Logged in\n");
+  if (ctx.jsonOut) printJson({ ok: true, config: file, account }, false);
+  else process.stdout.write(`✓ Logged in${account ? `: ${accountLine(account)}` : ""}\n`);
+  return EXIT.OK;
+}
+
+// Forgets the saved key, and revokes it on the server when `ludo login`
+// created it (a key pasted with --with-key is the account's own; leave it).
+async function logout(ctx: Ctx): Promise<number> {
+  const config = readConfig();
+  const key = config.api_key;
+  let revoked = false;
+  if (key && key.startsWith(CLI_KEY_PREFIX)) {
+    const res = await new Api(resolveApiUrl(ctx.globals.apiUrl), key).request("DELETE", "/assets/cli-key", { timeoutMs: 10_000 }).catch(() => undefined);
+    revoked = !!res && res.status >= 200 && res.status < 300;
+  }
+  delete config.api_key;
+  writeConfig(config);
+  if (ctx.jsonOut) printJson({ ok: true, revoked }, false);
+  else process.stdout.write(`Logged out${revoked ? " (this CLI login was revoked)" : ""}\n`);
+  if (process.env.LUDO_API_KEY) ctx.log("Note: LUDO_API_KEY is still set in your environment.");
+  return EXIT.OK;
+}
+
+// Opens the web app's billing page: buy credits, change plan or auto top-up.
+async function billing(ctx: Ctx): Promise<number> {
+  const apiUrl = resolveApiUrl(ctx.globals.apiUrl);
+  const key = resolveApiKey(ctx.globals.apiKey);
+  const account = key ? await fetchAccount(apiUrl, key).catch(() => undefined) : undefined;
+  const url = account?.billing_url || billingUrlFor(apiUrl);
+  const opened = !ctx.jsonOut && canOpenBrowser() && openBrowser(url);
+  if (ctx.jsonOut) printJson({ billing_url: url, account }, false);
+  else {
+    if (account) process.stdout.write(accountSummary(account) + "\n");
+    process.stdout.write(opened ? `Opened ${url}\n` : `Billing: ${url}\n`);
+  }
   return EXIT.OK;
 }
 
@@ -215,20 +280,15 @@ async function main(argv: string[]): Promise<number> {
   const { globals, words } = parsed;
   const ctx = makeCtx(globals);
   const [first, second] = words;
-  if (["version", "login", "logout", "update", "spec", "help", "agent-help"].includes(first)) commandLabel = first;
+  if (["version", "login", "logout", "billing", "update", "spec", "help", "agent-help"].includes(first)) commandLabel = first;
 
   if (first === "version" || argv.includes("--version") || argv.includes("-v")) {
     process.stdout.write(`${VERSION}\n`);
     return EXIT.OK;
   }
   if (first === "login") return login(ctx, parsed, words.slice(1));
-  if (first === "logout") {
-    const config = readConfig();
-    delete config.api_key;
-    writeConfig(config);
-    process.stdout.write("Logged out\n");
-    return EXIT.OK;
-  }
+  if (first === "logout") return logout(ctx);
+  if (first === "billing") return billing(ctx);
   if (first === "update") {
     process.stdout.write("Update with: npm install -g @ludoai/cli@latest\n(Commands follow the API automatically; updates are only needed for CLI fixes.)\n");
     return EXIT.OK;
@@ -282,7 +342,12 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const groups = groupsOf(commands);
-  const { command, consumed } = findCommand(commands, words);
+  let { command, consumed } = findCommand(commands, words);
+  // A group with a single command runs it by name alone: `ludo account`.
+  if (!command && groups.includes(first) && !second) {
+    const only = commands.filter(c => c.group === first && !c.hidden);
+    if (only.length === 1) ({ command, consumed } = { command: only[0], consumed: 1 });
+  }
   if (!command) {
     if (groups.includes(first) && (!second || globals.help)) {
       process.stdout.write(groupHelp(commands, first) + "\n");
@@ -301,6 +366,22 @@ async function main(argv: string[]): Promise<number> {
   return runCommand(ctx, command, parsed, words.slice(consumed));
 }
 
+// Out of credits (or no API access) at a terminal: offer to open the billing
+// page. Never for an agent or a script: they get the hint and exit code 5.
+async function offerBilling() {
+  if (!canOpenBrowser()) return;
+  let apiUrl: string;
+  try {
+    apiUrl = resolveApiUrl(parseArgv(process.argv.slice(2)).globals.apiUrl);
+  } catch {
+    apiUrl = resolveApiUrl(undefined);
+  }
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr, terminal: true });
+  const answer = await new Promise<string>(resolve => rl.question("Open the billing page? [Y/n] ", resolve));
+  rl.close();
+  if (/^(y|yes|)$/i.test(answer.trim())) openBrowser(billingUrlFor(apiUrl));
+}
+
 run(process.argv.slice(2)).then(
   code => process.exit(code),
   async (err: unknown) => {
@@ -308,6 +389,7 @@ run(process.argv.slice(2)).then(
     if (err instanceof CliError) {
       if (json) printJson({ error: { message: err.message, exit_code: err.exitCode, hint: err.hint, details: err.details } }, false);
       process.stderr.write(`Error: ${err.message}\n${err.hint ? `${err.hint}\n` : ""}`);
+      if (err.exitCode === EXIT.CREDITS && !json) await offerBilling();
       process.exit(err.exitCode);
     }
     // Anything else is a bug in the CLI.

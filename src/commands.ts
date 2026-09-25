@@ -53,7 +53,8 @@ const TAG_GROUPS: Record<string, string> = {
   Generations: "generations",
   Documentation: "docs",
   Authentication: "auth",
-  Files: "files"
+  Files: "files",
+  Account: "account"
 };
 
 // Words dropped from an operationId when it is already implied by the group.
@@ -67,7 +68,8 @@ const GROUP_NOUNS: Record<string, string[]> = {
   generations: ["generations"],
   docs: ["docs"],
   auth: ["endpoint"],
-  files: []
+  files: [],
+  account: ["account"]
 };
 
 // Group display order and one-line blurbs for `ludo --help`.
@@ -81,8 +83,17 @@ export const GROUP_INFO: Record<string, string> = {
   generations: "Browse your generation history",
   docs: "Search and read Ludo's feature documentation",
   auth: "Check your API key",
-  files: "Upload local files"
+  files: "Upload local files",
+  account: "Your credits, plan and auto top-up"
 };
+
+// Names that read better than the derived ones (`ludo account show`, not
+// `ludo account get`).
+const CLI_NAMES: Record<string, string> = { getAccount: "show" };
+
+// Operations the CLI calls itself, behind its own commands: createUpload for
+// file flags and `ludo files upload`, revokeCurrentCliKey for `ludo logout`.
+const HIDDEN = new Set(["createUpload", "revokeCurrentCliKey"]);
 
 const SYNC_TAIL = /\s*The call returns 202 with a job id[\s\S]*$/;
 const MCP_TAIL = /\s*Async generation job:[\s\S]*$/;
@@ -187,7 +198,7 @@ export function buildCommands(spec: Spec): Command[] {
 
       const tag = (op.tags && op.tags[0]) || "Misc";
       const group = TAG_GROUPS[tag] || tag.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-      const name = op["x-cli-name"] || commandName(group, op.operationId);
+      const name = op["x-cli-name"] || CLI_NAMES[op.operationId] || commandName(group, op.operationId);
 
       const fields: Field[] = [];
       for (const p of op.parameters || []) {
@@ -223,7 +234,7 @@ export function buildCommands(spec: Spec): Command[] {
         credits: op["x-credit-summary"] || op["x-credit-description"],
         fields,
         isJob,
-        hidden: op.operationId === "createUpload"
+        hidden: HIDDEN.has(op.operationId)
       });
     }
   }

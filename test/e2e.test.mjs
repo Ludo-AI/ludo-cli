@@ -20,6 +20,14 @@ let base;
 const seen = [];
 const blobs = new Map();
 let polls = 0;
+let loginPolls = 0;
+let loginOutcome = "approved";
+const ACCOUNT = {
+  credits: { available: 1840.5, plan_credits: 2000, used: 460, extra: 300.5, resets_at: 1790000000, team_pool: false, paused: false, grace_until: null },
+  plan: { name: "Pro", api_access: true },
+  auto_topup: { enabled: true, threshold: 200, credits: 1000 },
+  billing_url: "http://web.test/account/billing"
+};
 
 function json(res, status, body) {
   res.writeHead(status, { "Content-Type": "application/json" });
@@ -41,6 +49,37 @@ before(async () => {
       }
       res.writeHead(200, { "Content-Type": "application/json", ETag: '"v2"' });
       return res.end(fs.readFileSync(SPEC));
+    }
+    if (req.method === "POST" && url.pathname === "/api/cli/auth/start") {
+      const body = JSON.parse(raw);
+      loginPolls = 0;
+      return json(res, 200, {
+        device_code: `dev-${body.platform}`,
+        user_code: "WDJB-MJHT",
+        verification_url: "http://web.test/cli",
+        verification_url_complete: "http://web.test/cli?code=WDJB-MJHT",
+        expires_in: 600,
+        interval: 0.01
+      });
+    }
+    if (req.method === "POST" && url.pathname === "/api/cli/auth/token") {
+      loginPolls++;
+      if (loginOutcome === "denied") return json(res, 200, { status: "denied" });
+      if (loginPolls < 2) return json(res, 200, { status: "pending" });
+      return json(res, 200, { status: "approved", api_key: "lcli_minted" });
+    }
+    if (req.method === "GET" && url.pathname === "/api/assets/account") {
+      if (!["ApiKey lcli_minted", "ApiKey test-key"].includes(req.headers.authorization)) return json(res, 403, { message: "Unauthorized" });
+      return json(res, 200, ACCOUNT);
+    }
+    if (req.method === "DELETE" && url.pathname === "/api/assets/cli-key") {
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === "GET" && url.pathname === "/api/auth/validate-api-key") {
+      if (req.headers.authorization === "ApiKey no-plan") return json(res, 402, { message: "Error: API access is unavailable" });
+      if (req.headers.authorization !== "ApiKey test-key") return json(res, 403, { message: "Unauthorized" });
+      res.writeHead(204);
+      return res.end();
     }
     if (req.method === "POST" && url.pathname === "/api/42/envelope/") {
       res.writeHead(200);
@@ -258,4 +297,84 @@ test("crash reports honour DO_NOT_TRACK", async () => {
   assert.equal(code, 1);
   assert.doesNotMatch(stderr, /crash report/);
   assert.ok(!seen.slice(from).some(s => s.path === "/api/42/envelope/"));
+});
+
+const configOf = cwd => JSON.parse(fs.readFileSync(path.join(cwd, ".config", "config.json"), "utf8"));
+
+test("login runs the browser flow and saves the CLI key", async () => {
+  loginOutcome = "approved";
+  const { code, stdout, stderr, cwd } = await run(["login", "--json"], { LUDO_API_KEY: "" });
+  assert.equal(code, 0, stderr);
+  assert.match(stderr, /http:\/\/web\.test\/cli\?code=WDJB-MJHT/);
+  assert.match(stderr, /Code: WDJB-MJHT/);
+  assert.match(stderr, /sign up on that page/);
+  const out = JSON.parse(stdout);
+  assert.equal(out.ok, true);
+  assert.equal(out.account.plan.name, "Pro");
+  assert.equal(configOf(cwd).api_key, "lcli_minted");
+  const start = seen.filter(s => s.path === "/api/cli/auth/start").pop();
+  assert.equal(JSON.parse(start.raw).platform, process.platform);
+});
+
+test("a denied login exits with the auth code and saves nothing", async () => {
+  loginOutcome = "denied";
+  const { code, stderr, cwd } = await run(["login"], { LUDO_API_KEY: "" });
+  loginOutcome = "approved";
+  assert.equal(code, 3);
+  assert.match(stderr, /denied/);
+  assert.ok(!fs.existsSync(path.join(cwd, ".config", "config.json")));
+});
+
+test("login --with-key validates and saves a pasted key (a 204 is success)", async () => {
+  const { code, cwd, stderr } = await run(["login", "--with-key", "test-key"], { LUDO_API_KEY: "" });
+  assert.equal(code, 0, stderr);
+  assert.equal(configOf(cwd).api_key, "test-key");
+});
+
+test("login --with-key reports a plan without API access", async () => {
+  const { code, stderr } = await run(["login", "--with-key", "no-plan"], { LUDO_API_KEY: "" });
+  assert.equal(code, 5);
+  assert.match(stderr, /no API access/);
+});
+
+test("logout revokes a CLI login key and forgets it", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-"));
+  fs.mkdirSync(path.join(cwd, ".config"));
+  fs.writeFileSync(path.join(cwd, ".config", "config.json"), JSON.stringify({ api_key: "lcli_minted" }));
+  const from = seen.length;
+  const { code, stdout } = await run(["logout", "--json"], { LUDO_API_KEY: "" }, cwd);
+  assert.equal(code, 0);
+  assert.deepEqual(JSON.parse(stdout), { ok: true, revoked: true });
+  const del = seen.slice(from).find(s => s.method === "DELETE" && s.path === "/api/assets/cli-key");
+  assert.equal(del.headers.authorization, "ApiKey lcli_minted");
+  assert.equal(configOf(cwd).api_key, undefined);
+});
+
+test("logout leaves a pasted main key alone on the server", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-"));
+  fs.mkdirSync(path.join(cwd, ".config"));
+  fs.writeFileSync(path.join(cwd, ".config", "config.json"), JSON.stringify({ api_key: "test-key" }));
+  const from = seen.length;
+  const { code, stdout } = await run(["logout", "--json"], { LUDO_API_KEY: "" }, cwd);
+  assert.equal(code, 0);
+  assert.equal(JSON.parse(stdout).revoked, false);
+  assert.ok(!seen.slice(from).some(s => s.path === "/api/assets/cli-key"));
+});
+
+test("`ludo account` runs the group's only command and prints JSON for agents", async () => {
+  const { code, stdout } = await run(["account"]);
+  assert.equal(code, 0);
+  assert.deepEqual(JSON.parse(stdout), ACCOUNT);
+});
+
+test("billing prints the billing page without opening a browser for a non-terminal", async () => {
+  const { code, stdout } = await run(["billing", "--json"]);
+  assert.equal(code, 0);
+  assert.equal(JSON.parse(stdout).billing_url, "http://web.test/account/billing");
+});
+
+test("out of credits points at ludo billing", async () => {
+  const { code, stderr } = await run(["image", "create", "--prompt", "x", "--image-type", "sprite"]);
+  assert.equal(code, 5);
+  assert.match(stderr, /ludo billing/);
 });

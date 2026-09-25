@@ -6,7 +6,7 @@ effects, music and voices.
 
 ```sh
 npm install -g @ludoai/cli      # or run without installing: npx @ludoai/cli ...
-ludo login                      # paste your API key from https://app.ludo.ai
+ludo login                      # log in with your browser (you can create an account there)
 ludo image create --prompt "a knight with a red cape" --image-type sprite
 ```
 
@@ -38,6 +38,7 @@ ludo <group> <command> --help
 | `jobs` | `list`, `get`, `cancel`, `wait` |
 | `generations` | `list` |
 | `docs` | `search`, `get` |
+| `account` | `show` (also just `ludo account`): credits, plan and auto top-up |
 
 The table is a snapshot: `ludo --help` always shows the current list. Every command also answers to
 its API operation id (`ludo createImage ...`), the same names the API docs and the MCP server use.
@@ -104,10 +105,25 @@ replaced by its path.
 | 8 | Rate limited, or too many jobs queued |
 | 9 | Timed out waiting; the job keeps running |
 
-## Authentication
+## Logging in
 
-In order of precedence: `--api-key`, the `LUDO_API_KEY` environment variable, then the key saved by
-`ludo login` (in `~/.config/ludo/config.json`, readable only by you).
+`ludo login` prints a short code and opens `app.ludo.ai/cli` in your browser. Log in there (or create
+an account, and pick a plan with API access if yours has none), check the code matches your terminal,
+and click Authorize. The CLI gets a key of its own, so your main API key and any MCP setup keep
+working. Each CLI login is listed under API & MCP in the web app, where you can revoke it; `ludo
+logout` revokes it too.
+
+On a machine without a browser, open the printed link on any device. For CI, set `LUDO_API_KEY`, or
+save a key with `ludo login --with-key` (it reads the key from a prompt or stdin).
+
+Keys are used in this order: `--api-key`, the `LUDO_API_KEY` environment variable, then the key saved
+by `ludo login` (in `~/.config/ludo/config.json`, readable only by you).
+
+## Credits
+
+`ludo account` shows your balance, plan and auto top-up settings. `ludo billing` opens the page to
+buy credits, change plan or set up auto top-up. When a generation fails for lack of credits (exit
+code 5) at a terminal, the CLI offers to open that page.
 
 ## Crash reports
 

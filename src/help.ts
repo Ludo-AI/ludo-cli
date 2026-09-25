@@ -49,8 +49,9 @@ export function mainHelp(commands: Command[]): string {
     "",
     "Other commands:",
     table([
-      ["login", "Save your API key (or set LUDO_API_KEY)"],
-      ["logout", "Forget the saved API key"],
+      ["login", "Log in with your browser (--with-key to paste an API key instead)"],
+      ["logout", "Log out and revoke this CLI login"],
+      ["billing", "Open the billing page: buy credits, change plan or auto top-up"],
       ["files upload <path>", "Upload a local file and print its URL"],
       ["jobs wait <id>", "Wait for a job and download its results"],
       ["agent-help", "A short guide for AI agents using this CLI"],
@@ -166,7 +167,14 @@ ${groups}
 0 ok, 1 error, 2 bad usage, 3 auth, 4 rejected by the API, 5 not enough credits, 6 job failed (credits refunded),
 7 job canceled, 8 rate limited / too many queued jobs, 9 timed out waiting (job keeps running).
 
-## Auth
-\`LUDO_API_KEY\` env var, \`ludo login\`, or \`--api-key\`. Every generation costs credits; check \`--help\` for the price first.
+## Auth and credits
+- The key comes from \`LUDO_API_KEY\`, a prior \`ludo login\`, or \`--api-key\`.
+- On exit code 3 (no or rejected key), do not ask the user to paste a key into the chat. Ask them to run
+  \`ludo login\` in their own terminal: it opens the browser, where they log in or create an account and
+  pick a plan with API access if needed. It waits up to 10 minutes for them to approve.
+- Every generation costs credits; \`--help\` shows the price. \`ludo account\` shows the balance, plan and
+  auto top-up; check it before an expensive batch.
+- On exit code 5, do not retry. Tell the user they are out of credits (or their plan lacks API access) and
+  that \`ludo billing\` opens the page to buy credits or change plan.
 `;
 }
