@@ -16,7 +16,7 @@
     "type": "git",
     "url": "git+https://github.com/Ludo-AI/ludo-cli.git"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "ludo": "dist/cli.js"
@@ -25,7 +25,8 @@
     "dist",
     "spec",
     "skills",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=20"

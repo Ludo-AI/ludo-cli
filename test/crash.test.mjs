@@ -43,3 +43,12 @@ test("scrub removes keys in any shape and relative file operands", () => {
   assert.equal(scrub(`hash ${"a".repeat(64)}`), "hash [api-key]");
   assert.equal(scrub("ENOENT: no such file or directory, open 'assets/hero.png'"), "ENOENT: no such file or directory, open '<path>'");
 });
+
+test("a short configured key does not shred ordinary words", () => {
+  process.env.LUDO_API_KEY = "x";
+  try {
+    assert.equal(scrub("Expected property name"), "Expected property name");
+  } finally {
+    delete process.env.LUDO_API_KEY;
+  }
+});

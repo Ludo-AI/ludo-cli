@@ -15,7 +15,7 @@ import { PACKAGE_ROOT, resolveApiKey, VERSION } from "./config.js";
 // project, and its client key is rate limited in Sentry. Users opt out with
 // LUDO_TELEMETRY=0 or DO_NOT_TRACK=1.
 
-const SENTRY_DSN = "";
+const SENTRY_DSN = "https://f8eb96eda46baa2600e54d7c71cf4b3f@o505219.ingest.us.sentry.io/4512147055116288";
 const SEND_TIMEOUT_MS = 2000;
 
 // A key given with --api-key never reaches config or env, so read it here.
@@ -45,7 +45,8 @@ function dsn(): string {
 export function scrub(text: string): string {
   let out = text.split(PACKAGE_ROOT + path.sep).join("");
   const key = resolveApiKey(argvApiKey());
-  if (key) out = out.split(key).join("[api-key]");
+  // Real keys are long; a short value would shred ordinary words.
+  if (key && key.length >= 16) out = out.split(key).join("[api-key]");
   // Keys in any other shape: CLI keys, 64-hex keys, Authorization values.
   out = out.replace(/ludo_[A-Za-z0-9_-]{20,}/g, "[api-key]").replace(/\b[0-9a-f]{64}\b/gi, "[api-key]").replace(/ApiKey \S+/g, "ApiKey [api-key]");
   // The operand of a failed file operation, relative paths included.
