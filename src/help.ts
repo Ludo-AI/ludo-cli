@@ -56,6 +56,7 @@ export function mainHelp(commands: Command[]): string {
       ["files upload <path>", "Upload a local file and print its URL"],
       ["jobs wait <id>", "Wait for a job and download its results"],
       ["agent-help", "A short guide for AI agents using this CLI"],
+      ["skill install", "Teach Claude Code the CLI (--project for this repo)"],
       ["spec [refresh|path]", "Show or refresh the API spec the commands are built from"],
       ["version", "Print the version"]
     ]),

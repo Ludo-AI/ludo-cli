@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { Api, uploadFile } from "./api.js";
@@ -16,6 +17,7 @@ import { gridFromResult, parseGrid, previewFile, stampGrid } from "./tty/preview
 import { creditsBar, logo, nextStep, spinner } from "./tty/flair.js";
 import { AUDIO_EXT, copyText, IMAGE_EXT, openFile, playAudio } from "./tty/actions.js";
 import { writeGodotSpriteFrames } from "./tty/godot.js";
+import { installSkill, isInstalled, skillTarget, uninstallSkill } from "./skill.js";
 import { decodePng } from "./tty/png.js";
 import { accountLine, accountSummary, billingUrlFor, browserLogin, canOpenBrowser, openBrowser } from "./login.js";
 
@@ -310,7 +312,12 @@ async function login(ctx: Ctx, parsed: Parsed, words: string[]): Promise<number>
     process.stderr.write("Note: LUDO_API_KEY is set in your environment and takes precedence over this login. Unset it to use the login.\n");
   }
   if (ctx.jsonOut) printJson({ ok: true, config: file, account }, false);
-  else process.stdout.write(account ? `✓ Player 1 ready: ${accountLine(account)}\n` : "✓ Logged in\n");
+  else {
+    process.stdout.write(account ? `✓ Player 1 ready: ${accountLine(account)}\n` : "✓ Logged in\n");
+    // Claude Code users get a pointer to the skill if they don't have it yet.
+    const claudeHome = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
+    if (fs.existsSync(claudeHome) && !isInstalled()) process.stderr.write("Using Claude Code? Teach it the CLI: ludo skill install\n");
+  }
   return EXIT.OK;
 }
 
@@ -330,6 +337,44 @@ async function logout(ctx: Ctx): Promise<number> {
   if (ctx.jsonOut) printJson({ ok: true, revoked }, false);
   else process.stdout.write(`Logged out${revoked ? " (this CLI login was revoked)" : ""}\n`);
   if (process.env.LUDO_API_KEY) ctx.log("Note: LUDO_API_KEY is still set in your environment.");
+  return EXIT.OK;
+}
+
+// `ludo skill install|uninstall|path [--project] [--force]`
+async function skill(ctx: Ctx, parsed: Parsed, words: string[]): Promise<number> {
+  const sub = words[0];
+  const project = parsed.flags.has("--project");
+  const force = parsed.flags.has("--force");
+  if (!sub || ctx.globals.help || !["install", "uninstall", "path"].includes(sub)) {
+    process.stdout.write(
+      [
+        "Usage: ludo skill install|uninstall|path [--project] [--force]",
+        "",
+        "Installs the Ludo skill for Claude Code, so your agent knows how to generate game assets",
+        "with this CLI. Personal by default (~/.claude/skills/ludo); --project installs it into this",
+        "project's .claude/skills instead, to share with your team through the repository.",
+        "Other agents: point them at `ludo agent-help`.",
+        ""
+      ].join("\n")
+    );
+    return sub && !ctx.globals.help ? EXIT.USAGE : EXIT.OK;
+  }
+  if (sub === "path") {
+    process.stdout.write(`${skillTarget(project)}\n`);
+    return EXIT.OK;
+  }
+  const result = sub === "install" ? installSkill({ project, force }) : uninstallSkill({ project, force });
+  if (ctx.jsonOut) printJson(result, false);
+  else {
+    const messages: Record<string, string> = {
+      installed: `✓ Installed the Ludo skill: ${result.path}\nStart a new Claude Code session to pick it up.`,
+      updated: `✓ Updated the Ludo skill: ${result.path}`,
+      unchanged: `The Ludo skill is already up to date: ${result.path}`,
+      removed: `Removed the Ludo skill: ${result.path}`,
+      absent: `The Ludo skill is not installed at ${result.path}`
+    };
+    process.stdout.write(messages[result.action] + "\n");
+  }
   return EXIT.OK;
 }
 
@@ -406,7 +451,7 @@ async function main(argv: string[]): Promise<number> {
   const { globals, words } = parsed;
   const ctx = makeCtx(globals);
   const [first, second] = words;
-  if (["version", "login", "logout", "billing", "update", "spec", "help", "agent-help", "preview"].includes(first)) commandLabel = first;
+  if (["version", "login", "logout", "billing", "update", "spec", "help", "agent-help", "preview", "skill"].includes(first)) commandLabel = first;
 
   if (first === "version" || argv.includes("--version") || argv.includes("-v")) {
     process.stdout.write(`${VERSION}\n`);
@@ -445,6 +490,10 @@ async function main(argv: string[]): Promise<number> {
     return EXIT.OK;
   }
 
+  if (first === "skill") {
+    commandLabel = "skill";
+    return skill(ctx, parsed, words.slice(1));
+  }
   if (first === "preview") {
     commandLabel = "preview";
     return preview(ctx, parsed, words.slice(1));

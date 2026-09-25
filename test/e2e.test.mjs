@@ -456,3 +456,27 @@ test("--engine godot writes a SpriteFrames resource next to the sheet and lists 
   assert.equal((text.match(/type="AtlasTexture"/g) || []).length, 4);
   assert.match(text, /"speed": 8\.0/);
 });
+
+test("skill install writes the bundled skill, updates its own copy and protects others", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-"));
+  const env = { CLAUDE_CONFIG_DIR: path.join(cwd, "claude") };
+  const target = path.join(cwd, "claude", "skills", "ludo", "SKILL.md");
+  let r = await run(["skill", "install", "--json"], env, cwd);
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).action, "installed");
+  assert.match(fs.readFileSync(target, "utf8"), /^---\nname: ludo\n/);
+  r = await run(["skill", "install", "--json"], env, cwd);
+  assert.equal(JSON.parse(r.stdout).action, "unchanged");
+  // A skill the user wrote themselves is not clobbered.
+  fs.writeFileSync(target, "---\nname: ludo\n---\nmine\n");
+  r = await run(["skill", "install"], env, cwd);
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /--force/);
+  r = await run(["skill", "install", "--force", "--json"], env, cwd);
+  assert.equal(JSON.parse(r.stdout).action, "updated");
+  r = await run(["skill", "install", "--project", "--json"], env, cwd);
+  assert.ok(fs.existsSync(path.join(cwd, ".claude", "skills", "ludo", "SKILL.md")));
+  r = await run(["skill", "uninstall", "--json"], env, cwd);
+  assert.equal(JSON.parse(r.stdout).action, "removed");
+  assert.ok(!fs.existsSync(target));
+});

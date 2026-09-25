@@ -151,8 +151,11 @@ To turn crash reports off, set `LUDO_TELEMETRY=0` (or the standard `DO_NOT_TRACK
 ## For AI agents
 
 - `ludo agent-help` prints a one-page guide to the CLI.
-- Claude Code: install the bundled skill with `/plugin marketplace add Ludo-AI/ludo-cli`, then
-  `/plugin install ludo@ludo`. Other agents: point them at `ludo agent-help`, or copy
+- Claude Code: `ludo skill install` adds the Ludo skill to `~/.claude/skills` (or to this
+  project's `.claude/skills` with `--project`, to share it through the repository). Re-run it after
+  updating the CLI. It is also available as a plugin: `/plugin marketplace add Ludo-AI/ludo-cli`,
+  then `/plugin install ludo@ludo`.
+- Other agents: point them at `ludo agent-help`, or copy
   [`skills/ludo/SKILL.md`](skills/ludo/SKILL.md) into your agent instructions.
 
 ## How it stays current
