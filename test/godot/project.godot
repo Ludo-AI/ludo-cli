@@ -1,0 +1,8 @@
+; Minimal Godot 4 project used only to validate the SpriteFrames .tres files
+; written by src/tty/godot.ts. See run.sh.
+
+config_version=5
+
+[application]
+
+config/name="ludo-cli godot validation"
