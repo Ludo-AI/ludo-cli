@@ -47,7 +47,7 @@ export function scrub(text: string): string {
   const key = resolveApiKey(argvApiKey());
   if (key) out = out.split(key).join("[api-key]");
   // Keys in any other shape: CLI keys, 64-hex keys, Authorization values.
-  out = out.replace(/lcli_[A-Za-z0-9_-]+/g, "[api-key]").replace(/\b[0-9a-f]{64}\b/gi, "[api-key]").replace(/ApiKey \S+/g, "ApiKey [api-key]");
+  out = out.replace(/ludo_[A-Za-z0-9_-]{20,}/g, "[api-key]").replace(/\b[0-9a-f]{64}\b/gi, "[api-key]").replace(/ApiKey \S+/g, "ApiKey [api-key]");
   // The operand of a failed file operation, relative paths included.
   out = out.replace(/(ENOENT|EACCES|EISDIR|ENOTDIR|EPERM)([^']*)'[^']*'/g, "$1$2'<path>'");
   const home = os.homedir();

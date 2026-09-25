@@ -71,10 +71,10 @@ before(async () => {
       loginPolls++;
       if (loginOutcome === "denied") return json(res, 200, { status: "denied" });
       if (loginPolls < 2) return json(res, 200, { status: "pending" });
-      return json(res, 200, { status: "approved", api_key: "lcli_minted" });
+      return json(res, 200, { status: "approved", api_key: "ludo_minted" });
     }
     if (req.method === "GET" && url.pathname === "/api/assets/account") {
-      if (!["ApiKey lcli_minted", "ApiKey test-key"].includes(req.headers.authorization)) return json(res, 403, { message: "Unauthorized" });
+      if (!["ApiKey ludo_minted", "ApiKey test-key"].includes(req.headers.authorization)) return json(res, 403, { message: "Unauthorized" });
       return json(res, 200, ACCOUNT);
     }
     if (req.method === "DELETE" && url.pathname === "/api/assets/cli-key") {
@@ -319,7 +319,8 @@ test("login runs the browser flow and saves the CLI key", async () => {
   const out = JSON.parse(stdout);
   assert.equal(out.ok, true);
   assert.equal(out.account.plan.name, "Pro");
-  assert.equal(configOf(cwd).api_key, "lcli_minted");
+  assert.equal(configOf(cwd).api_key, "ludo_minted");
+  assert.equal(configOf(cwd).key_source, "login");
   const start = seen.filter(s => s.path === "/api/cli/auth/start").pop();
   assert.equal(JSON.parse(start.raw).platform, process.platform);
 });
@@ -337,6 +338,7 @@ test("login --with-key validates and saves a pasted key (a 204 is success)", asy
   const { code, cwd, stderr } = await run(["login", "--with-key", "test-key"], { LUDO_API_KEY: "" });
   assert.equal(code, 0, stderr);
   assert.equal(configOf(cwd).api_key, "test-key");
+  assert.equal(configOf(cwd).key_source, undefined);
 });
 
 test("login --with-key reports a plan without API access", async () => {
@@ -348,13 +350,13 @@ test("login --with-key reports a plan without API access", async () => {
 test("logout revokes a CLI login key and forgets it", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-"));
   fs.mkdirSync(path.join(cwd, ".config"));
-  fs.writeFileSync(path.join(cwd, ".config", "config.json"), JSON.stringify({ api_key: "lcli_minted" }));
+  fs.writeFileSync(path.join(cwd, ".config", "config.json"), JSON.stringify({ api_key: "ludo_minted", key_source: "login" }));
   const from = seen.length;
   const { code, stdout } = await run(["logout", "--json"], { LUDO_API_KEY: "" }, cwd);
   assert.equal(code, 0);
   assert.deepEqual(JSON.parse(stdout), { ok: true, revoked: true });
   const del = seen.slice(from).find(s => s.method === "DELETE" && s.path === "/api/assets/cli-key");
-  assert.equal(del.headers.authorization, "ApiKey lcli_minted");
+  assert.equal(del.headers.authorization, "ApiKey ludo_minted");
   assert.equal(configOf(cwd).api_key, undefined);
 });
 
@@ -392,7 +394,7 @@ test("a network blip while polling does not end the login", async () => {
   flakyPolls = 2;
   const { code, stderr, cwd } = await run(["login", "--json"], { LUDO_API_KEY: "" });
   assert.equal(code, 0, stderr);
-  assert.equal(configOf(cwd).api_key, "lcli_minted");
+  assert.equal(configOf(cwd).api_key, "ludo_minted");
 });
 
 test("login warns when LUDO_API_KEY will override it", async () => {

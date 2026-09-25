@@ -11,8 +11,6 @@ import { CliError, EXIT } from "./errors.js";
 // main API key is never shown or rotated. Someone without an account signs up
 // on the same page, and is offered a plan if theirs has no API access.
 
-export const CLI_KEY_PREFIX = "lcli_";
-
 // The web app for an API URL: api.ludo.ai -> app.ludo.ai, api-dev -> app-dev.
 export function webUrlFor(apiUrl: string): string {
   try {

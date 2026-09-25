@@ -11,7 +11,7 @@ import { CliError, EXIT, specMismatch } from "./errors.js";
 import { agentHelp, commandHelp, groupHelp, mainHelp } from "./help.js";
 import { collectUrls, downloadAll, extractInlineFiles, waitForJob } from "./jobs.js";
 import { embeddedSpecPath, loadSpec } from "./spec.js";
-import { accountLine, accountSummary, billingUrlFor, browserLogin, canOpenBrowser, CLI_KEY_PREFIX, openBrowser } from "./login.js";
+import { accountLine, accountSummary, billingUrlFor, browserLogin, canOpenBrowser, openBrowser } from "./login.js";
 
 const DEFAULT_OUT = "ludo-output";
 const DEFAULT_TIMEOUT_S = 30 * 60;
@@ -196,6 +196,7 @@ async function fetchAccount(apiUrl: string, key: string): Promise<any | undefine
 async function login(ctx: Ctx, parsed: Parsed, words: string[]): Promise<number> {
   const apiUrl = resolveApiUrl(parsed.globals.apiUrl);
   let key = parsed.globals.apiKey || words[0];
+  const pasted = !!key || flagSet(parsed, "--with-key");
   if (!key && flagSet(parsed, "--with-key")) {
     const given = parsed.flags.get("--with-key")?.find(v => v !== "\u0000flag");
     key = given || (await promptSecret("Ludo API key: "));
@@ -213,7 +214,10 @@ async function login(ctx: Ctx, parsed: Parsed, words: string[]): Promise<number>
     ({ key } = await browserLogin(apiUrl, { log, openBrowser: !noBrowser && canOpenBrowser() }));
   }
 
-  const file = writeConfig({ ...readConfig(), api_key: key, ...(parsed.globals.apiUrl ? { api_url: parsed.globals.apiUrl } : {}) });
+  const config = { ...readConfig(), api_key: key, ...(parsed.globals.apiUrl ? { api_url: parsed.globals.apiUrl } : {}) };
+  if (pasted) delete config.key_source;
+  else config.key_source = "login";
+  const file = writeConfig(config);
   const account = await fetchAccount(apiUrl, key!).catch(() => undefined);
   ctx.log(`Saved to ${file}`);
   if (process.env.LUDO_API_KEY && process.env.LUDO_API_KEY !== key) {
@@ -230,11 +234,12 @@ async function logout(ctx: Ctx): Promise<number> {
   const config = readConfig();
   const key = config.api_key;
   let revoked = false;
-  if (key && key.startsWith(CLI_KEY_PREFIX)) {
+  if (key && config.key_source === "login") {
     const res = await new Api(resolveApiUrl(ctx.globals.apiUrl), key).request("DELETE", "/assets/cli-key", { timeoutMs: 10_000 }).catch(() => undefined);
     revoked = !!res && res.status >= 200 && res.status < 300;
   }
   delete config.api_key;
+  delete config.key_source;
   writeConfig(config);
   if (ctx.jsonOut) printJson({ ok: true, revoked }, false);
   else process.stdout.write(`Logged out${revoked ? " (this CLI login was revoked)" : ""}\n`);

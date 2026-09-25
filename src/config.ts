@@ -30,6 +30,9 @@ export function cacheDir(): string {
 
 interface StoredConfig {
   api_key?: string;
+  // "login" when `ludo login` created the key through the browser, so
+  // `ludo logout` knows it may revoke it on the server.
+  key_source?: "login";
   api_url?: string;
 }
 
