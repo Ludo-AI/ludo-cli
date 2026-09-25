@@ -18,7 +18,7 @@ import { creditsBar, logo, nextStep, spinner } from "./tty/flair.js";
 import { AUDIO_EXT, copyText, IMAGE_EXT, openFile, playAudio } from "./tty/actions.js";
 import { writeGodotSpriteFrames } from "./tty/godot.js";
 import { installSkill, isInstalled, skillTarget, uninstallSkill } from "./skill.js";
-import { decodePng } from "./tty/png.js";
+import { convertToPng, loadImage } from "./tty/image.js";
 import { accountLine, accountSummary, billingUrlFor, browserLogin, canOpenBrowser, openBrowser } from "./login.js";
 
 const DEFAULT_OUT = "ludo-output";
@@ -93,13 +93,25 @@ async function finishJob(ctx: Ctx, job: any, label: string, body?: Record<string
     record.result = inline.result;
     const urls = collectUrls(record.result);
     const downloaded = globals.download && urls.length ? await downloadAll(urls, dir, prefix, ctx.log) : [];
+    // WebP results also get a PNG copy side by side: engines and tools take
+    // PNG everywhere, and the PNG is what carries a spritesheet's grid.
+    const pngOf = new Map<string, string>();
+    for (const f of [...downloaded]) {
+      if (!/\.webp$/i.test(f.path)) continue;
+      const png = f.path.replace(/\.webp$/i, ".png");
+      if (!fs.existsSync(png) && convertToPng(f.path, png)) {
+        pngOf.set(f.path, png);
+        downloaded.push({ url: f.url, path: png });
+      }
+    }
     // A spritesheet remembers its grid inside the PNG, for `ludo preview`
     // and engine exports.
     const grid = gridFromResult(job.result);
     const sheetFile = downloaded.find(f => f.url === job.result?.spritesheet_url);
-    if (grid && sheetFile) {
-      stampGrid(sheetFile.path, grid);
-      sheet = sheetFile.path;
+    const sheetPng = sheetFile && (pngOf.get(sheetFile.path) || (/\.png$/i.test(sheetFile.path) ? sheetFile.path : undefined));
+    if (grid && sheetPng) {
+      stampGrid(sheetPng, grid);
+      sheet = sheetPng;
     }
     const engineFiles = globals.engine ? await engineExport(ctx, sheet, grid) : [];
     const rel = (p: string) => path.relative(process.cwd(), p) || p;
@@ -168,7 +180,7 @@ async function engineExport(ctx: Ctx, sheet: string | undefined, grid: ReturnTyp
     return [];
   }
   try {
-    const img = decodePng(fs.readFileSync(sheet));
+    const img = loadImage(sheet);
     if (!img) throw new Error("could not read the spritesheet");
     const tres = writeGodotSpriteFrames(sheet, img.width, img.height, { cols: grid.cols, rows: grid.rows, frames: grid.frames, fps: grid.fps });
     return [{ url: "(godot SpriteFrames)", path: tres }];

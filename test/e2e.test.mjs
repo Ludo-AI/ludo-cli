@@ -55,17 +55,23 @@ before(async () => {
       return res.end(fs.readFileSync(SPEC));
     }
     if (req.method === "POST" && url.pathname === "/api/assets/sprite/animate") {
+      // "webp" in the prompt: answer like hydra, whose sheets come as WebP.
+      const webp = JSON.parse(raw).motion_prompt === "webp";
       return json(res, 200, {
         id: "job-sheet001",
         status: "succeeded",
         task_type: "animateSprite",
         credits_charged: 9,
-        result: { spritesheet_url: `${base}/files/sheet.png`, audio_url: `${base}/files/sfx.mp3`, num_frames: 4, num_cols: 2, num_rows: 2, duration: 0.5 }
+        result: { spritesheet_url: `${base}/files/sheet.${webp ? "webp" : "png"}`, audio_url: `${base}/files/sfx.mp3`, num_frames: 4, num_cols: 2, num_rows: 2, duration: 0.5 }
       });
     }
     if (req.method === "GET" && url.pathname === "/files/sfx.mp3") {
       res.writeHead(200);
       return res.end(MP3);
+    }
+    if (req.method === "GET" && url.pathname === "/files/sheet.webp") {
+      res.writeHead(200);
+      return res.end(fs.readFileSync(new URL("./fixtures/sheet.webp", import.meta.url)));
     }
     if (req.method === "GET" && url.pathname === "/files/sheet.png") {
       res.writeHead(200);
@@ -487,4 +493,26 @@ test("skill install writes the bundled skill, updates its own copy and protects 
   r = await run(["skill", "uninstall", "--json"], env, cwd);
   assert.equal(JSON.parse(r.stdout).action, "removed");
   assert.ok(!fs.existsSync(target));
+});
+
+// A converter is on every macOS machine (sips); on Linux it needs dwebp,
+// ImageMagick or ffmpeg, which CI images normally carry.
+const { convertToPng } = await import("../dist/tty/image.js");
+const canConvertWebp = (() => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-conv-"));
+  return convertToPng(new URL("./fixtures/sheet.webp", import.meta.url).pathname, path.join(dir, "probe.png"));
+})();
+
+test("a WebP spritesheet gets a PNG copy that carries the grid and feeds the Godot export", { skip: !canConvertWebp && "no WebP converter here" }, async () => {
+  const { code, stdout, stderr, cwd } = await run(["sprite", "animate", "--initial-image", "https://example.com/k.png", "--motion-prompt", "webp", "--engine", "godot", "--json"]);
+  assert.equal(code, 0, stderr);
+  const files = JSON.parse(stdout).files.map(f => f.path);
+  const webp = files.find(p => p.endsWith(".webp"));
+  const png = files.find(p => p.endsWith(".png"));
+  assert.ok(webp && png, `both copies are listed: ${files.join(", ")}`);
+  assert.equal(png, webp.replace(/\.webp$/, ".png"), "the PNG sits next to the WebP");
+  assert.deepEqual(readGrid(fs.readFileSync(path.join(cwd, png))), { cols: 2, rows: 2, frames: 4, fps: 8 });
+  const tres = files.find(p => p.endsWith(".tres"));
+  assert.ok(tres, "the Godot export was written");
+  assert.match(fs.readFileSync(path.join(cwd, tres), "utf8"), new RegExp(`path="${path.basename(png).replace(".", "\\.")}"`));
 });

@@ -25,6 +25,22 @@ function converters(src: string, dst: string): [string, string[]][] {
   return list;
 }
 
+// Writes a PNG copy of any image the system can convert. Returns false when
+// no converter is available or the conversion failed (dst is then absent).
+export function convertToPng(src: string, dst: string): boolean {
+  try {
+    for (const [cmd, args] of converters(src, dst)) {
+      if (!(process.platform === "darwin" && cmd === "sips") && !which(cmd)) continue;
+      const res = spawnSync(cmd, args, { stdio: "ignore", timeout: 60_000 });
+      if (res.status === 0 && fs.existsSync(dst) && isPng(fs.readFileSync(dst))) return true;
+      fs.rmSync(dst, { force: true });
+    }
+  } catch {
+    fs.rmSync(dst, { force: true });
+  }
+  return false;
+}
+
 export function loadImage(file: string): Image | undefined {
   let buf: Buffer;
   try {
@@ -36,12 +52,7 @@ export function loadImage(file: string): Image | undefined {
 
   const tmp = path.join(os.tmpdir(), `ludo-preview-${process.pid}-${Date.now()}.png`);
   try {
-    for (const [cmd, args] of converters(file, tmp)) {
-      if (!(process.platform === "darwin" && cmd === "sips") && !which(cmd)) continue;
-      const res = spawnSync(cmd, args, { stdio: "ignore", timeout: 15_000 });
-      if (res.status === 0 && fs.existsSync(tmp)) return decodePng(fs.readFileSync(tmp));
-    }
-    return undefined;
+    return convertToPng(file, tmp) ? decodePng(fs.readFileSync(tmp)) : undefined;
   } catch {
     return undefined;
   } finally {

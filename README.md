@@ -73,6 +73,7 @@ ludo docs search --query "which animation model should I use for pixel art?"
 - `--timeout <s>` stops waiting (the job keeps running), `--quiet` silences progress on stderr.
 - `--open` opens the result in its default app (Aseprite, say), `--play` plays generated audio,
   `--copy` puts the saved file paths on the clipboard.
+- WebP results are also saved as PNG, side by side (engines and most tools want PNG).
 - `--engine godot` also writes a Godot 4 `SpriteFrames` resource (`.tres`) next to a spritesheet:
   drop it on an `AnimatedSprite2D`. Inside a Godot project it uses a `res://` path.
 
