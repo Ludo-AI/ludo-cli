@@ -1,0 +1,96 @@
+# Loads every SpriteFrames .tres listed in res://out/cases.json (written by
+# generate.mjs) and checks it against the expected layout. Exits 1 on any
+# mismatch. Run via run.sh, which also fails on any Godot ERROR/WARNING output.
+extends SceneTree
+
+var failures := 0
+
+
+func fail(case_name: String, msg: String) -> void:
+	failures += 1
+	printerr("FAIL [%s] %s" % [case_name, msg])
+
+
+func _initialize() -> void:
+	var text := FileAccess.get_file_as_string("res://out/cases.json")
+	var cases = JSON.parse_string(text)
+	if typeof(cases) != TYPE_ARRAY or cases.is_empty():
+		printerr("FAIL could not read res://out/cases.json")
+		quit(1)
+		return
+	for c in cases:
+		check_case(c)
+	if failures == 0:
+		print("ALL %d CASES PASSED" % cases.size())
+	quit(1 if failures > 0 else 0)
+
+
+func check_case(c: Dictionary) -> void:
+	var name: String = c.name
+	var failures_before := failures
+	var res = ResourceLoader.load(c.tres, "", ResourceLoader.CACHE_MODE_IGNORE)
+	if res == null:
+		fail(name, "could not load %s" % c.tres)
+		return
+	if not (res is SpriteFrames):
+		fail(name, "%s is %s, not SpriteFrames" % [c.tres, res.get_class()])
+		return
+	var sf: SpriteFrames = res
+	var anim := StringName(c.animation)
+	if not sf.has_animation(anim):
+		fail(name, "missing animation %s (have %s)" % [anim, sf.get_animation_names()])
+		return
+	if sf.get_animation_names().size() != 1:
+		fail(name, "expected exactly 1 animation, got %s" % [sf.get_animation_names()])
+	var expected_frames: Array = c.frames
+	if sf.get_frame_count(anim) != expected_frames.size():
+		fail(name, "frame count %d != %d" % [sf.get_frame_count(anim), expected_frames.size()])
+		return
+	if not is_equal_approx(sf.get_animation_speed(anim), float(c.fps)):
+		fail(name, "speed %s != %s" % [sf.get_animation_speed(anim), c.fps])
+	if bool(sf.get_animation_loop(anim)) != bool(c.loop):
+		fail(name, "loop %s != %s" % [sf.get_animation_loop(anim), c.loop])
+
+	var sheet_image: Image = null
+	for i in expected_frames.size():
+		var f: Dictionary = expected_frames[i]
+		var tex = sf.get_frame_texture(anim, i)
+		if not (tex is AtlasTexture):
+			fail(name, "frame %d texture is not an AtlasTexture" % i)
+			continue
+		var at: AtlasTexture = tex
+		var r: Array = f.region
+		var want := Rect2(r[0], r[1], r[2], r[3])
+		if at.region != want:
+			fail(name, "frame %d region %s != %s" % [i, at.region, want])
+		if not is_equal_approx(sf.get_frame_duration(anim, i), 1.0):
+			fail(name, "frame %d duration %s != 1.0" % [i, sf.get_frame_duration(anim, i)])
+		if at.atlas == null:
+			fail(name, "frame %d atlas is null" % i)
+			continue
+		if at.atlas.resource_path != c.sheet:
+			fail(name, "frame %d atlas path %s != %s" % [i, at.atlas.resource_path, c.sheet])
+		if sheet_image == null:
+			sheet_image = at.atlas.get_image()
+			if sheet_image.is_compressed():
+				sheet_image.decompress()
+		# Sample the center and the corners of the region: each frame is a
+		# solid distinct color, so any off-by-a-cell region shows up here.
+		var want_color := Color(f.color[0], f.color[1], f.color[2], f.color[3])
+		var points := [
+			at.region.position + at.region.size / 2,
+			at.region.position,
+			at.region.position + at.region.size - Vector2.ONE,
+		]
+		for p in points:
+			var got := sheet_image.get_pixelv(Vector2i(p))
+			if _far(got, want_color):
+				fail(name, "frame %d pixel %s color %s != %s" % [i, p, got, want_color])
+				break
+	if failures == failures_before:
+		print("ok [%s] %d frames, %s @ %s fps, loop=%s" % [name, expected_frames.size(), anim, c.fps, c.loop])
+
+
+func _far(a: Color, b: Color) -> bool:
+	var tol := 2.0 / 255.0
+	return absf(a.r - b.r) > tol or absf(a.g - b.g) > tol or absf(a.b - b.b) > tol or absf(a.a - b.a) > tol

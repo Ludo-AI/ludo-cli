@@ -1,0 +1,55 @@
+name: Godot export
+
+# Loads the SpriteFrames .tres files written by src/tty/godot.ts in a real,
+# headless Godot 4 (test/godot/run.sh). Bump GODOT_VERSION deliberately.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - src/tty/godot.ts
+      - test/godot/**
+      - test/godot.test.mjs
+      - .github/workflows/godot.yml
+  pull_request:
+    paths:
+      - src/tty/godot.ts
+      - test/godot/**
+      - test/godot.test.mjs
+      - .github/workflows/godot.yml
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: 4.7.2-stable
+
+jobs:
+  godot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Cache Godot
+        id: cache-godot
+        uses: actions/cache@v4
+        with:
+          path: ~/godot
+          key: godot-${{ env.GODOT_VERSION }}-linux-x86_64
+      - name: Download Godot
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/godot
+          curl -fsSL -o /tmp/godot.zip \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip"
+          unzip -q /tmp/godot.zip -d ~/godot
+          mv ~/godot/Godot_v${GODOT_VERSION}_linux.x86_64 ~/godot/godot
+          chmod +x ~/godot/godot
+
+      - name: Unit tests
+        run: npm test
+      - name: Load the generated .tres files in Godot
+        run: GODOT=~/godot/godot test/godot/run.sh
