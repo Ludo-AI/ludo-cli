@@ -15,6 +15,8 @@ import { visuals, type Visuals } from "./tty/visuals.js";
 import { gridFromResult, parseGrid, previewFile, stampGrid } from "./tty/preview.js";
 import { creditsBar, logo, nextStep, spinner } from "./tty/flair.js";
 import { AUDIO_EXT, copyText, IMAGE_EXT, openFile, playAudio } from "./tty/actions.js";
+import { writeGodotSpriteFrames } from "./tty/godot.js";
+import { decodePng } from "./tty/png.js";
 import { accountLine, accountSummary, billingUrlFor, browserLogin, canOpenBrowser, openBrowser } from "./login.js";
 
 const DEFAULT_OUT = "ludo-output";
@@ -162,10 +164,6 @@ async function engineExport(ctx: Ctx, sheet: string | undefined, grid: ReturnTyp
     return [];
   }
   try {
-    // TODO(godot): static import once src/tty/godot.ts lands.
-    const godotModule = "./tty/godot.js";
-    const { writeGodotSpriteFrames } = await import(godotModule);
-    const { decodePng } = await import("./tty/png.js");
     const img = decodePng(fs.readFileSync(sheet));
     if (!img) throw new Error("could not read the spritesheet");
     const tres = writeGodotSpriteFrames(sheet, img.width, img.height, { cols: grid.cols, rows: grid.rows, frames: grid.frames, fps: grid.fps });

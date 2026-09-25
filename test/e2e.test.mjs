@@ -445,3 +445,14 @@ test("preview refuses to draw for a non-terminal", async () => {
   assert.equal(code, 2);
   assert.match(stderr, /interactive terminal/);
 });
+
+test("--engine godot writes a SpriteFrames resource next to the sheet and lists it", async () => {
+  const { code, stdout, stderr, cwd } = await run(["sprite", "animate", "--initial-image", "https://example.com/k.png", "--motion-prompt", "walk", "--engine", "godot", "--json"]);
+  assert.equal(code, 0, stderr);
+  const tres = JSON.parse(stdout).files.find(f => f.path.endsWith(".tres"));
+  assert.ok(tres, "the .tres is listed in files");
+  const text = fs.readFileSync(path.join(cwd, tres.path), "utf8");
+  assert.match(text, /\[gd_resource type="SpriteFrames" format=3\]/);
+  assert.equal((text.match(/type="AtlasTexture"/g) || []).length, 4);
+  assert.match(text, /"speed": 8\.0/);
+});
