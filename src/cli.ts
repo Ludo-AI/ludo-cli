@@ -216,6 +216,9 @@ async function login(ctx: Ctx, parsed: Parsed, words: string[]): Promise<number>
   const file = writeConfig({ ...readConfig(), api_key: key, ...(parsed.globals.apiUrl ? { api_url: parsed.globals.apiUrl } : {}) });
   const account = await fetchAccount(apiUrl, key!).catch(() => undefined);
   ctx.log(`Saved to ${file}`);
+  if (process.env.LUDO_API_KEY && process.env.LUDO_API_KEY !== key) {
+    process.stderr.write("Note: LUDO_API_KEY is set in your environment and takes precedence over this login. Unset it to use the login.\n");
+  }
   if (ctx.jsonOut) printJson({ ok: true, config: file, account }, false);
   else process.stdout.write(`✓ Logged in${account ? `: ${accountLine(account)}` : ""}\n`);
   return EXIT.OK;
@@ -377,7 +380,14 @@ async function offerBilling() {
     apiUrl = resolveApiUrl(undefined);
   }
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr, terminal: true });
-  const answer = await new Promise<string>(resolve => rl.question("Open the billing page? [Y/n] ", resolve));
+  // Never hang: no answer in 20 seconds counts as no.
+  const answer = await new Promise<string>(resolve => {
+    const timer = setTimeout(() => resolve("n"), 20_000);
+    rl.question("Open the billing page? [Y/n] ", a => {
+      clearTimeout(timer);
+      resolve(a);
+    });
+  });
   rl.close();
   if (/^(y|yes|)$/i.test(answer.trim())) openBrowser(billingUrlFor(apiUrl));
 }

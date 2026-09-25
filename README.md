@@ -130,7 +130,7 @@ code 5) at a terminal, the CLI offers to open that page.
 If the CLI itself crashes (a bug in `ludo`, not an API error, a failed generation or a mistyped
 command), it sends a crash report to Ludo's error tracker. The report holds the error, a stack trace
 of the CLI's own code, the CLI, Node and OS versions and the command name (`sprite animate`). It
-never includes your API key, prompts, flag values, file names or paths outside the CLI.
+never includes your API key, prompts, flag values or file paths.
 
 To turn crash reports off, set `LUDO_TELEMETRY=0` (or the standard `DO_NOT_TRACK=1`).
 

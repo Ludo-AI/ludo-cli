@@ -22,6 +22,7 @@ const blobs = new Map();
 let polls = 0;
 let loginPolls = 0;
 let loginOutcome = "approved";
+let flakyPolls = 0;
 const ACCOUNT = {
   credits: { available: 1840.5, plan_credits: 2000, used: 460, extra: 300.5, resets_at: 1790000000, team_pool: false, paused: false, grace_until: null },
   plan: { name: "Pro", api_access: true },
@@ -63,6 +64,10 @@ before(async () => {
       });
     }
     if (req.method === "POST" && url.pathname === "/api/cli/auth/token") {
+      if (flakyPolls > 0) {
+        flakyPolls--;
+        return req.socket.destroy();
+      }
       loginPolls++;
       if (loginOutcome === "denied") return json(res, 200, { status: "denied" });
       if (loginPolls < 2) return json(res, 200, { status: "pending" });
@@ -141,6 +146,9 @@ function run(args, extraEnv = {}, cwd = fs.mkdtempSync(path.join(os.tmpdir(), "l
         LUDO_CONFIG_DIR: path.join(cwd, ".config"),
         LUDO_CACHE_DIR: path.join(cwd, ".cache"),
         LUDO_TELEMETRY: "0",
+        // The suite may itself run under a coding agent; the CLI must not see that.
+        CLAUDECODE: "",
+        CLAUDE_CODE_ENTRYPOINT: "",
         ...extraEnv
       }
     });
@@ -377,4 +385,19 @@ test("out of credits points at ludo billing", async () => {
   const { code, stderr } = await run(["image", "create", "--prompt", "x", "--image-type", "sprite"]);
   assert.equal(code, 5);
   assert.match(stderr, /ludo billing/);
+});
+
+test("a network blip while polling does not end the login", async () => {
+  loginOutcome = "approved";
+  flakyPolls = 2;
+  const { code, stderr, cwd } = await run(["login", "--json"], { LUDO_API_KEY: "" });
+  assert.equal(code, 0, stderr);
+  assert.equal(configOf(cwd).api_key, "lcli_minted");
+});
+
+test("login warns when LUDO_API_KEY will override it", async () => {
+  loginOutcome = "approved";
+  const { code, stderr } = await run(["login", "--json"], { LUDO_API_KEY: "test-key" });
+  assert.equal(code, 0);
+  assert.match(stderr, /LUDO_API_KEY is set/);
 });

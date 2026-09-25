@@ -18,6 +18,16 @@ import { PACKAGE_ROOT, resolveApiKey, VERSION } from "./config.js";
 const SENTRY_DSN = "";
 const SEND_TIMEOUT_MS = 2000;
 
+// A key given with --api-key never reaches config or env, so read it here.
+function argvApiKey(): string | undefined {
+  const argv = process.argv;
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--api-key") return argv[i + 1];
+    if (argv[i].startsWith("--api-key=")) return argv[i].slice("--api-key=".length);
+  }
+  return undefined;
+}
+
 export function crashReportingEnabled(): boolean {
   const off = (v?: string) => !!v && !["", "0", "false"].includes(v.toLowerCase());
   if (off(process.env.DO_NOT_TRACK)) return false;
@@ -34,8 +44,12 @@ function dsn(): string {
 // directory, the API key, and any path that is not part of the CLI's own code.
 export function scrub(text: string): string {
   let out = text.split(PACKAGE_ROOT + path.sep).join("");
-  const key = resolveApiKey();
+  const key = resolveApiKey(argvApiKey());
   if (key) out = out.split(key).join("[api-key]");
+  // Keys in any other shape: CLI keys, 64-hex keys, Authorization values.
+  out = out.replace(/lcli_[A-Za-z0-9_-]+/g, "[api-key]").replace(/\b[0-9a-f]{64}\b/gi, "[api-key]").replace(/ApiKey \S+/g, "ApiKey [api-key]");
+  // The operand of a failed file operation, relative paths included.
+  out = out.replace(/(ENOENT|EACCES|EISDIR|ENOTDIR|EPERM)([^']*)'[^']*'/g, "$1$2'<path>'");
   const home = os.homedir();
   if (home) out = out.split(home).join("~");
   // JSON.parse quotes the text it choked on, which may be a response or a user's file.

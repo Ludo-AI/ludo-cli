@@ -161,8 +161,15 @@ export interface Resolved {
   extraWords: string[];
 }
 
+// stdin can only be read once, and a stale-spec retry resolves flags twice.
+let stdinText: string | undefined;
+function readStdin(): string {
+  if (stdinText === undefined) stdinText = fs.readFileSync(0, "utf8");
+  return stdinText;
+}
+
 function readInput(input: string): Record<string, unknown> {
-  const text = input === "-" ? fs.readFileSync(0, "utf8") : fs.readFileSync(input, "utf8");
+  const text = input === "-" ? readStdin() : fs.readFileSync(input, "utf8");
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);

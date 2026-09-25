@@ -34,8 +34,17 @@ export function billingUrlFor(apiUrl: string): string {
 // Only open a browser for a person at a local terminal: never for an agent,
 // a CI job or an SSH session, where it would open on the wrong machine or
 // nowhere. They get the URL printed instead.
+// Coding agents that drive a pseudo-terminal look interactive; these are the
+// variables they set.
+const AGENT_ENV = ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODEX_SANDBOX", "CODEX_CI", "CURSOR_AGENT", "GEMINI_CLI", "AIDER_MODEL", "AGENT"];
+
+export function isAgent(): boolean {
+  return AGENT_ENV.some(name => !!process.env[name]);
+}
+
 export function canOpenBrowser(): boolean {
-  if (process.env.LUDO_NO_BROWSER || process.env.CI) return false;
+  if (process.env.LUDO_NO_BROWSER || process.env.CI || isAgent()) return false;
+  if (process.env.TERM === "dumb") return false;
   if (process.env.SSH_CONNECTION || process.env.SSH_TTY) return false;
   if (!process.stdout.isTTY || !process.stdin.isTTY) return false;
   if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) return false;
@@ -82,14 +91,33 @@ export async function browserLogin(apiUrl: string, opts: { log: (msg: string) =>
   opts.log("No Ludo account yet? You can sign up on that page.");
 
   const deadline = Date.now() + (started.expires_in || 600) * 1000;
-  let interval = Math.max(1, started.interval || 3) * 1000;
+  const baseInterval = Math.max(0.01, started.interval || 3) * 1000;
+  let interval = baseInterval;
+  let rateLimited = 0;
+  let unreachable = 0;
   while (Date.now() < deadline) {
     await sleep(interval);
-    const res = await api.request("POST", "/cli/auth/token", { body: { device_code: started.device_code } });
-    if (res.status === 429) {
+    let res;
+    try {
+      res = await api.request("POST", "/cli/auth/token", { body: { device_code: started.device_code } });
+    } catch (err) {
+      // Wi-Fi handoff, sleep, DNS blip: the person is still in the browser,
+      // and the key waits for us until the code expires.
+      if (++unreachable >= 20) throw err;
       interval = Math.min(interval * 2, 15_000);
       continue;
     }
+    unreachable = 0;
+    if (res.status === 429) {
+      // Backing off until the code expires would end in a misleading "expired".
+      if (++rateLimited >= 3) {
+        throw new CliError("Too many login attempts from this network", EXIT.RATE_LIMITED, "Wait a few minutes, then run `ludo login` again.");
+      }
+      interval = Math.min(interval * 2, 15_000);
+      continue;
+    }
+    rateLimited = 0;
+    interval = baseInterval;
     // A blip while the person is still in the browser is not worth failing on.
     if (res.status >= 500 || typeof res.body !== "object" || !res.body) continue;
     if (res.status >= 400) throw new CliError(res.body.message || `Login failed (HTTP ${res.status})`, EXIT.ERROR);

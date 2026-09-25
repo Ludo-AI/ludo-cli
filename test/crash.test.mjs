@@ -36,3 +36,10 @@ test("events carry no machine identity", () => {
   assert.equal(event.user, undefined);
   assert.match(event.release, /^ludo-cli@/);
 });
+
+test("scrub removes keys in any shape and relative file operands", () => {
+  assert.equal(scrub("bad key lcli_AbC-123_x"), "bad key [api-key]");
+  assert.equal(scrub("Authorization: ApiKey abc123"), "Authorization: ApiKey [api-key]");
+  assert.equal(scrub(`hash ${"a".repeat(64)}`), "hash [api-key]");
+  assert.equal(scrub("ENOENT: no such file or directory, open 'assets/hero.png'"), "ENOENT: no such file or directory, open '<path>'");
+});
