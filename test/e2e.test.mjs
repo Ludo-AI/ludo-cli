@@ -5,6 +5,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 
 // Drives the built CLI against a fake Ludo API: upload, submit, long-poll and
 // download, the way a real generation runs.
@@ -33,6 +34,14 @@ before(async () => {
     const url = new URL(req.url, base);
     seen.push({ method: req.method, path: url.pathname, headers: req.headers, raw });
 
+    if (req.method === "GET" && url.pathname === "/api-documentation/openapi.json") {
+      if (req.headers["if-none-match"] === '"v2"') {
+        res.writeHead(304);
+        return res.end();
+      }
+      res.writeHead(200, { "Content-Type": "application/json", ETag: '"v2"' });
+      return res.end(fs.readFileSync(SPEC));
+    }
     if (req.method === "POST" && url.pathname === "/api/assets/uploads") {
       const body = JSON.parse(raw);
       return json(res, 200, {
@@ -77,8 +86,7 @@ before(async () => {
 
 after(() => server.close());
 
-function run(args, extraEnv = {}) {
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-"));
+function run(args, extraEnv = {}, cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-"))) {
   return new Promise(resolve => {
     const child = spawn(process.execPath, [CLI, ...args], {
       cwd,
@@ -172,4 +180,37 @@ test("agent-help lists every group", async () => {
   const { code, stdout } = await run(["agent-help"]);
   assert.equal(code, 0);
   for (const g of ["image", "sprite", "video", "model", "audio", "jobs", "docs"]) assert.match(stdout, new RegExp(`- ${g}:`));
+});
+
+// Seeds a fresh cache holding a spec from before removeBackground existed.
+function staleCache(etag) {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-"));
+  const dir = path.join(cwd, ".cache");
+  fs.mkdirSync(dir);
+  const key = crypto.createHash("sha1").update(base).digest("hex").slice(0, 12);
+  const old = JSON.parse(fs.readFileSync(SPEC, "utf8"));
+  delete old.paths["/assets/image/remove-background"];
+  fs.writeFileSync(path.join(dir, `openapi-${key}.json`), JSON.stringify(old));
+  fs.writeFileSync(path.join(dir, `openapi-${key}.meta.json`), JSON.stringify({ etag, fetched_at: Date.now() }));
+  return cwd;
+}
+
+const specFetches = from => seen.slice(from).filter(s => s.path === "/api-documentation/openapi.json");
+
+test("a command the cached spec does not know refreshes the spec and runs", async () => {
+  const from = seen.length;
+  const args = ["image", "remove-background", "--image", "https://example.com/a.png", "--no-wait", "--json"];
+  const { code, stdout, stderr } = await run(args, { LUDO_SPEC: "" }, staleCache('"v1"'));
+  assert.equal(code, 0, stderr);
+  assert.equal(JSON.parse(stdout).id, "job-12345678");
+  assert.equal(specFetches(from).length, 1);
+});
+
+test("no retry when the server says the cached spec is current", async () => {
+  const from = seen.length;
+  const { code, stderr } = await run(["image", "remove-background", "--image", "x.png"], { LUDO_SPEC: "" }, staleCache('"v2"'));
+  assert.equal(code, 2);
+  assert.match(stderr, /Unknown command: ludo image remove-background/);
+  assert.equal(specFetches(from).length, 1);
+  assert.ok(!seen.slice(from).some(s => s.path.startsWith("/api/assets/")));
 });

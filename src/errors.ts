@@ -18,6 +18,9 @@ export class CliError extends Error {
   exitCode: number;
   hint?: string;
   details?: unknown;
+  // Set when the error may only mean the cached spec is out of date: an
+  // unknown command, flag or value. The CLI refreshes the spec and retries.
+  specMismatch?: boolean;
 
   constructor(message: string, exitCode: number = EXIT.ERROR, hint?: string, details?: unknown) {
     super(message);
@@ -25,6 +28,12 @@ export class CliError extends Error {
     this.hint = hint;
     this.details = details;
   }
+}
+
+export function specMismatch(message: string, hint?: string): CliError {
+  const err = new CliError(message, EXIT.USAGE, hint);
+  err.specMismatch = true;
+  return err;
 }
 
 export function exitCodeForStatus(status: number): number {

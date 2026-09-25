@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import type { Command, Field } from "./commands.js";
-import { CliError, EXIT } from "./errors.js";
+import { CliError, EXIT, specMismatch } from "./errors.js";
 
 // Flags every command understands. `value: true` means it takes an argument.
 export const GLOBAL_FLAGS: Record<string, { value: boolean; description: string }> = {
@@ -147,9 +147,8 @@ function coerce(field: Field, raw: string, type = field.type): unknown {
 function checkEnum(field: Field, value: unknown) {
   if (!field.enum || typeof value !== "string") return;
   if (!field.enum.includes(value)) {
-    throw new CliError(
+    throw specMismatch(
       `${field.flag} must be one of: ${field.enum.join(", ")} (got "${value}")`,
-      EXIT.USAGE,
       `Run \`ludo ... --help\` to see every flag.`
     );
   }
@@ -199,7 +198,7 @@ export function resolveFlags(command: Command, parsed: Parsed, positionals: stri
     }
     if (!field) {
       const known = command.fields.map(f => f.flag).join(", ");
-      throw new CliError(`Unknown flag ${flag} for \`ludo ${command.group} ${command.name}\``, EXIT.USAGE, `Flags: ${known || "(none)"}`);
+      throw specMismatch(`Unknown flag ${flag} for \`ludo ${command.group} ${command.name}\``, `Flags: ${known || "(none)"}`);
     }
 
     let value: unknown;
@@ -252,9 +251,8 @@ export function resolveFlags(command: Command, parsed: Parsed, positionals: stri
     return out.body[f.name] === undefined;
   });
   if (missing.length) {
-    throw new CliError(
+    throw specMismatch(
       `Missing required ${missing.length === 1 ? "flag" : "flags"}: ${missing.map(f => (f.in === "path" ? `<${f.name}>` : f.flag)).join(", ")}`,
-      EXIT.USAGE,
       `Run \`ludo ${command.group} ${command.name} --help\` for details.`
     );
   }

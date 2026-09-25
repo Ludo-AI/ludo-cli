@@ -6,7 +6,7 @@ import { Api, uploadFile } from "./api.js";
 import { Globals, parseArgv, Parsed, resolveFlags } from "./args.js";
 import { buildCommands, Command, findCommand, groupsOf } from "./commands.js";
 import { readConfig, resolveApiKey, resolveApiUrl, VERSION, writeConfig } from "./config.js";
-import { CliError, EXIT } from "./errors.js";
+import { CliError, EXIT, specMismatch } from "./errors.js";
 import { agentHelp, commandHelp, groupHelp, mainHelp } from "./help.js";
 import { collectUrls, downloadAll, extractInlineFiles, waitForJob } from "./jobs.js";
 import { embeddedSpecPath, loadSpec } from "./spec.js";
@@ -188,6 +188,24 @@ async function login(ctx: Ctx, parsed: Parsed, words: string[]): Promise<number>
   return EXIT.OK;
 }
 
+// The spec the current run was built from, for the stale-spec retry below.
+let specInUse: { apiUrl: string; source: string } | undefined;
+
+// A cached spec can be up to an hour behind the API. When a command, flag or
+// value is rejected locally and that spec came from the cache, refetch it and,
+// if the server has a newer one, run the command again against it. These
+// errors are all raised before anything is uploaded or submitted.
+async function run(argv: string[]): Promise<number> {
+  try {
+    return await main(argv);
+  } catch (err) {
+    if (!(err instanceof CliError && err.specMismatch && specInUse?.source === "cache")) throw err;
+    const fresh = await loadSpec(specInUse.apiUrl, { forceRefresh: true });
+    if (fresh.source !== "server") throw err;
+    return main(argv);
+  }
+}
+
 async function main(argv: string[]): Promise<number> {
   const parsed = parseArgv(argv);
   const { globals, words } = parsed;
@@ -219,7 +237,9 @@ async function main(argv: string[]): Promise<number> {
     return EXIT.OK;
   }
 
-  const { spec } = await loadSpec(apiUrl);
+  const loaded = await loadSpec(apiUrl);
+  specInUse = { apiUrl, source: loaded.source };
+  const { spec } = loaded;
   const commands = buildCommands(spec);
 
   if (!first || first === "help") {
@@ -262,9 +282,9 @@ async function main(argv: string[]): Promise<number> {
       return second || globals.help ? EXIT.OK : EXIT.USAGE;
     }
     if (groups.includes(first)) {
-      throw new CliError(`Unknown command: ludo ${first} ${second}`, EXIT.USAGE, `Commands: ${commands.filter(c => c.group === first && !c.hidden).map(c => c.name).join(", ")}`);
+      throw specMismatch(`Unknown command: ludo ${first} ${second}`, `Commands: ${commands.filter(c => c.group === first && !c.hidden).map(c => c.name).join(", ")}`);
     }
-    throw new CliError(`Unknown command: ${first}`, EXIT.USAGE, `Groups: ${groups.join(", ")}. Run \`ludo --help\`.`);
+    throw specMismatch(`Unknown command: ${first}`, `Groups: ${groups.join(", ")}. Run \`ludo --help\`.`);
   }
   if (globals.help) {
     process.stdout.write(commandHelp(command) + "\n");
@@ -273,7 +293,7 @@ async function main(argv: string[]): Promise<number> {
   return runCommand(ctx, command, parsed, words.slice(consumed));
 }
 
-main(process.argv.slice(2)).then(
+run(process.argv.slice(2)).then(
   code => process.exit(code),
   (err: unknown) => {
     const json = process.argv.includes("--json") || !process.stdout.isTTY;
