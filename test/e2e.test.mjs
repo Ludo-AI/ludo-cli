@@ -60,8 +60,7 @@ before(async () => {
         status: "succeeded",
         task_type: "animateSprite",
         credits_charged: 9,
-        // The API hands spritesheet audio back as a URL in audio_b64.
-        result: { spritesheet_url: `${base}/files/sheet.png`, audio_b64: `${base}/files/sfx.mp3`, num_frames: 4, num_cols: 2, num_rows: 2, duration: 0.5 }
+        result: { spritesheet_url: `${base}/files/sheet.png`, audio_url: `${base}/files/sfx.mp3`, num_frames: 4, num_cols: 2, num_rows: 2, duration: 0.5 }
       });
     }
     if (req.method === "GET" && url.pathname === "/files/sfx.mp3") {
@@ -433,7 +432,7 @@ test("a spritesheet is saved with its grid inside, and machine output stays plai
   const sheet = out.files.find(f => f.path.endsWith(".png"));
   assert.deepEqual(readGrid(fs.readFileSync(path.join(cwd, sheet.path))), { cols: 2, rows: 2, frames: 4, fps: 8 });
   const audio = out.files.find(f => f.path.endsWith(".mp3"));
-  assert.ok(audio, "audio given as a URL in audio_b64 is downloaded as a real .mp3");
+  assert.ok(audio, "the sheet's audio_url is downloaded as its .mp3");
   assert.deepEqual(fs.readFileSync(path.join(cwd, audio.path)), MP3);
   assert.ok(!out.files.some(f => f.path.endsWith(".bin")));
   // No escape codes, spinner or preview for a pipe, and no extra account call.
