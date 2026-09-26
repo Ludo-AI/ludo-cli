@@ -103,6 +103,9 @@ before(async () => {
       if (!["ApiKey ludo_minted", "ApiKey test-key"].includes(req.headers.authorization)) return json(res, 403, { message: "Unauthorized" });
       return json(res, 200, ACCOUNT);
     }
+    if (req.method === "POST" && url.pathname === "/api/cli/events") {
+      return json(res, 200, { ok: true });
+    }
     if (req.method === "POST" && url.pathname === "/api/assets/feedback") {
       return json(res, 200, { ok: true, id: "fb-1" });
     }
@@ -560,4 +563,46 @@ test("a WebP spritesheet gets a PNG copy that carries the grid and feeds the God
   const tres = files.find(p => p.endsWith(".tres"));
   assert.ok(tres, "the Godot export was written");
   assert.match(fs.readFileSync(path.join(cwd, tres), "utf8"), new RegExp(`path="${path.basename(png).replace(".", "\\.")}"`));
+});
+
+const telemetryEvents = from => seen.slice(from).filter(s => s.path === "/api/cli/events");
+
+test("each command sends one usage event: facts and flag names, never values", async () => {
+  const from = seen.length;
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-telemetry-"));
+  const first = await run(["image", "create", "--prompt", "secret knight", "--image-type", "sprite", "--json"], { LUDO_TELEMETRY: "1" }, cwd);
+  const [sent] = telemetryEvents(from);
+  assert.ok(sent, first.stderr);
+  const body = JSON.parse(sent.raw);
+  assert.match(body.install_id, /^[A-Za-z0-9_-]{8,64}$/);
+  const [event] = body.events;
+  assert.equal(event.command, "image create");
+  assert.equal(event.props.exit_code, first.code);
+  assert.deepEqual(event.props.flags, ["--prompt", "--image-type", "--json"]);
+  assert.equal(event.props.logged_in, true);
+  assert.equal(sent.headers.authorization, "ApiKey test-key");
+  assert.doesNotMatch(sent.raw.toString(), /secret|knight|sprite/);
+
+  // The install id is kept, so a second command reports the same install.
+  const from2 = seen.length;
+  await run(["account"], { LUDO_TELEMETRY: "1" }, cwd);
+  const again = JSON.parse(telemetryEvents(from2)[0].raw);
+  assert.equal(again.install_id, body.install_id);
+  assert.equal(again.events[0].command, "account show");
+});
+
+test("usage events honour LUDO_TELEMETRY=0 and DO_NOT_TRACK", async () => {
+  const from = seen.length;
+  await run(["account"], { LUDO_TELEMETRY: "0" });
+  await run(["account"], { LUDO_TELEMETRY: "1", DO_NOT_TRACK: "1" });
+  assert.equal(telemetryEvents(from).length, 0);
+});
+
+test("a logged-out command is reported without a key", async () => {
+  const from = seen.length;
+  await run(["version"], { LUDO_TELEMETRY: "1", LUDO_API_KEY: "" });
+  const [sent] = telemetryEvents(from);
+  assert.ok(sent);
+  assert.equal(sent.headers.authorization, undefined);
+  assert.equal(JSON.parse(sent.raw).events[0].props.logged_in, false);
 });

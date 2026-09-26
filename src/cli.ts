@@ -9,6 +9,7 @@ import { parseArgv, Parsed } from "./args.js";
 import { buildCommands, findCommand, groupsOf } from "./commands.js";
 import { readConfig, resolveApiKey, resolveApiUrl, VERSION, writeConfig } from "./config.js";
 import { reportCrash } from "./crash.js";
+import { sendTelemetry } from "./telemetry.js";
 import { CliError, EXIT, specMismatch } from "./errors.js";
 import { makeCtx, printJson, runBatch, runCommand, runJobWait, type Ctx } from "./generate.js";
 import { agentHelp, commandHelp, groupHelp, mainHelp } from "./help.js";
@@ -314,6 +315,7 @@ async function main(argv: string[]): Promise<number> {
   const commands = buildCommands(spec);
 
   if (!first || first === "help") {
+    commandLabel = "help";
     const target = first === "help" ? words.slice(1) : [];
     if (target.length) return main([...target, "--help"]);
     if (!first && ctx.vis.enabled) process.stderr.write(logo(ctx.vis) + "\n\n");
@@ -422,10 +424,13 @@ async function offerBilling() {
 }
 
 const quietRun = process.argv.includes("--quiet");
+const startedAt = Date.now();
+const argvForTelemetry = process.argv.slice(2);
 
 run(process.argv.slice(2)).then(
-  code => {
+  async code => {
     flushNotes(quietRun);
+    await sendTelemetry(commandLabel, code, startedAt, argvForTelemetry);
     process.exit(code);
   },
   async (err: unknown) => {
@@ -435,12 +440,14 @@ run(process.argv.slice(2)).then(
       if (json) printJson({ error: { message: err.message, exit_code: err.exitCode, hint: err.hint, details: err.details } }, false);
       process.stderr.write(`Error: ${err.message}\n${err.hint ? `${err.hint}\n` : ""}`);
       if (err.exitCode === EXIT.CREDITS && !json) await offerBilling();
+      await sendTelemetry(commandLabel, err.exitCode, startedAt, argvForTelemetry);
       process.exit(err.exitCode);
     }
     // Anything else is a bug in the CLI.
     process.stderr.write(`Error: ${(err as Error)?.stack || err}\n`);
     const eventId = await reportCrash(err, commandLabel);
     if (eventId) process.stderr.write(`This looks like a bug in ludo; a crash report was sent (${eventId}). Set LUDO_TELEMETRY=0 to stop sending them.\n`);
+    await sendTelemetry(commandLabel, EXIT.ERROR, startedAt, argvForTelemetry);
     process.exit(EXIT.ERROR);
   }
 );

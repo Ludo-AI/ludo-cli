@@ -18,6 +18,7 @@ import { AUDIO_EXT, copyText, IMAGE_EXT, openFile, playAudio } from "./tty/actio
 import { creditsBar, nextStep, spinner } from "./tty/flair.js";
 import { writeGodotSpriteFrames } from "./tty/godot.js";
 import { convertToPng, loadImage } from "./tty/image.js";
+import { noteJob } from "./telemetry.js";
 import { canShowImages, gridFromResult, previewFile, previewSkipped, stampGrid } from "./tty/preview.js";
 import { visuals, type Visuals } from "./tty/visuals.js";
 
@@ -263,6 +264,7 @@ export async function saveResult(ctx: Ctx, job: any, label: string, naming: Nami
 
 // Records what a finished job spent and the files it saved.
 function bookkeep(ctx: Ctx, job: any, saved: SavedResult, prep?: Prepared, variationSet?: string) {
+  noteJob(job.id, job.credits_charged);
   try {
     recordFinal(ctx.project, job);
   } catch (err) {
@@ -441,7 +443,10 @@ export async function runCommand(ctx: Ctx, command: Command, parsed: Parsed, pos
   if (command.isJob) ctx.log(`Submitting ${prep.label}`);
   const { body: response } = await ctx.api.call(command.method, expandPath(command.path, prep.path), { query: prep.query, body });
   // Counted from submission, so a job left running still counts.
-  if (command.isJob) recordEstimate(ctx.project, response?.id, prep.price.credits);
+  if (command.isJob) {
+    recordEstimate(ctx.project, response?.id, prep.price.credits);
+    noteJob(response?.id);
+  }
 
   if (command.isJob && response && response.id && response.status) {
     if (!globals.wait) {
@@ -521,6 +526,7 @@ async function runUnits(ctx: Ctx, units: Unit[], label: string, limit: number, v
         });
         outcome.job_id = response?.id;
         recordEstimate(ctx.project, response?.id, unit.prep.price.credits);
+        noteJob(response?.id);
         const job = ["succeeded", "failed", "canceled"].includes(response?.status)
           ? response
           : await waitForJob(ctx.api, response.id, { timeoutS: ctx.globals.timeout || DEFAULT_TIMEOUT_S });

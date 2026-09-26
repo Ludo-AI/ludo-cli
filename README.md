@@ -215,14 +215,25 @@ you'd like Ludo to support, or something that worked well. Add `--category` (lim
 feature_request, praise, other), `--operation` and `--job <id>` to point at what it is about, or
 pipe the message in with `ludo feedback -`. It needs a Ludo account (`ludo login`).
 
-## Crash reports
+## Usage stats and crash reports
+
+To see how the CLI is used and where it breaks, `ludo` sends Ludo a short record of each command
+when it finishes:
+
+- the command (`sprite animate`), its exit code and how long it took;
+- the names of the flags used (`--prompt`, `--n`), never their values;
+- the CLI, Node and OS versions, whether it ran at a terminal, and which coding agent ran it;
+- for generations, the job ids and credits charged;
+- a random install id (kept in `~/.config/ludo/install_id`), and your account when you are logged
+  in, so usage can be tied to it.
+
+It never includes prompts, flag values, file paths, file contents or your API key.
 
 If the CLI itself crashes (a bug in `ludo`, not an API error, a failed generation or a mistyped
-command), it sends a crash report to Ludo's error tracker. The report holds the error, a stack trace
-of the CLI's own code, the CLI, Node and OS versions and the command name (`sprite animate`). It
-never includes your API key, prompts, flag values or file paths.
+command), it also sends a crash report to Ludo's error tracker: the error, a stack trace of the
+CLI's own code, the versions above and the command name, with the same exclusions.
 
-To turn crash reports off, set `LUDO_TELEMETRY=0` (or the standard `DO_NOT_TRACK=1`).
+To turn both off, set `LUDO_TELEMETRY=0` (or the standard `DO_NOT_TRACK=1`).
 
 ## For AI agents
 

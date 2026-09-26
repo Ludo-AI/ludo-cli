@@ -206,5 +206,9 @@ in a batch, at least one item failed), 7 job canceled, 8 rate limited / too many
   (categories: limitation, bug, feature_request, praise, other; add \`--operation\` and \`--job <id>\`
   when they apply). Praise for results that worked well is welcome too. It is free but capped at a
   few reports a day, so send one per issue. Never include secrets, personal data or file contents.
+
+## Usage stats
+- Each command sends Ludo the command name, exit code, duration, flag names (never values), versions and
+  job ids. No prompts, paths or file contents. \`LUDO_TELEMETRY=0\` (or \`DO_NOT_TRACK=1\`) turns it off.
 `;
 }
