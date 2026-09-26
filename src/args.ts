@@ -240,11 +240,30 @@ function applyDefaults(command: Command, out: Resolved, defaults: Record<string,
         `Fields: ${command.fields.filter(f => f.in !== "path").map(f => f.name).join(", ")}`
       );
     }
-    if (Array.isArray(value)) value.forEach(v => checkEnum(field, v));
-    else checkEnum(field, value);
-    if (field.in === "query") out.query[name] = value;
-    else out.body[name] = value;
+    let typed: unknown;
+    try {
+      typed = coerceValue(field, value);
+    } catch (err) {
+      throw new CliError(`${source}: ${(err as Error).message}`, EXIT.USAGE);
+    }
+    if (Array.isArray(typed)) typed.forEach(v => checkEnum(field, v));
+    else checkEnum(field, typed);
+    if (field.in === "query") out.query[name] = typed;
+    else out.body[name] = typed;
   }
+}
+
+// A value from JSON to the field's type, the way a flag's text would be:
+// "4" for a number field is 4, "true" for a switch is true.
+function coerceValue(field: Field, value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  if (field.type === "array") {
+    const items = Array.isArray(value) ? value : typeof value === "string" && value.trim().startsWith("[") ? (coerce(field, value) as unknown[]) : [value];
+    return items.map(v => (v !== null && typeof v === "object" ? v : coerce(field, String(v), field.itemType || "string")));
+  }
+  if (field.type === "object") return typeof value === "string" ? coerce(field, value) : value;
+  if (typeof value === "object") throw new CliError(`${field.flag} expects ${field.type === "string" ? "text" : `a ${field.type}`}, got JSON`, EXIT.USAGE);
+  return coerce(field, String(value));
 }
 
 // Second pass: map raw flags onto the command's fields. Path parameters may

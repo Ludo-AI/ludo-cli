@@ -3,8 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { Api, uploadFile } from "./api.js";
-import { appendAssets, logFile, readAssets, relativizeBody, writeAssets, type AssetEntry } from "./assets.js";
-import { checkBudget, recordSpend, totalOf } from "./budget.js";
+import { appendAssets, logFile, relativizeBody, updateAssets, type AssetEntry } from "./assets.js";
+import { checkBudget, recordEstimate, recordFinal, totalOf } from "./budget.js";
 import type { Globals, Parsed } from "./args.js";
 import { resolveFlags } from "./args.js";
 import type { Command } from "./commands.js";
@@ -50,7 +50,7 @@ export function makeCtx(globals: Globals, project?: Project): Ctx {
   };
   const vis = visuals({ json: jsonOut, quiet: globals.quiet, plain: globals.plain });
   if (project?.config.engine && !globals.engine) globals.engine = project.config.engine;
-  const outDir = path.resolve(globals.out || (project?.config.out ? projectPath(project, project.config.out) : DEFAULT_OUT));
+  const outDir = path.resolve(globals.out || (project?.config.out ? projectPath(project, project.config.out, "out") : DEFAULT_OUT));
   return { globals, api: new Api(resolveApiUrl(globals.apiUrl), resolveApiKey(globals.apiKey)), jsonOut, vis, log, project, outDir };
 }
 
@@ -131,14 +131,30 @@ export function prepare(ctx: Ctx, command: Command, parsed: Parsed, positionals:
   const layers: DefaultsLayer[] = [];
   const p = ctx.project;
   if (p?.config.style_image && command.fields.some(f => f.name === "style_image" && f.in === "body")) {
-    layers.push({ values: { style_image: projectPath(p, p.config.style_image) }, source: `style_image in ${p.file}` });
+    layers.push({ values: { style_image: projectPath(p, p.config.style_image, "style_image") }, source: `style_image in ${p.file}` });
   }
   const fromConfig = defaultsFor(p, command.group, command.name, command.operationId);
-  if (p && Object.keys(fromConfig).length) layers.push({ values: fromConfig, source: `defaults in ${p.file}` });
+  if (p && Object.keys(fromConfig).length) {
+    // File fields in defaults are relative to .ludo.json and stay inside the project.
+    for (const [key, value] of Object.entries(fromConfig)) {
+      const field = command.fields.find(f => f.name === key.replace(/^--/, "").replace(/-/g, "_"));
+      if (!field?.isFile) continue;
+      const fix = (v: unknown) => (typeof v === "string" ? projectPath(p, v, `defaults.${key}`) : v);
+      fromConfig[key] = Array.isArray(value) ? value.map(fix) : fix(value);
+    }
+    layers.push({ values: fromConfig, source: `defaults in ${p.file}` });
+  }
   layers.push(...extra);
   const resolved = resolveFlags(command, parsed, positionals, layers);
   if (resolved.extraWords.length) {
     throw new CliError(`Unexpected argument: ${resolved.extraWords[0]}`, EXIT.USAGE, `Run \`ludo ${command.group} ${command.name} --help\`.`);
+  }
+  // --n is the variations flag for generations. An operation with its own n
+  // (docs search's result count, an image job's n) gets the value directly.
+  const nField = command.fields.find(f => f.name === "n" && f.in !== "path");
+  if (ctx.globals.n !== undefined) {
+    if (!command.isJob && !nField) throw new CliError("--n applies to generations only", EXIT.USAGE);
+    if (nField) (nField.in === "query" ? resolved.query : resolved.body).n = ctx.globals.n;
   }
   return {
     command,
@@ -247,7 +263,11 @@ export async function saveResult(ctx: Ctx, job: any, label: string, naming: Nami
 
 // Records what a finished job spent and the files it saved.
 function bookkeep(ctx: Ctx, job: any, saved: SavedResult, prep?: Prepared, variationSet?: string) {
-  if (job.status === "succeeded") recordSpend(ctx.project, job.credits_charged);
+  try {
+    recordFinal(ctx.project, job);
+  } catch (err) {
+    ctx.log(`Could not update the spend ledger: ${(err as Error).message}`);
+  }
   if (!saved.files.length) return;
   try {
     const log = logFile(ctx.project, ctx.outDir);
@@ -259,6 +279,8 @@ function bookkeep(ctx: Ctx, job: any, saved: SavedResult, prep?: Prepared, varia
       command: prep?.label || job.task_type || "job",
       operation_id: prep?.command.operationId || job.task_type || "",
       body: prep ? relativizeBody(prep.body, fileFields, logDir) : {},
+      // `ludo jobs wait` knows the job but not the request that made it.
+      ...(prep ? {} : { redo: false }),
       job_id: job.id,
       credits: typeof job.credits_charged === "number" ? job.credits_charged : undefined,
       created_at: created,
@@ -401,11 +423,13 @@ export async function runJobWait(ctx: Ctx, id: string, label: string, prep?: Pre
 
 export async function runCommand(ctx: Ctx, command: Command, parsed: Parsed, positionals: string[], extra: DefaultsLayer[] = []): Promise<number> {
   const { globals } = ctx;
-  if (globals.n !== undefined && !command.isJob) throw new CliError("--n applies to generations only", EXIT.USAGE);
   const prep = prepare(ctx, command, parsed, positionals, extra);
   if (command.isJob && globals.n !== undefined && globals.n > 1) {
-    if (!globals.wait) throw new CliError("--n waits for its jobs to pick between them; drop --no-wait", EXIT.USAGE);
-    return runVariations(ctx, prep, globals.n);
+    // Variations, unless --no-wait asks for the one job the API's own n makes.
+    const native = command.fields.find(f => f.name === "n" && f.in === "body");
+    const oneJob = !!native && globals.n <= (native.maximum || 1);
+    if (globals.wait) return runVariations(ctx, prep, globals.n);
+    if (!oneJob) throw new CliError("--n with more jobs than one waits for them to pick between them; drop --no-wait", EXIT.USAGE);
   }
   if (globals.dryRun) return dryRun(ctx, prep.label, prep.price, [{ label: prep.label, count: 1, price: prep.price }]);
   if (command.isJob) await guard(ctx, prep.price, false);
@@ -416,6 +440,8 @@ export async function runCommand(ctx: Ctx, command: Command, parsed: Parsed, pos
   const body = hasBody ? { ...uploaded, ...(command.isJob ? { async: true } : {}) } : undefined;
   if (command.isJob) ctx.log(`Submitting ${prep.label}`);
   const { body: response } = await ctx.api.call(command.method, expandPath(command.path, prep.path), { query: prep.query, body });
+  // Counted from submission, so a job left running still counts.
+  if (command.isJob) recordEstimate(ctx.project, response?.id, prep.price.credits);
 
   if (command.isJob && response && response.id && response.status) {
     if (!globals.wait) {
@@ -455,11 +481,11 @@ export interface UnitOutcome {
   error?: { message: string; exit_code: number };
 }
 
-async function pool<T, R>(items: T[], limit: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
+async function pool<T, R>(items: T[], limit: number, fn: (item: T, i: number) => Promise<R>, stopped = () => false): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;
   const worker = async () => {
-    while (next < items.length) {
+    while (next < items.length && !stopped()) {
       const i = next++;
       results[i] = await fn(items[i], i);
     }
@@ -481,8 +507,11 @@ async function runUnits(ctx: Ctx, units: Unit[], label: string, limit: number, v
   s?.update(status(), 0);
   const ticker = s ? setInterval(() => s.update(status(), (Date.now() - started) / 1000), 1000) : undefined;
   ticker?.unref();
+  // An error every other unit would hit too (bad key, no credits, an outdated
+  // CLI, rate limits) stops the pool and is raised as itself.
+  let fatal: CliError | undefined;
   try {
-    return await pool(units, limit, async (unit, index) => {
+    const outcomes = await pool(units, limit, async (unit, index) => {
       const outcome: UnitOutcome = { index, label: unit.prep.label, status: "error", files: [] };
       try {
         const { command } = unit.prep;
@@ -490,6 +519,8 @@ async function runUnits(ctx: Ctx, units: Unit[], label: string, limit: number, v
           query: unit.prep.query,
           body: { ...unit.body, async: true }
         });
+        outcome.job_id = response?.id;
+        recordEstimate(ctx.project, response?.id, unit.prep.price.credits);
         const job = ["succeeded", "failed", "canceled"].includes(response?.status)
           ? response
           : await waitForJob(ctx.api, response.id, { timeoutS: ctx.globals.timeout || DEFAULT_TIMEOUT_S });
@@ -506,6 +537,7 @@ async function runUnits(ctx: Ctx, units: Unit[], label: string, limit: number, v
       } catch (err) {
         const e = err instanceof CliError ? err : new CliError(String((err as Error)?.message || err));
         outcome.error = { message: e.message, exit_code: e.exitCode };
+        if (FATAL.includes(e.exitCode)) fatal = fatal || e;
       }
       done++;
       if (outcome.status !== "succeeded") failed++;
@@ -514,11 +546,24 @@ async function runUnits(ctx: Ctx, units: Unit[], label: string, limit: number, v
         process.stderr.write(`[${done}/${units.length}] ${mark} ${outcome.label}${outcome.job_id ? ` (${outcome.job_id})` : ""}${outcome.error ? `: ${outcome.error.message}` : ""}\n`);
       }
       return outcome;
-    });
+    }, () => !!fatal);
+    if (fatal) throw fatal;
+    return outcomes;
   } finally {
     if (ticker) clearInterval(ticker);
     s?.stop();
   }
+}
+
+const FATAL: number[] = [EXIT.AUTH, EXIT.CREDITS, EXIT.UPGRADE_REQUIRED, EXIT.RATE_LIMITED];
+
+// The exit code for a multi-job run where some failed: a job failure when any
+// job ran, otherwise the commonest reason nothing ran.
+function failureCode(outcomes: UnitOutcome[]): number {
+  if (outcomes.some(o => o.job_id)) return EXIT.JOB_FAILED;
+  const counts = new Map<number, number>();
+  for (const o of outcomes) if (o.error) counts.set(o.error.exit_code, (counts.get(o.error.exit_code) || 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? EXIT.ERROR;
 }
 
 const sumCharged = (outcomes: UnitOutcome[]) =>
@@ -599,7 +644,7 @@ export async function runVariations(ctx: Ctx, prep: Prepared, n: number): Promis
     printJson({ variation_set: set, n, credits_charged: sumCharged(outcomes), variations, files: files.map(f => ({ path: f.path, variation: f.variation })) }, prettyJson(ctx));
   }
   if (kept) ctx.log(`Kept ${kept.map(v => `v${v}`).join(", ")}.`);
-  return ok.length ? EXIT.OK : outcomes[0]?.error?.exit_code || EXIT.JOB_FAILED;
+  return ok.length ? EXIT.OK : failureCode(outcomes);
 }
 
 export function parsePick(answer: string, available: number[]): number[] | undefined {
@@ -630,17 +675,18 @@ export function discardVariations(ctx: Ctx, set: string, variations: number[]) {
   const logDir = path.dirname(log);
   const bin = path.join(ctx.outDir, ".discarded");
   fs.mkdirSync(bin, { recursive: true });
-  const entries = readAssets(log);
-  for (const e of entries) {
-    if (e.variation_set !== set || e.variation === undefined || !variations.includes(e.variation)) continue;
-    const from = path.resolve(logDir, e.file);
-    if (!fs.existsSync(from)) continue;
-    const to = path.join(bin, path.basename(from));
-    fs.renameSync(from, to);
-    e.file = path.relative(logDir, to);
-    (e as any).discarded = true;
-  }
-  writeAssets(log, entries);
+  updateAssets(log, entries => {
+    for (const e of entries) {
+      if (e.variation_set !== set || e.variation === undefined || !variations.includes(e.variation)) continue;
+      const from = path.resolve(logDir, e.file);
+      if (!fs.existsSync(from)) continue;
+      const to = path.join(bin, path.basename(from));
+      fs.renameSync(from, to);
+      e.file = path.relative(logDir, to);
+      e.discarded = true;
+    }
+    return entries;
+  });
   ctx.log(`Moved ${variations.map(v => `v${v}`).join(", ")} to ${path.relative(process.cwd(), bin) || bin}`);
 }
 
@@ -675,5 +721,5 @@ export async function runBatch(ctx: Ctx, preps: Prepared[], limit: number): Prom
     }
     process.stdout.write(`${summary.succeeded} of ${summary.total} succeeded (${formatCredits(summary.credits_charged)})\n`);
   }
-  return summary.failed ? EXIT.JOB_FAILED : EXIT.OK;
+  return summary.failed ? failureCode(outcomes) : EXIT.OK;
 }

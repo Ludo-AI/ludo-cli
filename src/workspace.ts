@@ -152,10 +152,14 @@ export async function assets(ctx: Ctx, parsed: Parsed, words: string[], commands
     if (!file) throw new CliError("Usage: ludo assets redo <file> [flags]", EXIT.USAGE);
     const entry = findAsset(entries, file, logDir);
     if (!entry) throw new CliError(`${file} is not in the asset log (${log})`, EXIT.USAGE, "`ludo assets` lists what it knows.");
+    if (entry.redo === false) {
+      throw new CliError(`${file} can't be replayed: it was saved by \`ludo jobs wait\`, which does not know the request that made it`, EXIT.USAGE);
+    }
     const { command } = findCommand(commands, [entry.operation_id]);
     if (!command) throw specMismatch(`The API no longer has ${entry.operation_id}, which made ${file}`);
     const fileFields = command.fields.filter(f => f.isFile && f.in === "body").map(f => f.name);
-    const recorded = absolutizeBody(entry.body || {}, fileFields, logDir);
+    // The log may come from a cloned repository: its paths stay inside the project.
+    const recorded = absolutizeBody(entry.body || {}, fileFields, logDir, ctx.project?.root || logDir);
     return runCommand(ctx, command, parsed, words.slice(2), [{ values: recorded, source: `the asset log entry for ${file}` }]);
   }
   const list = entries.map(e => ({ ...e, exists: fs.existsSync(path.resolve(logDir, e.file)) }));
@@ -165,7 +169,7 @@ export async function assets(ctx: Ctx, parsed: Parsed, words: string[], commands
     for (const e of list) {
       const credits = typeof e.credits === "number" ? formatCredits(e.credits) : "";
       const v = e.variation !== undefined ? ` v${e.variation}` : "";
-      process.stdout.write(`${e.created_at.slice(0, 10)}  ${(e.command + v).padEnd(26)} ${credits.padEnd(12)} ${e.file}${e.exists ? "" : "  (missing)"}${(e as any).discarded ? "  (discarded)" : ""}\n`);
+      process.stdout.write(`${e.created_at.slice(0, 10)}  ${(e.command + v).padEnd(26)} ${credits.padEnd(12)} ${e.file}${e.exists ? "" : "  (missing)"}${e.discarded ? "  (discarded)" : ""}\n`);
     }
   }
   return EXIT.OK;

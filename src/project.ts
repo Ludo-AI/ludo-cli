@@ -83,9 +83,43 @@ export function loadProject(start?: string): Project | undefined {
   return { root: path.dirname(file), file, config: validateConfig(raw, file) };
 }
 
-// A path in the config, made absolute. URLs pass through.
-export function projectPath(project: Project, value: string): string {
-  return /^(https?:|data:)/i.test(value) ? value : path.resolve(project.root, value);
+// The real location of a path, following symlinks as far as it exists (a
+// folder about to be created has none yet).
+function realish(p: string): string {
+  let dir = p;
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync(dir), ...rest.reverse());
+    } catch {
+      const parent = path.dirname(dir);
+      if (parent === dir) return p;
+      rest.push(path.basename(dir));
+      dir = parent;
+    }
+  }
+}
+
+export const isUrl = (value: string) => /^(https?:|data:)/i.test(value);
+
+// A path that came from a file in the repository (.ludo.json, the asset log),
+// made absolute against `base` and required to stay inside `root`: a cloned
+// repo must not be able to make ludo upload ~/.ssh/id_rsa or write files
+// elsewhere, through ../ or a symlink. Paths people type as flags are theirs
+// and are not checked. URLs pass through.
+export function containedPath(root: string, base: string, value: string, label: string): string {
+  if (isUrl(value)) return value;
+  const abs = path.resolve(base, value.startsWith("@") ? value.slice(1) : value);
+  const rel = path.relative(realish(root), realish(abs));
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new CliError(`${label}: ${value} is outside the project (${root})`, EXIT.USAGE, "Paths from project files must stay inside the project; pass the file as a flag instead.");
+  }
+  return value.startsWith("@") ? `@${abs}` : abs;
+}
+
+// A path in the config, made absolute and kept inside the project.
+export function projectPath(project: Project, value: string, label: string): string {
+  return containedPath(project.root, project.root, value, `${label} in ${project.file}`);
 }
 
 // Defaults for a command, by "group command" and by API id (the id wins).

@@ -149,7 +149,9 @@ project uses Claude Code). Every command run anywhere below that folder uses it:
 - `style_image`: used by operations that take a `style_image` (`image generate-with-style`).
 - `defaults`: API fields per command, by `"group command"` or API id.
 
-Paths are relative to `.ludo.json`, and flags always win.
+Paths are relative to `.ludo.json` and must stay inside the project (so a cloned repository
+cannot point ludo at files elsewhere on your machine); paths you pass as flags are not limited.
+Flags always win.
 
 ### Cost control
 
@@ -167,7 +169,8 @@ while a limit is set, unless you pass `--force`.
 
 Every file a generation saves is recorded in `ludo-assets.json` (next to `.ludo.json`, or in the
 output folder): the command, its flags, the job and what it cost. `ludo assets` lists them;
-`ludo assets redo <file> --prompt "…in blue"` makes one again with changes.
+`ludo assets redo <file> --prompt "…in blue"` makes one again with changes. Files saved by
+`ludo jobs wait` are listed but can't be replayed, since the request that made them is unknown.
 
 ### Variations and batches
 

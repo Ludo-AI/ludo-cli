@@ -3,7 +3,7 @@ import path from "node:path";
 import { cacheDir } from "./config.js";
 import { CliError, EXIT } from "./errors.js";
 import { formatCredits, type Price } from "./pricing.js";
-import { stateDir, writeJsonFile, type Project } from "./project.js";
+import { stateDir, type Project } from "./project.js";
 
 // The spending guard. Two limits, checked before anything is submitted:
 //
@@ -25,30 +25,84 @@ export interface Spend {
   since: string;
 }
 
+// The tally is an append-only ledger, spend.jsonl: one line per event, so
+// parallel ludo processes never lose each other's writes.
+//
+//   {"job_id":"…","credits":9,"kind":"estimate","at":"…"}   when submitted
+//   {"job_id":"…","credits":6.5,"kind":"final","at":"…"}    when it finished
+//   {"kind":"reset","at":"…"}                                 `ludo spend reset`
+//
+// A job counts once: its last final value, or its estimate until one arrives.
+// So a job left running (--no-wait, a timeout, Ctrl-C) still counts, and
+// waiting on it again (`ludo jobs wait`) replaces rather than adds.
+
+interface LedgerLine {
+  job_id?: string;
+  credits?: number;
+  kind: "estimate" | "final" | "reset";
+  at: string;
+}
+
 export function spendFile(project: Project | undefined): string {
-  return path.join(stateDir(project, cacheDir()), "spend.json");
+  return path.join(stateDir(project, cacheDir()), "spend.jsonl");
+}
+
+function append(project: Project | undefined, line: LedgerLine) {
+  fs.appendFileSync(spendFile(project), JSON.stringify(line) + "\n");
+}
+
+export function recordEstimate(project: Project | undefined, jobId: unknown, credits: number | undefined) {
+  if (typeof jobId !== "string" || credits === undefined) return;
+  append(project, { job_id: jobId, credits, kind: "estimate", at: new Date().toISOString() });
+}
+
+// What a finished job cost: its charge, or nothing when it failed or was
+// canceled (refunded). A success without a charge keeps its estimate.
+export function recordFinal(project: Project | undefined, job: any) {
+  if (!job || typeof job.id !== "string") return;
+  const charged = typeof job.credits_charged === "number" ? job.credits_charged : job.status === "succeeded" ? undefined : 0;
+  if (charged === undefined) return;
+  append(project, { job_id: job.id, credits: charged, kind: "final", at: new Date().toISOString() });
 }
 
 export function readSpend(project: Project | undefined): Spend {
+  let text = "";
   try {
-    const s = JSON.parse(fs.readFileSync(spendFile(project), "utf8"));
-    if (typeof s.spent === "number") return { spent: s.spent, jobs: s.jobs || 0, since: s.since || new Date().toISOString() };
+    text = fs.readFileSync(spendFile(project), "utf8");
   } catch {
-    // No tally yet.
+    // No ledger yet.
   }
-  return { spent: 0, jobs: 0, since: new Date().toISOString() };
-}
-
-export function recordSpend(project: Project | undefined, credits: unknown) {
-  if (typeof credits !== "number" || !(credits > 0)) return;
-  const s = readSpend(project);
-  writeJsonFile(spendFile(project), { ...s, spent: Math.round((s.spent + credits) * 100) / 100, jobs: s.jobs + 1 });
+  const perJob = new Map<string, { estimate?: number; final?: number }>();
+  let since: string | undefined;
+  for (const raw of text.split("\n")) {
+    if (!raw.trim()) continue;
+    let line: LedgerLine;
+    try {
+      line = JSON.parse(raw);
+    } catch {
+      continue; // a torn line from a crash
+    }
+    if (line.kind === "reset") {
+      perJob.clear();
+      since = line.at;
+      continue;
+    }
+    if (!line.job_id || typeof line.credits !== "number") continue;
+    since = since || line.at;
+    const j = perJob.get(line.job_id) || {};
+    if (line.kind === "final") j.final = line.credits;
+    else if (j.estimate === undefined) j.estimate = line.credits;
+    perJob.set(line.job_id, j);
+  }
+  let spent = 0;
+  for (const j of perJob.values()) spent += j.final ?? j.estimate ?? 0;
+  return { spent: Math.round(spent * 100) / 100, jobs: perJob.size, since: since || new Date().toISOString() };
 }
 
 export function resetSpend(project: Project | undefined): Spend {
-  const s = { spent: 0, jobs: 0, since: new Date().toISOString() };
-  writeJsonFile(spendFile(project), s);
-  return s;
+  const at = new Date().toISOString();
+  fs.writeFileSync(spendFile(project), JSON.stringify({ kind: "reset", at }) + "\n");
+  return { spent: 0, jobs: 0, since: at };
 }
 
 export function budgetLimit(project: Project | undefined): { limit?: number; source?: string } {
