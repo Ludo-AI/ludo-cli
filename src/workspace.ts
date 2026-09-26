@@ -7,7 +7,7 @@ import { findCommand, type Command } from "./commands.js";
 import { CliError, EXIT, specMismatch } from "./errors.js";
 import { prepare, printJson, runCommand, type Ctx, type Prepared } from "./generate.js";
 import { formatCredits } from "./pricing.js";
-import { CONFIG_NAME, STATE_DIR } from "./project.js";
+import { CONFIG_NAME, containedPath, STATE_DIR } from "./project.js";
 import { installSkill } from "./skill.js";
 
 // The project-level commands: `ludo init`, `ludo assets`, `ludo spend`, and
@@ -236,6 +236,7 @@ export function loadBatch(ctx: Ctx, parsed: Parsed, file: string, commands: Comm
   for (const name of parsed.flags.keys()) if (name !== "--concurrency") throw new CliError(`Unknown flag ${name} for \`ludo batch\``, EXIT.USAGE, BATCH_HELP);
 
   const baseDir = path.dirname(path.resolve(file));
+  const root = ctx.project?.root || baseDir;
   const empty: Parsed = { globals: { ...parsed.globals, input: undefined }, words: [], flags: new Map() };
   const preps = items.map((item: any, i: number) => {
     const where = `${file} item ${i + 1}`;
@@ -245,11 +246,13 @@ export function loadBatch(ctx: Ctx, parsed: Parsed, file: string, commands: Comm
     if (!command) throw specMismatch(`${where}: unknown command "${name}"`);
     if (!command.isJob) throw new CliError(`${where}: \`${name}\` is not a generation`, EXIT.USAGE);
     const fileFields = command.fields.filter(f => f.isFile && f.in === "body").map(f => f.name.replace(/_/g, "-"));
-    // File paths are relative to the jobs file.
+    // File paths are relative to the jobs file, and (since a jobs file can
+    // come with a cloned repository) must stay inside the project, or the
+    // jobs file's folder outside one. Checked before anything is uploaded.
     for (const key of Object.keys(fields)) {
       const snake = key.replace(/-/g, "_");
       if (!fileFields.includes(snake.replace(/_/g, "-"))) continue;
-      const fix = (v: unknown) => (typeof v === "string" && !/^(https?:|data:|@)/i.test(v) && !path.isAbsolute(v) ? path.resolve(baseDir, v) : v);
+      const fix = (v: unknown) => (typeof v === "string" ? containedPath(root, baseDir, v, `${where}, field ${snake}`) : v);
       fields[key] = Array.isArray(fields[key]) ? fields[key].map(fix) : fix(fields[key]);
     }
     return prepare(ctx, command, empty, [], [{ values: fields, source: where }]);

@@ -507,3 +507,34 @@ test("jobs wait logs its files as not replayable, and assets redo says so", asyn
   assert.equal(code, 2);
   assert.match(stderr, /can't be replayed: it was saved by `ludo jobs wait`/);
 });
+
+test("file paths in a batch jobs file must stay inside the project, checked before anything runs", async () => {
+  const outside = tmp("ludo-outside-");
+  fs.writeFileSync(path.join(outside, "secret.png"), PNG);
+  const write = (dir, jobs) => fs.writeFileSync(path.join(dir, "jobs.json"), JSON.stringify(jobs));
+  const ok = { command: "audio sound-effect", description: "boom" };
+
+  // A project: paths may leave the jobs file's folder but not the project.
+  const project = tmp();
+  fs.writeFileSync(path.join(project, ".ludo.json"), "{}");
+  fs.mkdirSync(path.join(project, "batches"));
+  fs.writeFileSync(path.join(project, "style.png"), PNG);
+  fs.symlinkSync(path.join(outside, "secret.png"), path.join(project, "batches", "link.png"));
+  const from = seen.length;
+  write(path.join(project, "batches"), [ok, { command: "image generate-with-style", prompt: "k", style_image: "link.png" }]);
+  let r = await run(["batch", "batches/jobs.json"], { cwd: project });
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /jobs\.json item 2, field style_image: link\.png is outside the project/);
+  assert.equal(seen.slice(from).filter(s => s.method === "POST").length, 0);
+
+  write(path.join(project, "batches"), [{ command: "image generate-with-style", prompt: "k", "style-image": "../style.png" }]);
+  r = await run(["batch", "batches/jobs.json", "--dry-run"], { cwd: project });
+  assert.equal(r.code, 0, r.stderr);
+
+  // No project: the jobs file's own folder is the limit.
+  const loose = tmp();
+  write(loose, [{ command: "image generate-with-style", prompt: "k", style_image: path.join(outside, "secret.png") }]);
+  r = await run(["batch", "jobs.json"], { cwd: loose });
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /item 1, field style_image: .*secret\.png is outside the project/);
+});
