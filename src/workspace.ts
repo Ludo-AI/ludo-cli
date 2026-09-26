@@ -84,7 +84,7 @@ export async function init(ctx: Ctx, parsed: Parsed): Promise<number> {
   if (fs.existsSync(configPath) && !ctx.globals.force) {
     note(configPath, "kept (pass --force to overwrite)");
   } else {
-    const config: Record<string, unknown> = { out: "assets/ludo", max_credits: 100, defaults: {} };
+    const config: Record<string, unknown> = { out: "assets/ludo", defaults: {} };
     // A Godot project gets SpriteFrames next to every spritesheet.
     if (fs.existsSync(path.join(root, "project.godot"))) config.engine = "godot";
     note(configPath, writeIfChanged(configPath, JSON.stringify(config, null, 2) + "\n"));

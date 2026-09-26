@@ -145,7 +145,7 @@ project uses Claude Code). Every command run anywhere below that folder uses it:
 
 - `out`: where generated files are saved (instead of `./ludo-output`).
 - `engine`: as `--engine` on every command.
-- `max_credits`: the spending budget (below).
+- `max_credits`: an optional spending budget (below). Not set by `ludo init`: without it there is no limit.
 - `style_image`: used by operations that take a `style_image` (`image generate-with-style`).
 - `defaults`: API fields per command, by `"group command"` or API id.
 
