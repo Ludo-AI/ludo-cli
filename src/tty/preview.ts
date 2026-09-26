@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import { readText, withText, type Image } from "./png.js";
 import { loadImage } from "./image.js";
-import { renderLines, type Rect } from "./halfblock.js";
 import { armRestore, sleep, type Visuals } from "./visuals.js";
-import { cellSize, crop, detectProtocol, imageSequence } from "./graphics.js";
+import { cellSize, crop, detectProtocol, imageSequence, type Rect } from "./graphics.js";
 
 // Still previews and spritesheet playback on stderr. Everything here returns
 // quietly on any problem: a preview is a bonus, never a failure.
@@ -60,32 +59,19 @@ export function parseGrid(spec: string): { cols: number; rows: number } | undefi
   return m ? { cols: Number(m[1]), rows: Number(m[2]) } : undefined;
 }
 
-function sizeFor(v: Visuals) {
-  return { maxCols: Math.min(48, v.columns - 4), maxRows: 20, truecolor: v.truecolor };
+// Real images only (Kitty's protocol or iTerm2's). A terminal without either
+// gets a one-line note saying how to see the result instead.
+export function canShowImages(): boolean {
+  return !!detectProtocol();
 }
 
-// Half blocks flatter pixel art and turn painted art into mush, so they are
-// only used for small or low-colour images.
-export function isPixelArt(img: Image, r: Rect): boolean {
-  if (Math.max(r.w, r.h) <= 128) return true;
-  const colors = new Set<number>();
-  const step = Math.max(1, Math.floor((r.w * r.h) / 20000));
-  for (let i = 0; i < r.w * r.h; i += step) {
-    const x = r.x + (i % r.w);
-    const y = r.y + Math.floor(i / r.w);
-    const o = (y * img.width + x) * 4;
-    if (img.rgba[o + 3] < 128) continue;
-    colors.add((img.rgba[o] << 16) | (img.rgba[o + 1] << 8) | img.rgba[o + 2]);
-    if (colors.size > 64) return false;
-  }
-  return true;
-}
-
-type Mode = "image" | "blocks" | "none";
-
-function modeFor(img: Image, r: Rect, forceBlocks: boolean): Mode {
-  if (detectProtocol()) return "image";
-  return forceBlocks || isPixelArt(img, r) ? "blocks" : "none";
+// What to tell a person whose terminal cannot show the preview, and how to
+// get one.
+export function previewSkipped(): string {
+  const inTmux = !!process.env.TMUX || /^screen/.test(process.env.TERM || "");
+  return inTmux
+    ? "Preview skipped: tmux does not pass images through. Run outside tmux, or add --open to view it."
+    : "Preview skipped: this terminal can't show images. Previews work in iTerm2, Kitty, Ghostty and WezTerm; or add --open to view it.";
 }
 
 // Frames drawn in a reserved block of rows: save the spot, draw, restore.
@@ -102,22 +88,13 @@ function imageFrame(img: Image, r: Rect, v: Visuals, id?: number): { seq: string
   return { seq: imageSequence(detectProtocol()!, frame, cols, rows, id), rows };
 }
 
-function drawBlocks(img: Image, r: Rect, v: Visuals): string[] {
-  return renderLines(img, r, sizeFor(v)).map(l => "  " + l + "\x1b[K");
-}
-
-export function drawStill(img: Image, v: Visuals, region?: Rect, forceBlocks = false): boolean {
+export function drawStill(img: Image, v: Visuals, region?: Rect): boolean {
+  if (!canShowImages()) return false;
   const r = region || { x: 0, y: 0, w: img.width, h: img.height };
-  const mode = modeFor(img, r, forceBlocks);
-  if (mode === "none") return false;
-  if (mode === "image") {
-    const { seq, rows } = imageFrame(img, r, v);
-    reserve(rows);
-    process.stderr.write(`\x1b[2C${seq}`);
-    release(rows);
-    return true;
-  }
-  process.stderr.write(drawBlocks(img, r, v).join("\n") + "\n");
+  const { seq, rows } = imageFrame(img, r, v);
+  reserve(rows);
+  process.stderr.write(`\x1b[2C${seq}`);
+  release(rows);
   return true;
 }
 
@@ -131,11 +108,10 @@ function frameRect(img: Image, grid: Grid, i: number): Rect | undefined {
 // Plays the sheet a few times in place, then leaves the last frame on screen.
 // Never reads stdin; Ctrl-C stops it and the exit hook restores the cursor.
 // Returns "none" when this terminal has no good way to show it.
-export async function playSheet(img: Image, grid: Grid, v: Visuals, forceBlocks = false, loops = 3): Promise<"played" | "none" | "invalid"> {
+export async function playSheet(img: Image, grid: Grid, v: Visuals, loops = 3): Promise<"played" | "none" | "invalid"> {
   const first = frameRect(img, grid, 0);
   if (!first || grid.frames > grid.cols * grid.rows) return "invalid";
-  const mode = modeFor(img, first, forceBlocks);
-  if (mode === "none") return "none";
+  if (!canShowImages()) return "none";
   armRestore();
   const frameMs = Math.max(40, Math.min(500, 1000 / grid.fps));
   const total = Math.min(grid.frames * loops, Math.ceil(6000 / frameMs)); // cap at ~6s
@@ -146,27 +122,16 @@ export async function playSheet(img: Image, grid: Grid, v: Visuals, forceBlocks 
   };
   process.once("SIGINT", onInt);
   process.stderr.write("\x1b[?25l");
-  if (mode === "image") {
-    // Encode each frame once. Kitty replaces image 1 in place, so frames swap
-    // without flicker; iTerm2 simply draws over the same cells.
-    const frames = Array.from({ length: grid.frames }, (_, i) => imageFrame(img, frameRect(img, grid, i)!, v, 1));
-    const rows = frames[0].rows;
-    reserve(rows);
-    for (let n = 0; n < total; n++) {
-      process.stderr.write(`\x1b8\x1b[2C${frames[n % grid.frames].seq}`);
-      await sleep(frameMs);
-    }
-    release(rows);
-  } else {
-    let height = 0;
-    for (let n = 0; n < total; n++) {
-      const lines = drawBlocks(img, frameRect(img, grid, n % grid.frames)!, v);
-      if (height) process.stderr.write(`\x1b[${height}A\r`);
-      process.stderr.write(lines.join("\n") + "\n");
-      height = lines.length;
-      await sleep(frameMs);
-    }
+  // Encode each frame once. Kitty replaces image 1 in place, so frames swap
+  // without flicker; iTerm2 simply draws over the same cells.
+  const frames = Array.from({ length: grid.frames }, (_, i) => imageFrame(img, frameRect(img, grid, i)!, v, 1));
+  const rows = frames[0].rows;
+  reserve(rows);
+  for (let n = 0; n < total; n++) {
+    process.stderr.write(`\x1b8\x1b[2C${frames[n % grid.frames].seq}`);
+    await sleep(frameMs);
   }
+  release(rows);
   process.stderr.write("\x1b[?25h");
   process.removeListener("SIGINT", onInt);
   return "played";
@@ -175,21 +140,21 @@ export async function playSheet(img: Image, grid: Grid, v: Visuals, forceBlocks 
 export type PreviewOutcome = "shown" | "unsupported" | "failed";
 
 // The preview for a saved file: plays a sheet whose grid is known, shows
-// anything else as a still. `explicit` (ludo preview) allows half blocks for
-// any image, since the person asked; after a generation they are kept for
-// pixel art, and other images are left to --open.
-export async function previewFile(file: string, v: Visuals, gridOverride?: Grid, explicit = false): Promise<PreviewOutcome> {
+// anything else as a still. "unsupported" means this terminal cannot show
+// images (see previewSkipped); "failed" that the file could not be read.
+export async function previewFile(file: string, v: Visuals, gridOverride?: Grid): Promise<PreviewOutcome> {
   if (!v.enabled) return "failed";
+  if (!canShowImages()) return "unsupported";
   try {
     const img = loadImage(file);
     if (!img) return "failed";
     const grid = gridOverride || readGrid(fs.readFileSync(file));
     if (grid) {
-      const played = await playSheet(img, grid, v, explicit);
+      const played = await playSheet(img, grid, v);
       if (played === "played") return "shown";
       if (played === "none") return "unsupported";
     }
-    return drawStill(img, v, undefined, explicit) ? "shown" : "unsupported";
+    return drawStill(img, v) ? "shown" : "unsupported";
   } catch {
     return "failed";
   }

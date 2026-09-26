@@ -58,7 +58,7 @@ export function mainHelp(commands: Command[]): string {
       ["assets [redo <file>]", "List generated files and how they were made; make one again"],
       ["spend [reset]", "Show what has been spent against the spending budget"],
       ["update", "Update ludo to the newest version"],
-      ["preview <file>", "Draw a PNG in the terminal; spritesheets play"],
+      ["preview <file>", "Show an image in the terminal; spritesheets play"],
       ["files upload <path>", "Upload a local file and print its URL"],
       ["jobs wait <id>", "Wait for a job and download its results"],
       ["agent-help", "A short guide for AI agents using this CLI"],

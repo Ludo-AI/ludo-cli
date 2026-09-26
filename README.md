@@ -80,8 +80,8 @@ ludo docs search --query "which animation model should I use for pixel art?"
 ### In the terminal
 
 At a terminal, results show up right there, spritesheets as a looping animation. Terminals that
-draw real images (iTerm2, Kitty, Ghostty, WezTerm) show the actual picture; elsewhere pixel art is
-drawn with block characters and other images are left to `--open`, which opens them full size.
+draw real images (iTerm2, Kitty, Ghostty, WezTerm) show the actual picture. Elsewhere (including
+inside tmux) the preview is skipped with a note, and `--open` opens the result full size instead.
 `ludo preview <file>` shows any saved image again (Ludo spritesheets remember their grid; for
 other sheets pass `--grid 8x4 --fps 12`). A spinner shows the job's
 status while you wait, and each result suggests a next step.

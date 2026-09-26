@@ -1,5 +1,4 @@
 import { encodePng, type Image } from "./png.js";
-import type { Rect } from "./halfblock.js";
 
 // Real images in terminals that can show them. Two protocols cover the
 // terminals that matter: Kitty's graphics protocol (Kitty, Ghostty, WezTerm)
@@ -7,6 +6,13 @@ import type { Rect } from "./halfblock.js";
 // picture rather than a blurry one; see preview.ts for the pixel-art case.
 
 export type Protocol = "kitty" | "iterm" | undefined;
+
+export interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 export function detectProtocol(env = process.env): Protocol {
   // tmux swallows both protocols unless passthrough is configured.

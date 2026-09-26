@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import zlib from "node:zlib";
 import { decodePng, encodePng, readText, withText } from "../dist/tty/png.js";
-import { renderLines, fit } from "../dist/tty/halfblock.js";
 import { gridFromResult, parseGrid, readGrid, GRID_KEY } from "../dist/tty/preview.js";
 import { visuals } from "../dist/tty/visuals.js";
 import { nextStep, creditsBar } from "../dist/tty/flair.js";
@@ -94,22 +93,6 @@ test("reads the grid from an API result, falling back to a square", () => {
   assert.equal(parseGrid("8 by 4"), undefined);
 });
 
-test("renders half blocks: two pixels per cell, transparency left to the terminal", () => {
-  const src = img(2, 2, (x, y) => (x === 1 && y === 1 ? [0, 0, 0, 0] : [255, 0, 0, 255]));
-  // A 2x2 sprite is scaled up 2x to 4x4 pixels: 4 columns, 2 rows.
-  const lines = renderLines(src, { x: 0, y: 0, w: 2, h: 2 }, { maxCols: 4, maxRows: 2, truecolor: true });
-  assert.equal(lines.length, 2);
-  assert.match(lines[0], /\x1b\[38;2;255;0;0m\x1b\[48;2;255;0;0m▀/);
-  // Bottom-right pixel is transparent: its cells fall back to the terminal.
-  assert.equal(lines[1], "\x1b[38;2;255;0;0m\x1b[48;2;255;0;0m▀".repeat(2) + "\x1b[0m ".repeat(2) + "\x1b[0m");
-});
-
-test("scales small pixel art up by whole steps and big sheets down to fit", () => {
-  assert.equal(fit({ x: 0, y: 0, w: 16, h: 16 }, { maxCols: 48, maxRows: 20, truecolor: true }).cols, 32);
-  const big = fit({ x: 0, y: 0, w: 1024, h: 1024 }, { maxCols: 48, maxRows: 20, truecolor: true });
-  assert.ok(big.cols <= 48 && big.rows <= 20);
-});
-
 test("visuals stay off for agents, pipes, CI and opt-outs", () => {
   const saved = { out: process.stdout.isTTY, err: process.stderr.isTTY, env: { ...process.env } };
   const set = (o, v) => Object.defineProperty(o, "isTTY", { value: v, configurable: true });
@@ -151,7 +134,7 @@ test("draws a credits bar", () => {
 });
 
 const { detectProtocol, kittySequence, itermSequence, cellSize } = await import("../dist/tty/graphics.js");
-const { isPixelArt } = await import("../dist/tty/preview.js");
+const { previewSkipped } = await import("../dist/tty/preview.js");
 
 test("detects the terminal's image protocol, and none inside tmux", () => {
   assert.equal(detectProtocol({ TERM_PROGRAM: "ghostty" }), "kitty");
@@ -181,10 +164,18 @@ test("sizes images in cells, which are twice as tall as wide", () => {
   assert.deepEqual(cellSize({ width: 400, height: 100 }, 48, 16), { cols: 48, rows: 6 });
 });
 
-test("only small or few-colour images count as pixel art", () => {
-  const flat = img(256, 256, (x, y) => [(x >> 5) * 30, (y >> 5) * 30, 0, 255]); // 8x8 blocks of colour
-  assert.equal(isPixelArt(flat, { x: 0, y: 0, w: 256, h: 256 }), true);
-  const painted = img(256, 256, (x, y) => [x, y, (x * y) & 255, 255]);
-  assert.equal(isPixelArt(painted, { x: 0, y: 0, w: 256, h: 256 }), false);
-  assert.equal(isPixelArt(painted, { x: 0, y: 0, w: 96, h: 96 }), true);
+test("a terminal without images gets a note on how to see the preview", () => {
+  const saved = { TMUX: process.env.TMUX, TERM: process.env.TERM };
+  try {
+    delete process.env.TMUX;
+    process.env.TERM = "xterm-256color";
+    assert.match(previewSkipped(), /^Preview skipped: .*iTerm2, Kitty, Ghostty and WezTerm.*--open/);
+    process.env.TMUX = "/tmp/tmux-501/default";
+    assert.match(previewSkipped(), /tmux/);
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
 });

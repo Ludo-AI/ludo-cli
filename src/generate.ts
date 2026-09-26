@@ -18,7 +18,7 @@ import { AUDIO_EXT, copyText, IMAGE_EXT, openFile, playAudio } from "./tty/actio
 import { creditsBar, nextStep, spinner } from "./tty/flair.js";
 import { writeGodotSpriteFrames } from "./tty/godot.js";
 import { convertToPng, loadImage } from "./tty/image.js";
-import { gridFromResult, previewFile, stampGrid } from "./tty/preview.js";
+import { canShowImages, gridFromResult, previewFile, previewSkipped, stampGrid } from "./tty/preview.js";
 import { visuals, type Visuals } from "./tty/visuals.js";
 
 // Running generations: one request, N variations of one request, or a batch
@@ -308,7 +308,7 @@ async function finishJob(ctx: Ctx, job: any, label: string, prep?: Prepared): Pr
       if (ctx.vis.enabled) {
         const still = sheet || files.find(f => IMAGE_EXT.test(f.path))?.path;
         if (still && (await previewFile(still, ctx.vis)) === "unsupported") {
-          process.stderr.write("  (add --open to view it full size)\n");
+          process.stderr.write(`${previewSkipped()}\n`);
         }
       }
       const hint = !globals.quiet && nextStep(job.task_type, files, prep?.body);
@@ -628,7 +628,9 @@ export async function runVariations(ctx: Ctx, prep: Prepared, n: number): Promis
     for (const v of variations) {
       process.stdout.write(`  v${v.variation}: ${v.files.length ? v.files.join(", ") : `failed${v.error ? `: ${v.error.message}` : ""}`}\n`);
     }
-    if (ctx.vis.enabled) {
+    if (ctx.vis.enabled && !canShowImages()) {
+      if (variations.some(v => v.files.some(p => IMAGE_EXT.test(p)))) process.stderr.write(`${previewSkipped()}\n`);
+    } else if (ctx.vis.enabled) {
       // Numbered, one after another; a spritesheet plays.
       const sheets = new Set(outcomes.map(o => o.sheet).filter(Boolean));
       for (const v of variations) {

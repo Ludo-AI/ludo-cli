@@ -15,7 +15,7 @@ import { agentHelp, commandHelp, groupHelp, mainHelp } from "./help.js";
 import { flushNotes, latestVersion } from "./notices.js";
 import { loadProject } from "./project.js";
 import { embeddedSpecPath, loadSpec } from "./spec.js";
-import { parseGrid, previewFile } from "./tty/preview.js";
+import { parseGrid, previewFile, previewSkipped } from "./tty/preview.js";
 import { logo } from "./tty/flair.js";
 import { installSkill, isInstalled, skillTarget, uninstallSkill } from "./skill.js";
 import { accountLine, accountSummary, agentName, billingUrlFor, browserLogin, canOpenBrowser, isAgent, openBrowser } from "./login.js";
@@ -160,7 +160,12 @@ async function preview(ctx: Ctx, parsed: Parsed, words: string[]): Promise<numbe
     const frames = Number(flag("--frames")) || g.cols * g.rows;
     grid = { ...g, frames, fps: Number(flag("--fps")) || 10 };
   }
-  if ((await previewFile(file, ctx.vis, grid, true)) !== "shown") {
+  const outcome = await previewFile(file, ctx.vis, grid);
+  if (outcome === "unsupported") {
+    process.stderr.write(`${previewSkipped().replace("add --open", "open the file")}\n`);
+    return EXIT.OK;
+  }
+  if (outcome !== "shown") {
     throw new CliError(
       `Could not preview ${file}`,
       EXIT.USAGE,
