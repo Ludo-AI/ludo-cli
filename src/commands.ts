@@ -36,6 +36,8 @@ export interface Command {
   summary: string;
   description: string;
   credits?: string;
+  // The full pricing text (per model and second), for estimates.
+  creditDetail?: string;
   fields: Field[];
   // A generation: submitted as an async job the CLI then waits on.
   isJob: boolean;
@@ -233,6 +235,7 @@ export function buildCommands(spec: Spec): Command[] {
         summary: firstSentence(description),
         description,
         credits: op["x-credit-summary"] || op["x-credit-description"],
+        creditDetail: op["x-credit-description"],
         fields,
         isJob,
         hidden: HIDDEN.has(op.operationId)

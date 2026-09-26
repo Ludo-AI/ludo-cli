@@ -59,14 +59,22 @@ export interface SavedFile {
   path: string;
 }
 
-export async function downloadAll(urls: string[], dir: string, prefix: string, log?: (msg: string) => void): Promise<SavedFile[]> {
+// `suffix` names the i-th of `count` files (default: -1, -2, ... when there
+// are several); variations use it for -v1, -v2, ...
+export async function downloadAll(
+  urls: string[],
+  dir: string,
+  prefix: string,
+  log?: (msg: string) => void,
+  suffix: (i: number, count: number) => string = (i, count) => (count > 1 ? `-${i + 1}` : "")
+): Promise<SavedFile[]> {
   fs.mkdirSync(dir, { recursive: true });
   const saved: SavedFile[] = [];
   for (const [i, url] of urls.entries()) {
     const ext = path.extname(new URL(url).pathname) || "";
-    let target = path.join(dir, `${prefix}${urls.length > 1 ? `-${i + 1}` : ""}${ext}`);
+    let target = path.join(dir, `${prefix}${suffix(i, urls.length)}${ext}`);
     for (let n = 2; fs.existsSync(target); n++) {
-      target = path.join(dir, `${prefix}${urls.length > 1 ? `-${i + 1}` : ""}-${n}${ext}`);
+      target = path.join(dir, `${prefix}${suffix(i, urls.length)}-${n}${ext}`);
     }
     let res: Response;
     try {

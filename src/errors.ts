@@ -11,6 +11,8 @@ export const EXIT = {
   JOB_CANCELED: 7,
   RATE_LIMITED: 8, // 429, including PENDING_JOBS_LIMIT
   TIMEOUT: 9, // --timeout elapsed while the job was still running
+  UPGRADE_REQUIRED: 10, // this CLI version is below the API's minimum (426)
+  BUDGET: 11, // the spending guard refused: over --max-credits or the session budget
   INTERRUPTED: 130
 } as const;
 

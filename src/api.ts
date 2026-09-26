@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { VERSION } from "./config.js";
 import { CliError, EXIT, exitCodeForStatus } from "./errors.js";
+import { observeHeaders, upgradeRequired } from "./notices.js";
 
 export interface ApiResponse {
   status: number;
@@ -52,6 +53,7 @@ export class Api {
     } catch (err: any) {
       throw new CliError(`Could not reach ${this.apiUrl}: ${err?.cause?.code || err?.message || err}`, EXIT.ERROR);
     }
+    observeHeaders(res.headers);
     const text = await res.text();
     let body: any = text;
     try {
@@ -59,6 +61,8 @@ export class Api {
     } catch {
       // Non-JSON error pages are reported as text.
     }
+    // Below the API's minimum CLI version every request answers 426.
+    if (res.status === 426) throw upgradeRequired(body);
     return { status: res.status, body };
   }
 

@@ -22,10 +22,17 @@ they log in or create an account (and pick a plan with API access if needed) and
    saved files, not the URLs, in the user's project.
 5. Every generation costs credits. Do not loop on generations or retry failures blindly; exit code 6
    means the job failed and its credits were refunded. Before a large batch, check the balance with
-   `ludo account`.
+   `ludo account`, and the price with `--dry-run`. Cap a command with `--max-credits <n>`.
+   Exit code 11 means the spending budget is reached: stop, tell the user (`ludo spend`), and ask.
 6. Exit code 5 means not enough credits, or a plan without API access. Do not retry: tell the user, and
    that `! ludo billing` opens the page to buy credits, change plan or turn on auto top-up.
-7. When you hit a limitation you cannot work around, a bug, or something the user needed that Ludo
+7. Before generating, check `ludo assets`: the asset may already exist. `ludo assets redo <file>
+   --prompt "..."` remakes one with changes.
+8. To choose between options, `--n 3` makes three variations (`-v1`..`-v3`). Look at them, keep the
+   best and delete the others. For several different assets, write a jobs file and run
+   `ludo batch jobs.json` (`ludo batch --help`).
+9. If the project has no `.ludo.json` yet and the user wants a setup, `ludo init` creates one.
+10. When you hit a limitation you cannot work around, a bug, or something the user needed that Ludo
    cannot do, send one short report and tell the user you did:
    `ludo feedback "<what you tried, what happened, what would have helped>" --category limitation`
    (or `bug`, `feature_request`, `praise`, `other`; add `--operation` and `--job <id>` when they

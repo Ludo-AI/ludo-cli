@@ -1,283 +1,25 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { Api, uploadFile } from "./api.js";
-import { Globals, parseArgv, Parsed, resolveFlags } from "./args.js";
-import { buildCommands, Command, findCommand, groupsOf } from "./commands.js";
+import { parseArgv, Parsed } from "./args.js";
+import { buildCommands, findCommand, groupsOf } from "./commands.js";
 import { readConfig, resolveApiKey, resolveApiUrl, VERSION, writeConfig } from "./config.js";
 import { reportCrash } from "./crash.js";
 import { CliError, EXIT, specMismatch } from "./errors.js";
+import { makeCtx, printJson, runBatch, runCommand, runJobWait, type Ctx } from "./generate.js";
 import { agentHelp, commandHelp, groupHelp, mainHelp } from "./help.js";
-import { collectUrls, downloadAll, extractInlineFiles, waitForJob } from "./jobs.js";
+import { flushNotes, latestVersion } from "./notices.js";
+import { loadProject } from "./project.js";
 import { embeddedSpecPath, loadSpec } from "./spec.js";
-import { visuals, type Visuals } from "./tty/visuals.js";
-import { gridFromResult, parseGrid, previewFile, stampGrid } from "./tty/preview.js";
-import { creditsBar, logo, nextStep, spinner } from "./tty/flair.js";
-import { AUDIO_EXT, copyText, IMAGE_EXT, openFile, playAudio } from "./tty/actions.js";
-import { writeGodotSpriteFrames } from "./tty/godot.js";
+import { parseGrid, previewFile } from "./tty/preview.js";
+import { logo } from "./tty/flair.js";
 import { installSkill, isInstalled, skillTarget, uninstallSkill } from "./skill.js";
-import { convertToPng, loadImage } from "./tty/image.js";
-import { accountLine, accountSummary, agentName, billingUrlFor, browserLogin, canOpenBrowser, openBrowser } from "./login.js";
-
-const DEFAULT_OUT = "ludo-output";
-const DEFAULT_TIMEOUT_S = 30 * 60;
-
-interface Ctx {
-  globals: Globals;
-  api: Api;
-  jsonOut: boolean;
-  vis: Visuals;
-  log: (msg: string) => void;
-}
-
-function makeCtx(globals: Globals): Ctx {
-  const jsonOut = globals.json || !process.stdout.isTTY;
-  const log = (msg: string) => {
-    if (!globals.quiet) process.stderr.write(msg + "\n");
-  };
-  const vis = visuals({ json: jsonOut, quiet: globals.quiet, plain: globals.plain });
-  return { globals, api: new Api(resolveApiUrl(globals.apiUrl), resolveApiKey(globals.apiKey)), jsonOut, vis, log };
-}
-
-function printJson(value: unknown, pretty: boolean) {
-  process.stdout.write(JSON.stringify(value, null, pretty ? 2 : 0) + "\n");
-}
-
-function isLocalPathish(value: string): boolean {
-  return !/^(https?:|data:)/i.test(value);
-}
-
-// Local files in file-accepting fields are uploaded and replaced by their URL.
-// `@path` forces a file even where the value would otherwise be ambiguous.
-async function uploadLocalFiles(ctx: Ctx, command: Command, body: Record<string, unknown>) {
-  for (const field of command.fields.filter(f => f.isFile && f.in === "body")) {
-    const value = body[field.name];
-    const one = async (v: unknown): Promise<unknown> => {
-      if (typeof v !== "string") return v;
-      const explicit = v.startsWith("@");
-      const candidate = explicit ? v.slice(1) : v;
-      if (!isLocalPathish(candidate)) return v;
-      if (explicit || fs.existsSync(candidate)) return uploadFile(ctx.api, candidate, field.name, ctx.log);
-      // Neither URL nor existing file: a path typo is far likelier than raw base64.
-      if (candidate.length < 512 && /[\/\\.]/.test(candidate)) {
-        throw new CliError(`${field.flag}: file not found: ${candidate}`, EXIT.USAGE);
-      }
-      return v;
-    };
-    if (Array.isArray(value)) body[field.name] = await Promise.all(value.map(one));
-    else if (value !== undefined) body[field.name] = await one(value);
-  }
-}
-
-function expandPath(template: string, params: Record<string, string>): string {
-  return template.replace(/\{([^}]+)\}/g, (_, name) => encodeURIComponent(params[name] ?? ""));
-}
-
-async function finishJob(ctx: Ctx, job: any, label: string, body?: Record<string, unknown>): Promise<number> {
-  const { globals } = ctx;
-  const record: any = {
-    job_id: job.id,
-    status: job.status,
-    task_type: job.task_type,
-    credits_charged: job.credits_charged,
-    result: job.result,
-    error: job.error
-  };
-  let sheet: string | undefined;
-  if (job.status === "succeeded") {
-    const dir = path.resolve(globals.out || DEFAULT_OUT);
-    const prefix = `${job.task_type || label}-${String(job.id).slice(0, 8)}`;
-    const inline = extractInlineFiles(job.result, globals.download ? { dir, prefix } : null, ctx.log);
-    record.result = inline.result;
-    const urls = collectUrls(record.result);
-    const downloaded = globals.download && urls.length ? await downloadAll(urls, dir, prefix, ctx.log) : [];
-    // WebP results also get a PNG copy side by side: engines and tools take
-    // PNG everywhere, and the PNG is what carries a spritesheet's grid.
-    const pngOf = new Map<string, string>();
-    for (const f of [...downloaded]) {
-      if (!/\.webp$/i.test(f.path)) continue;
-      const png = f.path.replace(/\.webp$/i, ".png");
-      if (!fs.existsSync(png) && convertToPng(f.path, png)) {
-        pngOf.set(f.path, png);
-        downloaded.push({ url: f.url, path: png });
-      }
-    }
-    // A spritesheet remembers its grid inside the PNG, for `ludo preview`
-    // and engine exports.
-    const grid = gridFromResult(job.result);
-    const sheetFile = downloaded.find(f => f.url === job.result?.spritesheet_url);
-    const sheetPng = sheetFile && (pngOf.get(sheetFile.path) || (/\.png$/i.test(sheetFile.path) ? sheetFile.path : undefined));
-    if (grid && sheetPng) {
-      stampGrid(sheetPng, grid);
-      sheet = sheetPng;
-    }
-    const engineFiles = globals.engine ? await engineExport(ctx, sheet, grid) : [];
-    const rel = (p: string) => path.relative(process.cwd(), p) || p;
-    record.files = [...downloaded, ...inline.files, ...engineFiles].map(f => ({ ...f, path: rel(f.path) }));
-    // Inline files were replaced by their absolute path; show it relative too.
-    for (const f of inline.files) record.result = replaceString(record.result, f.path, rel(f.path));
-    if (sheet) sheet = rel(sheet);
-  }
-  const files: { path: string }[] = record.files || [];
-  if (ctx.jsonOut) {
-    printJson(record, !!ctx.globals.json && process.stdout.isTTY);
-  } else {
-    if (job.status === "succeeded") {
-      const cost = await costLine(ctx, job.credits_charged);
-      process.stdout.write(`✓ ${label} succeeded${cost ? ` (${cost})` : ""}\n`);
-      for (const f of files) process.stdout.write(`  ${f.path}\n`);
-      if (!files.length) printJson(job.result, true);
-      if (ctx.vis.enabled) {
-        const still = sheet || files.find(f => IMAGE_EXT.test(f.path))?.path;
-        if (still && (await previewFile(still, ctx.vis)) === "unsupported") {
-          process.stderr.write("  (add --open to view it full size)\n");
-        }
-      }
-      const hint = !globals.quiet && nextStep(job.task_type, files, body);
-      if (hint) process.stderr.write(`${hint}\n`);
-    } else {
-      process.stdout.write(`✗ ${label} ${job.status}${job.error?.message ? `: ${job.error.message}` : ""}\n`);
-      // A failure a retry will not fix is worth hearing about.
-      if (job.status === "failed" && job.error?.retriable === false && !globals.quiet) {
-        process.stderr.write(`Blocked by this? Tell us: ludo feedback "<what you needed>" --category limitation --job ${job.id}\n`);
-      }
-    }
-  }
-  if (job.status === "succeeded" && files.length) handOff(ctx, files, sheet);
-  if (job.status === "failed") return EXIT.JOB_FAILED;
-  if (job.status === "canceled") return EXIT.JOB_CANCELED;
-  return EXIT.OK;
-}
-
-// "9 credits · 1,831 left", for people only (one extra request).
-async function costLine(ctx: Ctx, charged: unknown): Promise<string | undefined> {
-  const spent = typeof charged === "number" && charged > 0 ? `${charged.toLocaleString("en-US")} credits` : undefined;
-  const res = await ctx.api.request("GET", "/assets/account", { timeoutMs: 5_000 }).catch(() => undefined);
-  const left = res?.status === 200 ? res.body?.credits?.available : undefined;
-  const leftText = typeof left === "number" ? `${left.toLocaleString("en-US", { maximumFractionDigits: 2 })} left` : undefined;
-  return [spent, leftText].filter(Boolean).join(" · ") || undefined;
-}
-
-// --open, --play, --copy: explicit requests, so they run for agents too.
-function handOff(ctx: Ctx, files: { path: string }[], sheet?: string) {
-  const { globals } = ctx;
-  if (globals.copy) {
-    const ok = copyText(files.map(f => path.resolve(f.path)).join("\n"));
-    ctx.log(ok ? "Copied the file paths to the clipboard." : "Could not reach a clipboard tool (pbcopy, wl-copy, xclip, xsel or clip).");
-  }
-  if (globals.open) {
-    const target = sheet || files.find(f => IMAGE_EXT.test(f.path))?.path || files[0].path;
-    openFile(path.resolve(target));
-  }
-  if (globals.play) {
-    const audio = files.find(f => AUDIO_EXT.test(f.path));
-    if (audio) playAudio(path.resolve(audio.path));
-    else ctx.log("--play: this result has no audio.");
-  }
-}
-
-async function engineExport(ctx: Ctx, sheet: string | undefined, grid: ReturnType<typeof gridFromResult>): Promise<{ url: string; path: string }[]> {
-  if (!sheet || !grid) {
-    ctx.log("--engine godot: this result has no spritesheet, so there is nothing to export.");
-    return [];
-  }
-  try {
-    const img = loadImage(sheet);
-    if (!img) throw new Error("could not read the spritesheet");
-    const tres = writeGodotSpriteFrames(sheet, img.width, img.height, { cols: grid.cols, rows: grid.rows, frames: grid.frames, fps: grid.fps });
-    return [{ url: "(godot SpriteFrames)", path: tres }];
-  } catch (err) {
-    ctx.log(`--engine godot: ${(err as Error).message}`);
-    return [];
-  }
-}
-
-function replaceString(value: unknown, from: string, to: string): unknown {
-  if (value === from) return to;
-  if (Array.isArray(value)) return value.map(v => replaceString(v, from, to));
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, replaceString(v, from, to)]));
-  return value;
-}
-
-// A one-line spinner for a person at a terminal; otherwise one plain line
-// per status change, as logs and agents expect.
-function progressReporter(ctx: Ctx, label: string) {
-  if (ctx.vis.enabled) {
-    const s = spinner(label, ctx.vis);
-    return { report: (job: any, elapsed: number) => s.update(job.status, elapsed), stop: () => s.stop() };
-  }
-  let last = "";
-  return {
-    report: (job: any, elapsed: number) => {
-      const line = `${label}: ${job.status} (${Math.round(elapsed)}s)`;
-      if (line !== last && !ctx.globals.quiet) {
-        process.stderr.write(line + "\n");
-        last = line;
-      }
-    },
-    stop: () => {}
-  };
-}
-
-async function runJobWait(ctx: Ctx, id: string, label: string, body?: Record<string, unknown>): Promise<number> {
-  ctx.api.requireKey();
-  const progress = progressReporter(ctx, label);
-  const stopHint = () => {
-    progress.stop();
-    process.stderr.write(`\nStopped waiting. The job keeps running; resume with: ludo jobs wait ${id}\n`);
-    process.exit(EXIT.INTERRUPTED);
-  };
-  process.once("SIGINT", stopHint);
-  let job;
-  try {
-    job = await waitForJob(ctx.api, id, {
-      timeoutS: ctx.globals.timeout || DEFAULT_TIMEOUT_S,
-      progress: progress.report
-    });
-  } finally {
-    progress.stop();
-    process.removeListener("SIGINT", stopHint);
-  }
-  return finishJob(ctx, job, label, body);
-}
-
-async function runCommand(ctx: Ctx, command: Command, parsed: Parsed, positionals: string[]): Promise<number> {
-  const resolved = resolveFlags(command, parsed, positionals);
-  if (resolved.extraWords.length) {
-    throw new CliError(`Unexpected argument: ${resolved.extraWords[0]}`, EXIT.USAGE, `Run \`ludo ${command.group} ${command.name} --help\`.`);
-  }
-  ctx.api.requireKey();
-  await uploadLocalFiles(ctx, command, resolved.body);
-
-  const hasBody = command.method !== "GET" && command.method !== "DELETE";
-  const body = hasBody ? { ...resolved.body, ...(command.isJob ? { async: true } : {}) } : undefined;
-  const label = `${command.group} ${command.name}`;
-  if (command.isJob) ctx.log(`Submitting ${label}`);
-  const { body: response } = await ctx.api.call(command.method, expandPath(command.path, resolved.path), {
-    query: resolved.query,
-    body
-  });
-
-  if (command.isJob && response && response.id && response.status) {
-    if (!ctx.globals.wait) {
-      printJson(response, !ctx.jsonOut || !!ctx.globals.json);
-      return EXIT.OK;
-    }
-    if (["succeeded", "failed", "canceled"].includes(response.status)) return finishJob(ctx, response, label, resolved.body);
-    return runJobWait(ctx, response.id, label, resolved.body);
-  }
-  if (command.operationId === "getAccount" && !ctx.jsonOut) {
-    const c = response?.credits || {};
-    if (ctx.vis.enabled && typeof c.available === "number") process.stderr.write(`  ${creditsBar(c.available, (c.plan_credits || 0) + (c.extra || 0))}\n`);
-    process.stdout.write(accountSummary(response) + "\n");
-    return EXIT.OK;
-  }
-  // Some operations answer 200 with no body (validate-api-key).
-  printJson(response === null || response === "" ? { ok: true } : response, !ctx.jsonOut || (!!ctx.globals.json && process.stdout.isTTY));
-  return EXIT.OK;
-}
+import { accountLine, accountSummary, agentName, billingUrlFor, browserLogin, canOpenBrowser, isAgent, openBrowser } from "./login.js";
+import { assets, BATCH_HELP, init, loadBatch, spend } from "./workspace.js";
 
 async function promptSecret(question: string): Promise<string> {
   if (!process.stdin.isTTY) return fs.readFileSync(0, "utf8").trim();
@@ -362,7 +104,7 @@ async function logout(ctx: Ctx): Promise<number> {
 async function skill(ctx: Ctx, parsed: Parsed, words: string[]): Promise<number> {
   const sub = words[0];
   const project = parsed.flags.has("--project");
-  const force = parsed.flags.has("--force");
+  const force = ctx.globals.force;
   if (!sub || ctx.globals.help || !["install", "uninstall", "path"].includes(sub)) {
     process.stdout.write(
       [
@@ -443,6 +185,25 @@ async function billing(ctx: Ctx): Promise<number> {
   return EXIT.OK;
 }
 
+// `ludo update`: runs the npm install for a person at a terminal; anyone else
+// (an agent, a script) gets the command, since replacing a global install can
+// need sudo and should not happen in the middle of someone else's task.
+async function update(ctx: Ctx): Promise<number> {
+  const command = "npm install -g @ludoai/cli@latest";
+  const human = process.stdin.isTTY && process.stdout.isTTY && !isAgent() && !process.env.CI && !ctx.globals.json;
+  if (!human) {
+    const latest = latestVersion();
+    if (ctx.jsonOut) printJson({ version: VERSION, latest: latest || null, command }, false);
+    else process.stdout.write(`Update with: ${command}\n(Commands follow the API automatically; updates are only needed for CLI fixes.)\n`);
+    return EXIT.OK;
+  }
+  process.stderr.write(`Running: ${command}\n`);
+  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+  const res = spawnSync(npm, ["install", "-g", "@ludoai/cli@latest"], { stdio: "inherit", shell: process.platform === "win32" });
+  if (res.status === 0) return EXIT.OK;
+  throw new CliError(`The update failed${res.error ? `: ${res.error.message}` : ""}`, EXIT.ERROR, `Run it yourself: ${command} (it may need sudo)`);
+}
+
 const FEEDBACK_CATEGORIES = ["limitation", "bug", "feature_request", "praise", "other"];
 const FEEDBACK_HELP = [
   "Usage: ludo feedback <message> [--category <c>] [--operation <id>] [--job <id>]",
@@ -521,7 +282,7 @@ async function main(argv: string[]): Promise<number> {
   const { globals, words } = parsed;
   const ctx = makeCtx(globals);
   const [first, second] = words;
-  if (["version", "login", "logout", "billing", "update", "spec", "help", "agent-help", "preview", "skill", "feedback"].includes(first)) commandLabel = first;
+  if (["version", "login", "logout", "billing", "update", "spec", "help", "agent-help", "preview", "skill", "feedback", "init", "assets", "spend", "batch"].includes(first)) commandLabel = first;
 
   if (first === "version" || argv.includes("--version") || argv.includes("-v")) {
     process.stdout.write(`${VERSION}\n`);
@@ -531,10 +292,8 @@ async function main(argv: string[]): Promise<number> {
   if (first === "logout") return logout(ctx);
   if (first === "billing") return billing(ctx);
   if (first === "feedback") return feedback(ctx, parsed, words.slice(1));
-  if (first === "update") {
-    process.stdout.write("Update with: npm install -g @ludoai/cli@latest\n(Commands follow the API automatically; updates are only needed for CLI fixes.)\n");
-    return EXIT.OK;
-  }
+  if (first === "update") return update(ctx);
+  if (first === "init") return init(ctx, parsed);
 
   const apiUrl = resolveApiUrl(globals.apiUrl);
   if (first === "spec") {
@@ -570,6 +329,22 @@ async function main(argv: string[]): Promise<number> {
     return preview(ctx, parsed, words.slice(1));
   }
 
+  // Everything below works inside a project: .ludo.json settings, budget and
+  // asset log.
+  const pctx = makeCtx(globals, loadProject());
+  if (first === "spend") return spend(pctx, words.slice(1));
+  if (first === "assets") return assets(pctx, parsed, words.slice(1), commands);
+  if (first === "batch") {
+    if (globals.help || !words[1]) {
+      process.stdout.write(BATCH_HELP);
+      return globals.help ? EXIT.OK : EXIT.USAGE;
+    }
+    if (globals.n !== undefined) throw new CliError("--n does not apply to a batch; list each job instead", EXIT.USAGE);
+    if (!globals.wait) throw new CliError("ludo batch waits for its jobs; drop --no-wait", EXIT.USAGE);
+    const { preps, limit } = loadBatch(pctx, parsed, words[1], commands);
+    return runBatch(pctx, preps, limit);
+  }
+
   // Built-ins living inside API groups.
   if (first === "files" && second === "upload") {
     commandLabel = "files upload";
@@ -590,7 +365,7 @@ async function main(argv: string[]): Promise<number> {
       process.stdout.write("Usage: ludo jobs wait <id> [--out <dir>] [--timeout <s>] [--no-download]\n\nWaits for a job to finish, then saves its result files like a generation command does.\n");
       return globals.help ? EXIT.OK : EXIT.USAGE;
     }
-    return runJobWait(ctx, words[2], `job ${words[2]}`);
+    return runJobWait(pctx, words[2], `job ${words[2]}`);
   }
 
   const groups = groupsOf(commands);
@@ -615,7 +390,7 @@ async function main(argv: string[]): Promise<number> {
     process.stdout.write(commandHelp(command) + "\n");
     return EXIT.OK;
   }
-  return runCommand(ctx, command, parsed, words.slice(consumed));
+  return runCommand(pctx, command, parsed, words.slice(consumed));
 }
 
 // Out of credits (or no API access) at a terminal: offer to open the billing
@@ -641,10 +416,16 @@ async function offerBilling() {
   if (/^(y|yes|)$/i.test(answer.trim())) openBrowser(billingUrlFor(apiUrl));
 }
 
+const quietRun = process.argv.includes("--quiet");
+
 run(process.argv.slice(2)).then(
-  code => process.exit(code),
+  code => {
+    flushNotes(quietRun);
+    process.exit(code);
+  },
   async (err: unknown) => {
     const json = process.argv.includes("--json") || !process.stdout.isTTY;
+    flushNotes(quietRun);
     if (err instanceof CliError) {
       if (json) printJson({ error: { message: err.message, exit_code: err.exitCode, hint: err.hint, details: err.details } }, false);
       process.stderr.write(`Error: ${err.message}\n${err.hint ? `${err.hint}\n` : ""}`);

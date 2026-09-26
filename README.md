@@ -121,6 +121,69 @@ replaced by its path.
 | 7 | Generation canceled |
 | 8 | Rate limited, or too many jobs queued |
 | 9 | Timed out waiting; the job keeps running |
+| 10 | This version of ludo is no longer supported; update it |
+| 11 | Refused by the spending guard (`--max-credits` or the budget) |
+
+## Projects
+
+`ludo init` sets a folder up as a project. It writes `.ludo.json` and adds instructions for coding
+agents (a section in `AGENTS.md`, a Cursor rule when `.cursor` exists, the Claude Code skill when the
+project uses Claude Code). Every command run anywhere below that folder uses it:
+
+```json
+{
+  "out": "assets/ludo",
+  "engine": "godot",
+  "max_credits": 100,
+  "style_image": "art/style.png",
+  "defaults": {
+    "image create": { "image_type": "sprite" },
+    "animateSprite": { "model": "forge" }
+  }
+}
+```
+
+- `out`: where generated files are saved (instead of `./ludo-output`).
+- `engine`: as `--engine` on every command.
+- `max_credits`: the spending budget (below).
+- `style_image`: used by operations that take a `style_image` (`image generate-with-style`).
+- `defaults`: API fields per command, by `"group command"` or API id.
+
+Paths are relative to `.ludo.json`, and flags always win.
+
+### Cost control
+
+- `--dry-run` prints what a command would cost and runs nothing.
+- `--max-credits <n>` refuses a command (all its variations together) that would cost more.
+- The spending budget, `LUDO_MAX_CREDITS` or `max_credits`, caps what the CLI spends in a project
+  (or on this machine, outside one). Past it every generation is refused with exit code 11.
+  `ludo spend` shows the tally; `ludo spend reset` starts a new one.
+
+Prices come from the API's published pricing. For models priced per second, the estimate is the
+most the job can cost. A command whose price depends on its source file (a video upscale) is refused
+while a limit is set, unless you pass `--force`.
+
+### Asset log
+
+Every file a generation saves is recorded in `ludo-assets.json` (next to `.ludo.json`, or in the
+output folder): the command, its flags, the job and what it cost. `ludo assets` lists them;
+`ludo assets redo <file> --prompt "…in blue"` makes one again with changes.
+
+### Variations and batches
+
+- `--n 4` makes four variations of one request and saves them as `-v1` to `-v4`. At a terminal
+  you then pick which to keep; the rest move to `<out>/.discarded/`. Where the API takes `n`
+  (images) one job makes them; elsewhere the jobs run side by side.
+- `ludo batch jobs.json` runs a list of different generations side by side (`ludo batch --help`
+  shows the format). The price of the whole list is checked first. A failed item does not stop the
+  others.
+- Anything over 50 credits at once asks for confirmation at a terminal (`--yes` skips it).
+
+## Staying up to date
+
+The CLI tells you, at most once a day, when a newer version is out; `ludo update` installs it.
+If a version ever stops being supported, commands exit with code 10 and say how to update.
+Service notices from Ludo (an outage, say) appear the same way, on stderr.
 
 ## Logging in
 

@@ -53,6 +53,11 @@ export function mainHelp(commands: Command[]): string {
       ["logout", "Log out and revoke this CLI login"],
       ["billing", "Open the billing page: buy credits, change plan or auto top-up"],
       ["feedback <message>", "Tell the Ludo team about a limitation, bug, idea or win"],
+      ["init", "Set this folder up as a project: .ludo.json, agent instructions"],
+      ["batch <jobs.json>", "Run a list of generations side by side"],
+      ["assets [redo <file>]", "List generated files and how they were made; make one again"],
+      ["spend [reset]", "Show what has been spent against the spending budget"],
+      ["update", "Update ludo to the newest version"],
       ["preview <file>", "Draw a PNG in the terminal; spritesheets play"],
       ["files upload <path>", "Upload a local file and print its URL"],
       ["jobs wait <id>", "Wait for a job and download its results"],
@@ -167,9 +172,22 @@ ${groups}
 - Result URLs expire after 7 days; the downloaded files in \`files[].path\` are yours to keep.
 - Progress goes to stderr (\`--quiet\` silences it).
 
+## Projects, cost and reuse
+- \`.ludo.json\` (made by \`ludo init\`) sets the output folder, engine, spending budget and per-command defaults;
+  flags override it. Generated files are listed in \`ludo-assets.json\`.
+- Check \`ludo assets\` before generating: the asset may already exist. \`ludo assets redo <file> [flags]\` makes it
+  again with changes.
+- \`--dry-run\` prints the price without running; \`--max-credits <n>\` refuses anything dearer. Prices for
+  duration-priced models are upper bounds.
+- A spending budget (\`LUDO_MAX_CREDITS\` or \`max_credits\`) stops the CLI once reached: exit code 11. Do not work
+  around it; tell the user what was spent (\`ludo spend\`) and ask.
+- \`--n 4\` makes four variations (files \`-v1\`..\`-v4\`, JSON lists each). Look at them, keep the best, delete the rest.
+- Several different assets: write a jobs file and run \`ludo batch jobs.json\` (see \`ludo batch --help\`).
+
 ## Exit codes
-0 ok, 1 error, 2 bad usage, 3 auth, 4 rejected by the API, 5 not enough credits, 6 job failed (credits refunded),
-7 job canceled, 8 rate limited / too many queued jobs, 9 timed out waiting (job keeps running).
+0 ok, 1 error, 2 bad usage, 3 auth, 4 rejected by the API, 5 not enough credits, 6 job failed (credits refunded;
+in a batch, at least one item failed), 7 job canceled, 8 rate limited / too many queued jobs, 9 timed out waiting
+(job keeps running), 10 this CLI version is too old (update it), 11 refused by the spending guard.
 
 ## Auth and credits
 - The key comes from \`LUDO_API_KEY\`, a prior \`ludo login\`, or \`--api-key\`.

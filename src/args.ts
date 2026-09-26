@@ -18,6 +18,11 @@ export const GLOBAL_FLAGS: Record<string, { value: boolean; description: string 
   "--play": { value: false, description: "Play generated audio when done" },
   "--copy": { value: false, description: "Copy the saved file paths to the clipboard when done" },
   "--engine": { value: true, description: "Also write engine files next to results: godot (a SpriteFrames .tres for spritesheets, Godot 4)" },
+  "--n": { value: true, description: "Make N variations of the same request and pick the best (runs N jobs, or one when the API takes n)" },
+  "--max-credits": { value: true, description: "Refuse to run if this would cost more than this many credits (all variations together)" },
+  "--dry-run": { value: false, description: "Print what this would cost and exit without running it" },
+  "--force": { value: false, description: "Run even when the price cannot be known up front and a spending limit is set" },
+  "--yes": { value: false, description: "Do not ask before spending more than 50 credits at once" },
   "--help": { value: false, description: "Show help for this command" }
 };
 
@@ -36,6 +41,11 @@ export interface Globals {
   play: boolean;
   copy: boolean;
   engine?: string;
+  n?: number;
+  maxCredits?: number;
+  dryRun: boolean;
+  force: boolean;
+  yes: boolean;
   help: boolean;
 }
 
@@ -46,7 +56,7 @@ export interface Parsed {
 }
 
 function defaultGlobals(): Globals {
-  return { json: false, wait: true, download: true, quiet: false, plain: false, open: false, play: false, copy: false, help: false };
+  return { json: false, wait: true, download: true, quiet: false, plain: false, open: false, play: false, copy: false, dryRun: false, force: false, yes: false, help: false };
 }
 
 // First pass: split argv into positionals, global flags and command flags.
@@ -102,6 +112,21 @@ export function parseArgv(argv: string[]): Parsed {
           break;
         }
         case "--help": globals.help = true; break;
+        case "--dry-run": globals.dryRun = true; break;
+        case "--force": globals.force = true; break;
+        case "--yes": globals.yes = true; break;
+        case "--n": {
+          const v = Number(takeValue());
+          if (!Number.isInteger(v) || v < 1 || v > 20) throw new CliError("--n must be a whole number from 1 to 20", EXIT.USAGE);
+          globals.n = v;
+          break;
+        }
+        case "--max-credits": {
+          const v = Number(takeValue());
+          if (!Number.isFinite(v) || v < 0) throw new CliError("--max-credits must be a number of credits", EXIT.USAGE);
+          globals.maxCredits = v;
+          break;
+        }
         case "--out": globals.out = takeValue(); break;
         case "--input": globals.input = takeValue(); break;
         case "--api-key": globals.apiKey = takeValue(); break;
@@ -202,10 +227,37 @@ function readInput(input: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
+// Body fields from somewhere other than flags (.ludo.json defaults, a batch
+// item, the asset log), checked like flags: known fields, allowed values.
+function applyDefaults(command: Command, out: Resolved, defaults: Record<string, unknown>, source: string) {
+  for (const [key, value] of Object.entries(defaults)) {
+    const name = key.replace(/^--/, "").replace(/-/g, "_");
+    const field = command.fields.find(f => f.name === name && f.in !== "path");
+    if (!field) {
+      throw new CliError(
+        `${source}: \`ludo ${command.group} ${command.name}\` has no field "${key}"`,
+        EXIT.USAGE,
+        `Fields: ${command.fields.filter(f => f.in !== "path").map(f => f.name).join(", ")}`
+      );
+    }
+    if (Array.isArray(value)) value.forEach(v => checkEnum(field, v));
+    else checkEnum(field, value);
+    if (field.in === "query") out.query[name] = value;
+    else out.body[name] = value;
+  }
+}
+
 // Second pass: map raw flags onto the command's fields. Path parameters may
-// also be given positionally (`ludo jobs get <id>`).
-export function resolveFlags(command: Command, parsed: Parsed, positionals: string[]): Resolved {
+// also be given positionally (`ludo jobs get <id>`). Defaults come first,
+// then --input, then flags: the most explicit wins.
+export function resolveFlags(
+  command: Command,
+  parsed: Parsed,
+  positionals: string[],
+  defaults?: { values: Record<string, unknown>; source: string }[]
+): Resolved {
   const out: Resolved = { body: {}, query: {}, path: {}, extraWords: [] };
+  for (const d of defaults || []) applyDefaults(command, out, d.values, d.source);
   if (parsed.globals.input) Object.assign(out.body, readInput(parsed.globals.input));
 
   const byFlag = new Map<string, Field>();
