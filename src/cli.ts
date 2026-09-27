@@ -434,11 +434,21 @@ armTelemetry();
 onExit(code => sendTelemetry(commandLabel, code, startedAt, argvForTelemetry));
 handleSignals();
 
+// Ends the run with this code WITHOUT process.exit(): on Windows, exiting while
+// fetch's connection pool is still closing trips a libuv assertion
+// (UV_HANDLE_CLOSING, nodejs/node#58091) and turns every exit code into a
+// crash (0xC0000409). Node exits by itself once the pool has closed; the
+// unref'd timer only fires if something unexpected keeps the process alive.
+function finish(code: number) {
+  process.exitCode = code;
+  setTimeout(() => process.exit(code), 3000).unref();
+}
+
 run(process.argv.slice(2)).then(
   async code => {
     flushNotes(quietRun);
     await sendTelemetry(commandLabel, code, startedAt, argvForTelemetry);
-    process.exit(code);
+    finish(code);
   },
   async (err: unknown) => {
     const json = process.argv.includes("--json") || !process.stdout.isTTY;
@@ -448,13 +458,13 @@ run(process.argv.slice(2)).then(
       process.stderr.write(`Error: ${err.message}\n${err.hint ? `${err.hint}\n` : ""}`);
       if (err.exitCode === EXIT.CREDITS && !json) await offerBilling();
       await sendTelemetry(commandLabel, err.exitCode, startedAt, argvForTelemetry);
-      process.exit(err.exitCode);
+      return finish(err.exitCode);
     }
     // Anything else is a bug in the CLI.
     process.stderr.write(`Error: ${(err as Error)?.stack || err}\n`);
     const eventId = await reportCrash(err, commandLabel);
     if (eventId) process.stderr.write(`This looks like a bug in ludo; a crash report was sent (${eventId}). Set LUDO_TELEMETRY=0 to stop sending them.\n`);
     await sendTelemetry(commandLabel, EXIT.ERROR, startedAt, argvForTelemetry);
-    process.exit(EXIT.ERROR);
+    finish(EXIT.ERROR);
   }
 );

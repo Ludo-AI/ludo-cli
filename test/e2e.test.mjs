@@ -235,6 +235,8 @@ test("uploads a local file, waits for the job and saves every result file", asyn
   assert.equal(out.files.length, 2);
   const image = out.files.find(f => f.path.endsWith(".png"));
   assert.deepEqual(fs.readFileSync(path.join(runDir, image.path)), PNG);
+  // absolute_path points at the same file, wherever the caller resolves from.
+  for (const f of out.files) assert.equal(fs.realpathSync(f.absolute_path), fs.realpathSync(path.join(runDir, f.path)));
   // The inline base64 was saved as a file and replaced by its path.
   assert.match(out.result.audio_b64, /ludo-output\/removeBackground-job-1234-audio\.mp3$/);
   assert.deepEqual(fs.readFileSync(path.join(runDir, out.result.audio_b64)), MP3);

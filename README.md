@@ -100,7 +100,7 @@ In JSON mode a generation prints:
   "task_type": "animateSprite",
   "credits_charged": 9,
   "result": { "spritesheet_url": "https://…", "video_url": "https://…" },
-  "files": [{ "url": "https://…", "path": "ludo-output/animateSprite-1a2b3c4d-1.png" }]
+  "files": [{ "url": "https://…", "path": "ludo-output/animateSprite-1a2b3c4d-1.png", "absolute_path": "/home/you/game/ludo-output/animateSprite-1a2b3c4d-1.png" }]
 }
 ```
 

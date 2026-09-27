@@ -255,7 +255,9 @@ export async function saveResult(ctx: Ctx, job: any, label: string, naming: Nami
       ...inline.files.map(f => ({ ...f, variation: constant })),
       ...engineFiles.map(f => ({ ...f, variation: sheetFile?.variation ?? constant }))
     ].map(f => ({ ...f, path: rel(f.path) }));
-    record.files = files.map(f => (f.variation === undefined ? { url: f.url, path: f.path } : f));
+    // path is relative to the working directory; absolute_path saves a wrapper
+    // running ludo elsewhere from resolving it against the wrong folder.
+    record.files = files.map(f => ({ url: f.url, path: f.path, absolute_path: path.resolve(f.path), ...(f.variation === undefined ? {} : { variation: f.variation }) }));
     // Inline files were replaced by their absolute path; show it relative too.
     for (const f of inline.files) record.result = replaceString(record.result, f.path, rel(f.path));
     if (sheet) sheet = rel(sheet);
@@ -650,7 +652,7 @@ export async function runVariations(ctx: Ctx, prep: Prepared, n: number): Promis
     const saved = variations.filter(v => v.files.length);
     if (saved.length > 1 && canAsk(ctx)) kept = await pickVariations(ctx, saved.map(v => v.variation), n, set);
   } else {
-    printJson({ variation_set: set, n, credits_charged: sumCharged(outcomes), variations, files: files.map(f => ({ path: f.path, variation: f.variation })) }, prettyJson(ctx));
+    printJson({ variation_set: set, n, credits_charged: sumCharged(outcomes), variations, files: files.map(f => ({ path: f.path, absolute_path: path.resolve(f.path), variation: f.variation })) }, prettyJson(ctx));
   }
   if (kept) ctx.log(`Kept ${kept.map(v => `v${v}`).join(", ")}.`);
   return ok.length ? EXIT.OK : failureCode(outcomes);

@@ -169,7 +169,7 @@ ${groups}
 
 ## Output
 - stdout is JSON when not a terminal (force with \`--json\`): \`{job_id, status, credits_charged, result, files: [{url, path}]}\`.
-- Result URLs expire after 7 days; the downloaded files in \`files[].path\` are yours to keep.
+- Result URLs expire after 7 days; the downloaded files in \`files[].path\` (relative to the working directory; \`files[].absolute_path\` is the same file, absolute) are yours to keep.
 - Progress goes to stderr (\`--quiet\` silences it).
 
 ## Projects, cost and reuse

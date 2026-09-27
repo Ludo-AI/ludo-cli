@@ -18,7 +18,8 @@ they log in or create an account (and pick a plan with API access if needed) and
    `ludo docs search --query "<plain-language question>"`.
 3. Pass local files by path (`--image ./knight.png`). Never base64-encode files.
 4. Generations wait for the result and save files under `./ludo-output` (or `--out <dir>`). Read the
-   JSON on stdout: `files[].path` are the saved files. Result URLs expire after 7 days, so use the
+   JSON on stdout: `files[].path` are the saved files (relative to the working directory;
+   `files[].absolute_path` is the same file as an absolute path). Result URLs expire after 7 days, so use the
    saved files, not the URLs, in the user's project.
 5. Every generation costs credits. Do not loop on generations or retry failures blindly; exit code 6
    means the job failed and its credits were refunded. Before a large batch, check the balance with
