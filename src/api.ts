@@ -35,7 +35,23 @@ export class Api {
     }
   }
 
-  async request(method: string, apiPath: string, opts: { query?: Record<string, unknown>; body?: unknown; timeoutMs?: number } = {}): Promise<ApiResponse> {
+  // GETs, and requests marked retry (safe to repeat), are tried once more
+  // after a network error or a 502/503/504 from the load balancer: those are
+  // usually a dropped keep-alive connection, gone on the second try. Never a
+  // generation submit, which could run (and charge) twice.
+  async request(method: string, apiPath: string, opts: RequestOpts = {}): Promise<ApiResponse> {
+    const retryable = method === "GET" || !!opts.retry;
+    try {
+      const res = await this.requestOnce(method, apiPath, opts);
+      if (!retryable || !RETRY_STATUSES.has(res.status)) return res;
+    } catch (err) {
+      if (!retryable || !(err instanceof CliError) || !err.network) throw err;
+    }
+    await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+    return this.requestOnce(method, apiPath, opts);
+  }
+
+  private async requestOnce(method: string, apiPath: string, opts: RequestOpts): Promise<ApiResponse> {
     const url = new URL(`${this.apiUrl}/api${apiPath}`);
     for (const [k, v] of Object.entries(opts.query || {})) {
       if (v === undefined || v === null) continue;
@@ -51,7 +67,9 @@ export class Api {
         signal: AbortSignal.timeout(opts.timeoutMs || 120_000)
       });
     } catch (err: any) {
-      throw new CliError(`Could not reach ${this.apiUrl}: ${err?.cause?.code || err?.message || err}`, EXIT.ERROR);
+      const e = new CliError(`Could not reach ${this.apiUrl}: ${err?.cause?.code || err?.message || err}`, EXIT.ERROR);
+      e.network = true;
+      throw e;
     }
     observeHeaders(res.headers);
     const text = await res.text();
@@ -68,12 +86,18 @@ export class Api {
 
   // A request that must succeed: any non-2xx becomes a CliError with the
   // server's message and an exit code for its class.
-  async call(method: string, apiPath: string, opts: { query?: Record<string, unknown>; body?: unknown; timeoutMs?: number } = {}): Promise<ApiResponse> {
+  async call(method: string, apiPath: string, opts: RequestOpts = {}): Promise<ApiResponse> {
     const res = await this.request(method, apiPath, opts);
     if (res.status >= 200 && res.status < 300) return res;
     throw apiError(res);
   }
 }
+
+type RequestOpts = { query?: Record<string, unknown>; body?: unknown; timeoutMs?: number; retry?: boolean };
+
+const RETRY_STATUSES = new Set([502, 503, 504]);
+// LUDO_RETRY_DELAY_MS exists for the tests.
+const RETRY_DELAY_MS = process.env.LUDO_RETRY_DELAY_MS ? Number(process.env.LUDO_RETRY_DELAY_MS) : 1000;
 
 export function apiError(res: ApiResponse): CliError {
   const b = res.body;
@@ -118,6 +142,7 @@ export function mimeFor(file: string, fieldName = ""): string | undefined {
 
 // Uploads a local file through createUpload and returns its public URL:
 // ask the API for an upload session, then PUT the bytes straight to storage.
+// Both steps are safe to repeat, so each gets one retry.
 export async function uploadFile(api: Api, file: string, fieldName = "", log?: (msg: string) => void): Promise<string> {
   let stat: fs.Stats;
   try {
@@ -140,15 +165,26 @@ export async function uploadFile(api: Api, file: string, fieldName = "", log?: (
   }
 
   log?.(`Uploading ${path.basename(file)} (${formatBytes(stat.size)})`);
-  const { body: session } = await api.call("POST", "/assets/uploads", { body: { mime_type: mime, size: stat.size } });
-  let put: Response;
-  try {
-    put = await fetch(session.upload_url, {
+  const { body: session } = await api.call("POST", "/assets/uploads", { body: { mime_type: mime, size: stat.size }, retry: true });
+  const bytes = fs.readFileSync(file);
+  const putOnce = () =>
+    fetch(session.upload_url, {
       method: "PUT",
       headers: { "Content-Type": mime },
-      body: fs.readFileSync(file),
+      body: bytes,
       signal: AbortSignal.timeout(10 * 60 * 1000)
     });
+  const pause = () => new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+  let put: Response;
+  try {
+    put = await putOnce().catch(async () => {
+      await pause();
+      return putOnce();
+    });
+    if (put.status >= 500) {
+      await pause();
+      put = await putOnce();
+    }
   } catch (err: any) {
     throw new CliError(`Upload of ${file} failed: ${err?.cause?.code || err?.message || err}`, EXIT.ERROR);
   }

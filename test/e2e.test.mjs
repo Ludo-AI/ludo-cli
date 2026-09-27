@@ -26,6 +26,8 @@ const SHEET = encodePng({ width: 4, height: 4, rgba: new Uint8Array(64).fill(200
 let loginPolls = 0;
 let loginOutcome = "approved";
 let flakyPolls = 0;
+let flakyUploads = 0;
+let flakyJobGets = 0;
 const ACCOUNT = {
   credits: { available: 1840.5, plan_credits: 2000, used: 460, extra: 300.5, resets_at: 1790000000, team_pool: false, paused: false, grace_until: null },
   plan: { name: "Pro", api_access: true },
@@ -122,6 +124,10 @@ before(async () => {
       res.writeHead(200);
       return res.end("{}");
     }
+    if (req.method === "POST" && url.pathname === "/api/assets/uploads" && flakyUploads > 0) {
+      flakyUploads--;
+      return json(res, 502, { message: "backend_connection_closed_before_data_sent_to_client" });
+    }
     if (req.method === "POST" && url.pathname === "/api/assets/uploads") {
       const body = JSON.parse(raw);
       return json(res, 200, {
@@ -139,6 +145,19 @@ before(async () => {
     if (req.method === "GET" && url.pathname.startsWith("/files/")) {
       res.writeHead(200);
       return res.end(url.pathname === "/files/out.png" ? PNG : blobs.get(url.pathname));
+    }
+    if (req.method === "POST" && url.pathname === "/api/assets/image/remove-background" && JSON.parse(raw).image === "https://example.com/502.png") {
+      return json(res, 502, { message: "bad gateway" });
+    }
+    if (req.method === "GET" && url.pathname === "/api/assets/jobs/job-forever") {
+      return json(res, 200, { id: "job-forever", status: "running", task_type: "removeBackground", poll_after_ms: 20 });
+    }
+    if (req.method === "GET" && url.pathname === "/api/assets/jobs/job-flaky" && flakyJobGets > 0) {
+      flakyJobGets--;
+      return json(res, 503, { message: "unavailable" });
+    }
+    if (req.method === "GET" && url.pathname === "/api/assets/jobs/job-flaky") {
+      return json(res, 200, { id: "job-flaky", status: "canceled", task_type: "removeBackground" });
     }
     if (req.method === "POST" && url.pathname === "/api/assets/image/remove-background") {
       if (req.headers.authorization !== "ApiKey test-key") return json(res, 403, { message: "Invalid API key" });
@@ -605,4 +624,97 @@ test("a logged-out command is reported without a key", async () => {
   assert.ok(sent);
   assert.equal(sent.headers.authorization, undefined);
   assert.equal(JSON.parse(sent.raw).events[0].props.logged_in, false);
+});
+
+// ─── Interrupted commands, package scanners, retries ────────────────────────
+
+function spawnCli(args, extraEnv = {}) {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-sig-"));
+  const child = spawn(process.execPath, [CLI, ...args], {
+    cwd,
+    env: {
+      ...process.env,
+      LUDO_SPEC: SPEC,
+      LUDO_API_URL: base,
+      LUDO_API_KEY: "test-key",
+      LUDO_CONFIG_DIR: path.join(cwd, ".config"),
+      LUDO_CACHE_DIR: path.join(cwd, ".cache"),
+      LUDO_TELEMETRY: "1",
+      CLAUDECODE: "",
+      CLAUDE_CODE_ENTRYPOINT: "",
+      ...extraEnv
+    }
+  });
+  let stderr = "";
+  child.stderr.on("data", d => (stderr += d));
+  const closed = new Promise(resolve => child.on("close", (code, signal) => resolve({ code, signal, stderr })));
+  return { child, closed };
+}
+
+async function until(check, ms = 5000) {
+  const end = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > end) throw new Error("timed out");
+    await new Promise(r => setTimeout(r, 20));
+  }
+}
+
+for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143]]) {
+  test(`a command stopped with ${signal} still reports its usage event`, async () => {
+    const from = seen.length;
+    const { child, closed } = spawnCli(["jobs", "wait", "job-forever", "--json"]);
+    await until(() => seen.slice(from).some(s => s.path === "/api/assets/jobs/job-forever"));
+    child.kill(signal);
+    const done = await closed;
+    assert.equal(done.code, code, done.stderr);
+    const [sent] = telemetryEvents(from);
+    assert.ok(sent, "an event was sent before exiting");
+    const event = JSON.parse(sent.raw).events[0];
+    assert.equal(event.command, "jobs wait");
+    assert.equal(event.props.exit_code, code);
+    if (signal === "SIGINT") assert.match(done.stderr, /The job keeps running/);
+  });
+}
+
+test("importing the CLI's modules sends nothing: only the ludo command reports", async () => {
+  const from = seen.length;
+  const saved = { ...process.env };
+  Object.assign(process.env, { LUDO_API_URL: base, LUDO_API_KEY: "test-key", LUDO_TELEMETRY: "1", DO_NOT_TRACK: "", LUDO_SENTRY_DSN: `http://pubkey@${new URL(base).host}/42`, LUDO_CONFIG_DIR: fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-scan-")) });
+  try {
+    const { sendTelemetry } = await import("../dist/telemetry.js");
+    const { reportCrash } = await import("../dist/crash.js");
+    // What a package scanner does: call every export with junk.
+    await sendTelemetry("junk", 1, Date.now(), []);
+    assert.equal(await reportCrash(null, undefined), undefined);
+  } finally {
+    process.env = saved;
+  }
+  assert.ok(!seen.slice(from).some(s => s.path === "/api/cli/events" || s.path === "/api/42/envelope/"));
+});
+
+test("an upload that meets a 502 is retried once and goes through", async () => {
+  const src = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-src-")), "photo.png");
+  fs.writeFileSync(src, PNG);
+  const from = seen.length;
+  flakyUploads = 1;
+  polls = 0;
+  const { code, stderr } = await run(["image", "remove-background", "--image", src, "--json"], { LUDO_RETRY_DELAY_MS: "1" });
+  assert.equal(code, 0, stderr);
+  assert.equal(seen.slice(from).filter(s => s.path === "/api/assets/uploads").length, 2);
+});
+
+test("a GET that meets a 503 is retried once", async () => {
+  const from = seen.length;
+  flakyJobGets = 1;
+  const { code, stdout } = await run(["jobs", "get", "job-flaky", "--json"], { LUDO_RETRY_DELAY_MS: "1" });
+  assert.equal(code, 0);
+  assert.equal(JSON.parse(stdout).status, "canceled");
+  assert.equal(seen.slice(from).filter(s => s.path === "/api/assets/jobs/job-flaky").length, 2);
+});
+
+test("a generation submit is never retried: it could run and charge twice", async () => {
+  const from = seen.length;
+  const { code } = await run(["image", "remove-background", "--image", "https://example.com/502.png", "--json"], { LUDO_RETRY_DELAY_MS: "1" });
+  assert.equal(code, 1);
+  assert.equal(seen.slice(from).filter(s => s.path === "/api/assets/image/remove-background").length, 1);
 });

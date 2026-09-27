@@ -18,6 +18,14 @@ import { findProjectFile } from "./project.js";
 
 const SEND_TIMEOUT_MS = 1000;
 
+// Only the `ludo` command sends anything: cli.ts calls armTelemetry() at
+// startup. Code that merely imports these files (package scanners call every
+// exported function with junk arguments) must not report usage.
+let armed = false;
+export function armTelemetry() {
+  armed = true;
+}
+
 export function telemetryEnabled(env = process.env): boolean {
   const on = (v?: string) => !!v && !["", "0", "false"].includes(v.toLowerCase());
   if (on(env.DO_NOT_TRACK)) return false;
@@ -117,7 +125,7 @@ function safe<T>(fn: () => T): T | undefined {
 // Sends the command's event. Never throws, never changes the exit code, and
 // gives up after a second.
 export async function sendTelemetry(command: string | undefined, exitCode: number, startedAt: number, argv: string[]): Promise<void> {
-  if (!telemetryEnabled()) return;
+  if (!armed || !telemetryEnabled()) return;
   try {
     const id = installId();
     if (!id) return;

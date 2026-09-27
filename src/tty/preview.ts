@@ -3,6 +3,7 @@ import { readText, withText, type Image } from "./png.js";
 import { loadImage } from "./image.js";
 import { armRestore, sleep, type Visuals } from "./visuals.js";
 import { cellSize, crop, detectProtocol, imageSequence, type Rect } from "./graphics.js";
+import { exitNow } from "../shutdown.js";
 
 // Still previews and spritesheet playback on stderr. Everything here returns
 // quietly on any problem: a preview is a bonus, never a failure.
@@ -118,7 +119,7 @@ export async function playSheet(img: Image, grid: Grid, v: Visuals, loops = 3): 
   // Ctrl-C mid-animation: leave the terminal tidy and exit like any interrupt.
   const onInt = () => {
     process.stderr.write("\x1b[0m\x1b[?25h\n");
-    process.exit(130);
+    exitNow(130);
   };
   process.once("SIGINT", onInt);
   process.stderr.write("\x1b[?25l");

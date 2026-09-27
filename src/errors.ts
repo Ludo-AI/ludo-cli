@@ -23,6 +23,8 @@ export class CliError extends Error {
   // Set when the error may only mean the cached spec is out of date: an
   // unknown command, flag or value. The CLI refreshes the spec and retries.
   specMismatch?: boolean;
+  // Set when the API could not be reached at all (safe requests retry once).
+  network?: boolean;
 
   constructor(message: string, exitCode: number = EXIT.ERROR, hint?: string, details?: unknown) {
     super(message);

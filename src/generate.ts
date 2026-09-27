@@ -18,6 +18,7 @@ import { AUDIO_EXT, copyText, IMAGE_EXT, openFile, playAudio } from "./tty/actio
 import { creditsBar, nextStep, spinner } from "./tty/flair.js";
 import { writeGodotSpriteFrames } from "./tty/godot.js";
 import { convertToPng, loadImage } from "./tty/image.js";
+import { exitNow } from "./shutdown.js";
 import { noteJob } from "./telemetry.js";
 import { canShowImages, gridFromResult, previewFile, previewSkipped, stampGrid } from "./tty/preview.js";
 import { visuals, type Visuals } from "./tty/visuals.js";
@@ -405,7 +406,7 @@ export async function runJobWait(ctx: Ctx, id: string, label: string, prep?: Pre
   const stopHint = () => {
     progress.stop();
     process.stderr.write(`\nStopped waiting. The job keeps running; resume with: ludo jobs wait ${id}\n`);
-    process.exit(EXIT.INTERRUPTED);
+    exitNow(EXIT.INTERRUPTED);
   };
   process.once("SIGINT", stopHint);
   let job;

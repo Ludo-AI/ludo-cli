@@ -18,6 +18,14 @@ import { PACKAGE_ROOT, resolveApiKey, VERSION } from "./config.js";
 const SENTRY_DSN = "https://f8eb96eda46baa2600e54d7c71cf4b3f@o505219.ingest.us.sentry.io/4512147055116288";
 const SEND_TIMEOUT_MS = 2000;
 
+// Only the `ludo` command reports crashes: cli.ts calls armCrashReports() at
+// startup. A package scanner importing this file and calling reportCrash with
+// junk must not file reports (it did, minutes after 0.1.0 was published).
+let armed = false;
+export function armCrashReports() {
+  armed = true;
+}
+
 // A key given with --api-key never reaches config or env, so read it here.
 function argvApiKey(): string | undefined {
   const argv = process.argv;
@@ -114,7 +122,7 @@ export function buildEvent(err: unknown, command: string | undefined) {
 // Sends the report and resolves with the event id, or undefined when it is
 // disabled or could not be sent. Never throws and never waits long.
 export async function reportCrash(err: unknown, command: string | undefined): Promise<string | undefined> {
-  if (!crashReportingEnabled()) return undefined;
+  if (!armed || !crashReportingEnabled()) return undefined;
   try {
     const url = new URL(dsn());
     const key = url.username;

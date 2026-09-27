@@ -1,4 +1,5 @@
 import { isAgent } from "../login.js";
+import { exitNow } from "../shutdown.js";
 
 // The one gate for everything decorative: previews, animation, the spinner,
 // colour and the logo. All of it is drawn on stderr, and only for a person at
@@ -57,7 +58,7 @@ export function armRestore() {
   for (const sig of ["SIGTERM", "SIGHUP"] as const) {
     process.once(sig, () => {
       restoreTerminal();
-      process.exit(128 + (sig === "SIGTERM" ? 15 : 1));
+      exitNow(128 + (sig === "SIGTERM" ? 15 : 1));
     });
   }
 }

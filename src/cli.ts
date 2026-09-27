@@ -8,8 +8,9 @@ import { Api, uploadFile } from "./api.js";
 import { parseArgv, Parsed } from "./args.js";
 import { buildCommands, findCommand, groupsOf } from "./commands.js";
 import { readConfig, resolveApiKey, resolveApiUrl, VERSION, writeConfig } from "./config.js";
-import { reportCrash } from "./crash.js";
-import { sendTelemetry } from "./telemetry.js";
+import { armCrashReports, reportCrash } from "./crash.js";
+import { exitNow, handleSignals, onExit } from "./shutdown.js";
+import { armTelemetry, sendTelemetry } from "./telemetry.js";
 import { CliError, EXIT, specMismatch } from "./errors.js";
 import { makeCtx, printJson, runBatch, runCommand, runJobWait, type Ctx } from "./generate.js";
 import { agentHelp, commandHelp, groupHelp, mainHelp } from "./help.js";
@@ -426,6 +427,12 @@ async function offerBilling() {
 const quietRun = process.argv.includes("--quiet");
 const startedAt = Date.now();
 const argvForTelemetry = process.argv.slice(2);
+
+armCrashReports();
+armTelemetry();
+// Interrupted (Ctrl-C, or an agent stopping a long command): still report it.
+onExit(code => sendTelemetry(commandLabel, code, startedAt, argvForTelemetry));
+handleSignals();
 
 run(process.argv.slice(2)).then(
   async code => {
