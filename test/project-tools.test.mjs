@@ -11,6 +11,9 @@ import path from "node:path";
 
 const CLI = new URL("../dist/cli.js", import.meta.url).pathname;
 const SPEC = new URL("../spec/openapi.json", import.meta.url).pathname;
+// The CLI's own version, so the tests survive a release bump.
+const VERSION = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const PNG = Buffer.from("89504e470d0a1a0a0000000d4948445200000001000000010806000000", "hex");
 const MP3 = Buffer.concat([Buffer.from("ID3"), Buffer.alloc(100, 7)]);
 
@@ -47,7 +50,7 @@ before(async () => {
     }
     seen.push({ method: req.method, path: url.pathname, body, headers: req.headers });
 
-    if (headers.min && url.pathname.startsWith("/api/") && req.headers["x-ludo-cli-version"] === "0.1.0") {
+    if (headers.min && url.pathname.startsWith("/api/") && req.headers["x-ludo-cli-version"] === VERSION) {
       return json(res, 426, { message: "Update required", min_version: headers.min, latest_version: headers.latest });
     }
     if (req.method === "GET" && url.pathname === "/api/docs/search") {
@@ -132,7 +135,7 @@ test("an update notice shows once a day, on stderr only, and never with --quiet"
   const cwd = tmp();
   const first = await run(["audio", "sound-effect", "--description", "boom"], { cwd });
   assert.equal(first.code, 0, first.stderr);
-  assert.match(first.stderr, /Update available: ludo 0\.1\.0 → 9\.0\.0/);
+  assert.match(first.stderr, new RegExp(`Update available: ludo ${esc(VERSION)} → 9\\.0\\.0`));
   assert.doesNotMatch(first.stdout, /Update available/);
   const second = await run(["audio", "sound-effect", "--description", "boom"], { cwd });
   assert.doesNotMatch(second.stderr, /Update available/);
@@ -160,11 +163,11 @@ test("service notices print on stderr; critical ones even with --quiet; garbage 
 });
 
 test("a version below the API's minimum exits 10 and says how to update", async () => {
-  headers.min = "0.2.0";
-  headers.latest = "0.3.0";
+  headers.min = "99.0.0";
+  headers.latest = "99.1.0";
   const { code, stderr } = await run(["audio", "sound-effect", "--description", "boom"]);
   assert.equal(code, 10);
-  assert.match(stderr, /This version of ludo \(0\.1\.0\) is no longer supported; 0\.2\.0 or newer is required/);
+  assert.match(stderr, new RegExp(`This version of ludo \\(${esc(VERSION)}\\) is no longer supported; 99\\.0\\.0 or newer is required`));
   assert.match(stderr, /npm install -g @ludoai\/cli@latest/);
   reset();
 });
