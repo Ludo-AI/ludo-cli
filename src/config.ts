@@ -8,6 +8,20 @@ export const DEFAULT_API_URL = "https://api.ludo.ai";
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const PACKAGE_ROOT = path.resolve(here, "..");
 
+// True when this process is the `ludo` command itself: node was started on our
+// dist/cli.js (npm's bin symlink or Windows .cmd shim both end there). A
+// package scanner that imports cli.js or calls the arm functions runs its own
+// script, so it fails this check.
+export function launchedAsCli(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return fs.realpathSync(entry) === fs.realpathSync(path.join(PACKAGE_ROOT, "dist", "cli.js"));
+  } catch {
+    return false;
+  }
+}
+
 export const VERSION: string = (() => {
   try {
     return JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, "package.json"), "utf8")).version;

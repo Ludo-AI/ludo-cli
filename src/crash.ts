@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { PACKAGE_ROOT, resolveApiKey, VERSION } from "./config.js";
+import { launchedAsCli, PACKAGE_ROOT, resolveApiKey, VERSION } from "./config.js";
 
 // Crash reports for bugs in the CLI itself: an unexpected exception, never an
 // API error, a failed job or a usage mistake. They go straight to Sentry's
@@ -20,10 +20,11 @@ const SEND_TIMEOUT_MS = 2000;
 
 // Only the `ludo` command reports crashes: cli.ts calls armCrashReports() at
 // startup. A package scanner importing this file and calling reportCrash with
-// junk must not file reports (it did, minutes after 0.1.0 was published).
+// junk must not file reports (it did, minutes after 0.1.0 was published, and
+// again after 0.1.1: it calls armCrashReports too, or imports cli.js).
 let armed = false;
 export function armCrashReports() {
-  armed = true;
+  armed = launchedAsCli();
 }
 
 // A key given with --api-key never reaches config or env, so read it here.

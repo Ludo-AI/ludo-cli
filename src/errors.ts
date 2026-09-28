@@ -34,6 +34,26 @@ export class CliError extends Error {
   }
 }
 
+// Errors from the person's machine rather than a bug in the CLI: a folder it
+// may not write to, a read-only or full disk. Shown as a plain error, never
+// sent as a crash report.
+const LOCAL_FS_CODES: Record<string, string> = {
+  EACCES: "permission denied",
+  EPERM: "operation not permitted",
+  EROFS: "read-only file system",
+  ENOSPC: "no space left on device",
+  EDQUOT: "disk quota exceeded"
+};
+
+export function localFsError(err: unknown): CliError | undefined {
+  const e = err as NodeJS.ErrnoException | undefined;
+  const reason = e?.code ? LOCAL_FS_CODES[e.code] : undefined;
+  if (!reason) return undefined;
+  const target = e?.path ? ` ${e.path}` : "";
+  const verb = e?.syscall ? `${e.syscall}${target}` : `access${target}`;
+  return new CliError(`Could not ${verb}: ${reason}.`, EXIT.ERROR, "Save somewhere writable with --out <dir>, or fix the folder's permissions.");
+}
+
 export function specMismatch(message: string, hint?: string): CliError {
   const err = new CliError(message, EXIT.USAGE, hint);
   err.specMismatch = true;

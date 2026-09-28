@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { configDir, resolveApiKey, resolveApiUrl, VERSION } from "./config.js";
+import { configDir, launchedAsCli, resolveApiKey, resolveApiUrl, VERSION } from "./config.js";
 import { agentName } from "./login.js";
 import { findProjectFile } from "./project.js";
 
@@ -23,7 +23,7 @@ const SEND_TIMEOUT_MS = 1000;
 // exported function with junk arguments) must not report usage.
 let armed = false;
 export function armTelemetry() {
-  armed = true;
+  armed = launchedAsCli();
 }
 
 export function telemetryEnabled(env = process.env): boolean {

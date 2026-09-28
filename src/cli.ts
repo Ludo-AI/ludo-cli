@@ -11,7 +11,7 @@ import { readConfig, resolveApiKey, resolveApiUrl, VERSION, writeConfig } from "
 import { armCrashReports, reportCrash } from "./crash.js";
 import { exitNow, handleSignals, onExit } from "./shutdown.js";
 import { armTelemetry, sendTelemetry } from "./telemetry.js";
-import { CliError, EXIT, specMismatch } from "./errors.js";
+import { CliError, EXIT, localFsError, specMismatch } from "./errors.js";
 import { makeCtx, printJson, runBatch, runCommand, runJobWait, type Ctx } from "./generate.js";
 import { agentHelp, BUILTIN_HELP, commandHelp, groupHelp, mainHelp } from "./help.js";
 import { flushNotes, latestVersion } from "./notices.js";
@@ -456,6 +456,7 @@ run(process.argv.slice(2)).then(
     finish(code);
   },
   async (err: unknown) => {
+    err = localFsError(err) || err;
     const json = process.argv.includes("--json") || !process.stdout.isTTY;
     flushNotes(quietRun);
     if (err instanceof CliError) {

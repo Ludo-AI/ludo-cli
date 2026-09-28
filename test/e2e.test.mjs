@@ -346,6 +346,26 @@ test("a crash in the CLI sends a scrubbed report to Sentry", async () => {
   for (const secret of ["sk-very-secret", "secret prompt", os.homedir(), bad]) assert.ok(!raw.includes(secret), `leaked ${secret}`);
 });
 
+test("an output folder it may not write to is a plain error, not a crash report", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async () => {
+  const from = seen.length;
+  const locked = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-locked-"));
+  fs.chmodSync(locked, 0o500);
+  try {
+    const { code, stderr } = await run(["image", "remove-background", "--image", "https://example.com/a.png", "--out", path.join(locked, "out")], {
+      LUDO_TELEMETRY: "",
+      DO_NOT_TRACK: "",
+      LUDO_SENTRY_DSN: `http://pubkey@${new URL(base).host}/42`
+    });
+    assert.equal(code, 1, stderr);
+    assert.match(stderr, /Could not mkdir .*: permission denied\./);
+    assert.match(stderr, /--out <dir>/);
+    assert.doesNotMatch(stderr, /crash report/);
+    assert.ok(!seen.slice(from).some(s => s.path === "/api/42/envelope/"));
+  } finally {
+    fs.chmodSync(locked, 0o700);
+  }
+});
+
 test("crash reports honour DO_NOT_TRACK", async () => {
   const from = seen.length;
   const bad = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-bad-")), "spec.json");
@@ -719,9 +739,12 @@ test("importing the CLI's modules sends nothing: only the ludo command reports",
   const saved = { ...process.env };
   Object.assign(process.env, { LUDO_API_URL: base, LUDO_API_KEY: "test-key", LUDO_TELEMETRY: "1", DO_NOT_TRACK: "", LUDO_SENTRY_DSN: `http://pubkey@${new URL(base).host}/42`, LUDO_CONFIG_DIR: fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-scan-")) });
   try {
-    const { sendTelemetry } = await import("../dist/telemetry.js");
-    const { reportCrash } = await import("../dist/crash.js");
-    // What a package scanner does: call every export with junk.
+    const { armTelemetry, sendTelemetry } = await import("../dist/telemetry.js");
+    const { armCrashReports, reportCrash } = await import("../dist/crash.js");
+    // What a package scanner does: call every export, the arm functions
+    // included, with junk.
+    armTelemetry();
+    armCrashReports();
     await sendTelemetry("junk", 1, Date.now(), []);
     assert.equal(await reportCrash(null, undefined), undefined);
   } finally {
