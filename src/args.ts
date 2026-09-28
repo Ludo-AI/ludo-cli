@@ -3,6 +3,8 @@ import type { Command, Field } from "./commands.js";
 import { CliError, EXIT, specMismatch } from "./errors.js";
 
 // Flags every command understands. `value: true` means it takes an argument.
+// They win over an API field of the same name (none today takes "name";
+// such a field would still be reachable through --input).
 export const GLOBAL_FLAGS: Record<string, { value: boolean; description: string }> = {
   "--json": { value: false, description: "Print machine-readable JSON (the default when stdout is not a terminal)" },
   "--out": { value: true, description: "Directory to save generated files in (default: ./ludo-output)" },
@@ -18,6 +20,7 @@ export const GLOBAL_FLAGS: Record<string, { value: boolean; description: string 
   "--play": { value: false, description: "Play generated audio when done" },
   "--copy": { value: false, description: "Copy the saved file paths to the clipboard when done" },
   "--engine": { value: true, description: "Also write engine files next to results: godot (a SpriteFrames .tres for spritesheets, Godot 4)" },
+  "--name": { value: true, description: "Name the saved files: --name sfx_pump saves sfx_pump.mp3 (never overwrites; -v1..-vN with --n)" },
   "--n": { value: true, description: "Make N variations of the same request and pick the best (runs N jobs, or one when the API takes n)" },
   "--max-credits": { value: true, description: "Refuse to run if this would cost more than this many credits (all variations together)" },
   "--dry-run": { value: false, description: "Print what this would cost and exit without running it" },
@@ -41,12 +44,26 @@ export interface Globals {
   play: boolean;
   copy: boolean;
   engine?: string;
+  name?: string;
   n?: number;
   maxCredits?: number;
   dryRun: boolean;
   force: boolean;
   yes: boolean;
   help: boolean;
+}
+
+// A base name for saved files (--name, or "name" in a batch job): no folders,
+// and a media extension is dropped, since the result decides the type
+// (sfx_pump.mp3 -> sfx_pump; knight.walk stays as it is).
+const MEDIA_EXT = /\.(png|webp|jpe?g|gif|mp3|wav|ogg|flac|mp4|webm|mov|glb|gltf|fbx|obj|tres)$/i;
+
+export function fileBaseName(raw: string, label: string): string {
+  const name = String(raw).trim().replace(MEDIA_EXT, "");
+  if (!name || name === "." || /[\/\\]/.test(raw) || raw.includes("..")) {
+    throw new CliError(`${label} must be a plain file name, without folders (got "${raw}")`, EXIT.USAGE, "Use --out <dir> to choose the folder.");
+  }
+  return name;
 }
 
 export interface Parsed {
@@ -115,6 +132,7 @@ export function parseArgv(argv: string[]): Parsed {
         case "--dry-run": globals.dryRun = true; break;
         case "--force": globals.force = true; break;
         case "--yes": globals.yes = true; break;
+        case "--name": globals.name = fileBaseName(takeValue(), "--name"); break;
         case "--n": {
           const v = Number(takeValue());
           if (!Number.isInteger(v) || v < 1 || v > 20) throw new CliError("--n must be a whole number from 1 to 20", EXIT.USAGE);

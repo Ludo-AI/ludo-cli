@@ -17,7 +17,8 @@ they log in or create an account (and pick a plan with API access if needed) and
 2. For a feature you have not used before, check Ludo's guidance first:
    `ludo docs search --query "<plain-language question>"`.
 3. Pass local files by path (`--image ./knight.png`). Never base64-encode files.
-4. Generations wait for the result and save files under `./ludo-output` (or `--out <dir>`). Read the
+4. Generations wait for the result and save files under `./ludo-output` (or `--out <dir>`); name them
+   with `--name <base>` (`--name sfx_pump` saves `sfx_pump.mp3`) instead of renaming them after. Read the
    JSON on stdout: `files[].path` are the saved files (relative to the working directory;
    `files[].absolute_path` is the same file as an absolute path). Result URLs expire after 7 days, so use the
    saved files, not the URLs, in the user's project.
@@ -31,7 +32,7 @@ they log in or create an account (and pick a plan with API access if needed) and
    --prompt "..."` remakes one with changes.
 8. To choose between options, `--n 3` makes three variations (`-v1`..`-v3`). Look at them, keep the
    best and delete the others. For several different assets, write a jobs file and run
-   `ludo batch jobs.json` (`ludo batch --help`).
+   `ludo batch jobs.json` (`ludo batch --help`; give each job a `"name"` for its files).
 9. If the project has no `.ludo.json` yet and the user wants a setup, `ludo init` creates one.
 10. When you hit a limitation you cannot work around, a bug, or something the user needed that Ludo
    cannot do, send one short report and tell the user you did:

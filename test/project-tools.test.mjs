@@ -541,3 +541,80 @@ test("file paths in a batch jobs file must stay inside the project, checked befo
   assert.equal(r.code, 2);
   assert.match(r.stderr, /item 1, field style_image: .*secret\.png is outside the project/);
 });
+
+test("--name names the saved file, never overwrites, and the asset log follows", async () => {
+  const cwd = tmp();
+  const first = await run(["audio", "sound-effect", "--description", "pump", "--name", "sfx_pump.mp3"], { cwd });
+  assert.equal(first.code, 0, first.stderr);
+  assert.deepEqual(JSON.parse(first.stdout).files.map(f => f.path), [path.join("ludo-output", "sfx_pump.mp3")]);
+  fs.writeFileSync(path.join(cwd, "ludo-output", "sfx_pump.mp3"), "kept");
+  const second = await run(["audio", "sound-effect", "--description", "pump", "--name", "sfx_pump"], { cwd });
+  assert.equal(second.code, 0, second.stderr);
+  assert.deepEqual(JSON.parse(second.stdout).files.map(f => f.path), [path.join("ludo-output", "sfx_pump-2.mp3")]);
+  assert.equal(fs.readFileSync(path.join(cwd, "ludo-output", "sfx_pump.mp3"), "utf8"), "kept");
+  const log = JSON.parse(fs.readFileSync(path.join(cwd, "ludo-output", "ludo-assets.json"), "utf8")).assets;
+  assert.deepEqual(log.map(e => e.file), ["sfx_pump.mp3", "sfx_pump-2.mp3"]);
+  // Only a media extension is dropped.
+  const dotted = await run(["audio", "sound-effect", "--description", "pump", "--name", "knight.walk"], { cwd });
+  assert.deepEqual(JSON.parse(dotted.stdout).files.map(f => path.basename(f.path)), ["knight.walk.mp3"]);
+});
+
+test("--name with --n numbers the variations -v1..-vN, one job or several", async () => {
+  const cwd = tmp();
+  const jobs = await run(["audio", "sound-effect", "--description", "pump", "--n", "3", "--name", "sfx_pump"], { cwd });
+  assert.equal(jobs.code, 0, jobs.stderr);
+  assert.deepEqual(JSON.parse(jobs.stdout).files.map(f => path.basename(f.path)).sort(), ["sfx_pump-v1.mp3", "sfx_pump-v2.mp3", "sfx_pump-v3.mp3"]);
+  const native = await run(["image", "generate-with-style", "--style-image", "https://example.com/s.png", "--prompt", "knight", "--n", "6", "--name", "knight"], { cwd });
+  assert.equal(native.code, 0, native.stderr);
+  assert.deepEqual(JSON.parse(native.stdout).files.map(f => path.basename(f.path)), [1, 2, 3, 4, 5, 6].map(v => `knight-v${v}.png`));
+});
+
+test("--name must be a plain file name, and applies to generations only", async () => {
+  const from = seen.length;
+  for (const bad of ["../sfx", "sounds/sfx", "a\\b", "", ".mp3"]) {
+    const { code, stderr } = await run(["audio", "sound-effect", "--description", "pump", "--name", bad]);
+    assert.equal(code, 2, `--name "${bad}"`);
+    assert.match(stderr, /--name must be a plain file name/);
+  }
+  const docs = await run(["docs", "search", "--query", "x", "--name", "x"]);
+  assert.equal(docs.code, 2);
+  assert.match(docs.stderr, /--name applies to generations only/);
+  assert.equal(posts(from, "/api/audio/sound-effect").length, 0);
+});
+
+test("jobs wait takes --name too", async () => {
+  const cwd = tmp();
+  const id = JSON.parse((await run(["audio", "sound-effect", "--description", "boom", "--no-wait"], { cwd })).stdout).id;
+  const { code, stdout, stderr } = await run(["jobs", "wait", id, "--name", "boom"], { cwd });
+  assert.equal(code, 0, stderr);
+  assert.deepEqual(JSON.parse(stdout).files.map(f => path.basename(f.path)), ["boom.mp3"]);
+});
+
+test("a batch job's \"name\" names its files and is not sent to the API; --name on a batch is refused", async () => {
+  const cwd = tmp();
+  fs.writeFileSync(
+    path.join(cwd, "jobs.json"),
+    JSON.stringify([
+      { command: "audio sound-effect", description: "sword swing", name: "sfx_sword" },
+      { command: "audio sound-effect", description: "coin" }
+    ])
+  );
+  const from = seen.length;
+  const { code, stdout, stderr } = await run(["batch", "jobs.json"], { cwd });
+  assert.equal(code, 0, stderr);
+  const out = JSON.parse(stdout);
+  assert.deepEqual(out.results[0].files, [path.join("ludo-output", "sfx_sword.mp3")]);
+  // Unnamed: the usual <operation>-<first 8 of the job id> (here "job-sfx-").
+  assert.match(out.results[1].files[0], /createSoundEffect-job-sfx-\.mp3$/);
+  assert.ok(posts(from, "/api/audio/sound-effect").every(p => !("name" in p.body)));
+
+  fs.writeFileSync(path.join(cwd, "bad.json"), JSON.stringify([{ command: "audio sound-effect", description: "a" }, { command: "audio sound-effect", description: "b", name: "../b" }]));
+  const before = seen.length;
+  const bad = await run(["batch", "bad.json"], { cwd });
+  assert.equal(bad.code, 2);
+  assert.match(bad.stderr, /bad\.json item 2: "name" must be a plain file name/);
+  const global = await run(["batch", "jobs.json", "--name", "x"], { cwd });
+  assert.equal(global.code, 2);
+  assert.match(global.stderr, /--name does not apply to a batch/);
+  assert.equal(posts(before, "/api/audio/sound-effect").length, 0);
+});

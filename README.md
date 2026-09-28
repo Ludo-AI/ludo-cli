@@ -15,7 +15,8 @@ ludo image create --prompt "a knight with a red cape" --image-type sprite
 - **Local files just work.** Pass a path to any image, audio, video or model flag and the CLI
   uploads it for you. No base64, no hosting.
 - **Results land on disk.** Generations wait for the job to finish and save every result file to
-  `./ludo-output` (or `--out <dir>`). Result URLs expire after 7 days; the files do not.
+  `./ludo-output` (or `--out <dir>`), named after the operation and job (or `--name sfx_pump` for
+  `sfx_pump.mp3`; nothing is ever overwritten). Result URLs expire after 7 days; the files do not.
 - **Always current.** Commands, flags, enums, defaults and prices are built from the live API spec,
   so new models and features show up without updating the CLI.
 - **Cheap for agents.** An agent learns only the commands it needs, through `--help`, instead of
@@ -174,12 +175,13 @@ output folder): the command, its flags, the job and what it cost. `ludo assets` 
 
 ### Variations and batches
 
-- `--n 4` makes four variations of one request and saves them as `-v1` to `-v4`. At a terminal
+- `--n 4` makes four variations of one request and saves them as `-v1` to `-v4` (with `--name`,
+  `<name>-v1` to `<name>-v4`). At a terminal
   you then pick which to keep; the rest move to `<out>/.discarded/`. Where the API takes `n`
   (images) one job makes them; elsewhere the jobs run side by side.
 - `ludo batch jobs.json` runs a list of different generations side by side (`ludo batch --help`
-  shows the format). The price of the whole list is checked first. A failed item does not stop the
-  others.
+  shows the format; a job's `"name"` names its files). The price of the whole list is checked first.
+  A failed item does not stop the others.
 - Anything over 50 credits at once asks for confirmation at a terminal (`--yes` skips it).
 
 ## Staying up to date

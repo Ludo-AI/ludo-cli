@@ -125,6 +125,7 @@ export interface Prepared {
   path: Record<string, string>;
   price: Price;
   label: string;
+  name?: string; // base name for the saved files (--name, or a batch job's "name")
 }
 
 export type DefaultsLayer = { values: Record<string, unknown>; source: string };
@@ -158,13 +159,15 @@ export function prepare(ctx: Ctx, command: Command, parsed: Parsed, positionals:
     if (!command.isJob && !nField) throw new CliError("--n applies to generations only", EXIT.USAGE);
     if (nField) (nField.in === "query" ? resolved.query : resolved.body).n = ctx.globals.n;
   }
+  if (ctx.globals.name && !command.isJob) throw new CliError("--name applies to generations only", EXIT.USAGE);
   return {
     command,
     body: resolved.body,
     query: resolved.query,
     path: resolved.path,
     price: command.isJob ? estimatePrice(command, resolved.body) : { credits: 0, exact: true },
-    label: `${command.group} ${command.name}`
+    label: `${command.group} ${command.name}`,
+    ...(ctx.globals.name ? { name: ctx.globals.name } : {})
   };
 }
 
@@ -299,7 +302,9 @@ function bookkeep(ctx: Ctx, job: any, saved: SavedResult, prep?: Prepared, varia
 
 async function finishJob(ctx: Ctx, job: any, label: string, prep?: Prepared): Promise<number> {
   const { globals } = ctx;
-  const saved = await saveResult(ctx, job, label);
+  // `ludo jobs wait <id> --name x` has no prepared request, only the flag.
+  const name = prep ? prep.name : ctx.globals.name;
+  const saved = await saveResult(ctx, job, label, name ? { prefix: name } : {});
   bookkeep(ctx, job, saved, prep);
   const { record, files, sheet } = saved;
   if (ctx.jsonOut) {
@@ -607,13 +612,13 @@ export async function runVariations(ctx: Ctx, prep: Prepared, n: number): Promis
   const uploaded = await uploadLocalFiles(ctx, command, prep.body);
   const units: Unit[] = preps.map((p, i) => {
     const { offset, count } = chunks[i];
-    const task = command.operationId;
+    const base = prep.name || `${command.operationId}-${set}`;
     return {
       prep: p,
       body: native ? { ...uploaded, n: count } : uploaded,
       naming: native
-        ? { prefix: `${task}-${set}`, suffix: (j: number) => (j < count ? `-v${offset + j + 1}` : `-x${j + 1}`), variationOf: (j: number) => (j >= 0 && j < count ? offset + j + 1 : undefined) }
-        : { prefix: `${task}-${set}-v${offset + 1}`, variationOf: () => offset + 1 }
+        ? { prefix: base, suffix: (j: number) => (j < count ? `-v${offset + j + 1}` : `-x${j + 1}`), variationOf: (j: number) => (j >= 0 && j < count ? offset + j + 1 : undefined) }
+        : { prefix: `${base}-v${offset + 1}`, variationOf: () => offset + 1 }
     };
   });
   ctx.log(`Submitting ${label}`);
@@ -712,7 +717,7 @@ export async function runBatch(ctx: Ctx, preps: Prepared[], limit: number): Prom
   await guard(ctx, total, true);
   ctx.api.requireKey();
   const units: Unit[] = [];
-  for (const p of preps) units.push({ prep: p, body: await uploadLocalFiles(ctx, p.command, p.body) });
+  for (const p of preps) units.push({ prep: p, body: await uploadLocalFiles(ctx, p.command, p.body), ...(p.name ? { naming: { prefix: p.name } } : {}) });
   ctx.log(`Submitting ${label} (${limit} at a time)`);
   const outcomes = await runUnits(ctx, units, label, limit);
   const ok = outcomes.filter(o => o.status === "succeeded").length;

@@ -425,6 +425,42 @@ test("logout leaves a pasted main key alone on the server", async () => {
   assert.ok(!seen.slice(from).some(s => s.path === "/api/assets/cli-key"));
 });
 
+// Every command `ludo --help` lists, groups included. `--help` must only
+// print: `ludo login --help` used to start a browser login and wait, and
+// `ludo logout --help` revoked the saved key.
+test("--help on every top-level command prints usage, exits 0 and does nothing else", async () => {
+  const main = await run(["--help"]);
+  assert.equal(main.code, 0);
+  const section = title => {
+    const lines = main.stdout.split("\n");
+    const start = lines.indexOf(title) + 1;
+    const end = lines.findIndex((l, i) => i >= start && !l.startsWith("  "));
+    // Rows start two spaces in; deeper lines are wrapped descriptions.
+    // The left column, minus <arg> and [option] placeholders: "files upload <path>" -> "files upload".
+    return lines
+      .slice(start, end)
+      .filter(l => /^  \S/.test(l))
+      .map(l => l.trim().split(/\s{2,}/)[0].split(" ").filter(w => !/^[<[]/.test(w)).join(" "));
+  };
+  const commands = [...new Set([...section("Groups:"), ...section("Other commands:")])];
+  for (const c of ["login", "logout", "billing", "update", "init", "spec", "preview", "batch", "image", "sprite"]) assert.ok(commands.includes(c), `${c} is listed`);
+
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-"));
+  fs.mkdirSync(path.join(cwd, ".config"));
+  const config = JSON.stringify({ api_key: "ludo_minted", key_source: "login" });
+  fs.writeFileSync(path.join(cwd, ".config", "config.json"), config);
+  for (const c of commands) {
+    const from = seen.length;
+    const { code, stdout, stderr } = await run([...c.split(" "), "--help"], { LUDO_API_KEY: "", LUDO_NO_BROWSER: "" }, cwd);
+    assert.equal(code, 0, `${c} --help: ${stderr}`);
+    if (c !== "agent-help") assert.match(stdout, /Usage:|Commands:/, `${c} --help prints usage`);
+    assert.deepEqual(seen.slice(from).map(s => `${s.method} ${s.path}`), [], `${c} --help calls nothing`);
+  }
+  // The login survived `logout --help`, and nothing was written.
+  assert.equal(fs.readFileSync(path.join(cwd, ".config", "config.json"), "utf8"), config);
+  assert.deepEqual(fs.readdirSync(cwd).sort(), [".cache", ".config"].filter(d => fs.existsSync(path.join(cwd, d))));
+});
+
 test("`ludo account` runs the group's only command and prints JSON for agents", async () => {
   const { code, stdout } = await run(["account"]);
   assert.equal(code, 0);

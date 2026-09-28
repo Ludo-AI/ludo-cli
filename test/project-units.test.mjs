@@ -8,6 +8,8 @@ import { totalOf } from "../dist/budget.js";
 import { validateConfig } from "../dist/project.js";
 import { upsertSection } from "../dist/workspace.js";
 import { parsePick } from "../dist/generate.js";
+import { extractInlineFiles, freePath } from "../dist/jobs.js";
+import { fileBaseName } from "../dist/args.js";
 import os from "node:os";
 import path from "node:path";
 import { appendAssets, readAssets } from "../dist/assets.js";
@@ -108,4 +110,26 @@ test("the asset log replaces an entry for the same job and file, and takes over 
   const entries = readAssets(log);
   assert.deepEqual(entries.map(e => [e.file, e.credits]), [["b.png", 1], ["a.png", 2]]);
   assert.ok(!fs.existsSync(`${log}.lock`));
+});
+
+test("saved files never overwrite: taken names get -2, -3; a WebP needs its PNG twin free", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-free-"));
+  assert.equal(freePath(dir, "sfx", ".mp3"), path.join(dir, "sfx.mp3"));
+  fs.writeFileSync(path.join(dir, "sfx.mp3"), "");
+  fs.writeFileSync(path.join(dir, "sfx-2.mp3"), "");
+  assert.equal(freePath(dir, "sfx", ".mp3"), path.join(dir, "sfx-3.mp3"));
+  fs.writeFileSync(path.join(dir, "hero.png"), "");
+  assert.equal(freePath(dir, "hero", ".webp"), path.join(dir, "hero-2.webp"));
+  // Inline (base64) results follow the same rule.
+  fs.writeFileSync(path.join(dir, "boom-audio.mp3"), "old");
+  const { files } = extractInlineFiles({ audio_b64: Buffer.concat([Buffer.from("ID3"), Buffer.alloc(80, 1)]).toString("base64") }, { dir, prefix: "boom" });
+  assert.equal(files[0].path, path.join(dir, "boom-audio-2.mp3"));
+  assert.equal(fs.readFileSync(path.join(dir, "boom-audio.mp3"), "utf8"), "old");
+});
+
+test("fileBaseName drops a media extension and refuses folders", () => {
+  assert.equal(fileBaseName("sfx_pump.mp3", "--name"), "sfx_pump");
+  assert.equal(fileBaseName("hero.PNG", "--name"), "hero");
+  assert.equal(fileBaseName("knight.walk", "--name"), "knight.walk");
+  for (const bad of ["a/b", "a\\b", "..", "../x", "", "  ", ".webp"]) assert.throws(() => fileBaseName(bad, "--name"), /plain file name/, bad);
 });

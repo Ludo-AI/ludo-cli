@@ -61,6 +61,16 @@ export interface SavedFile {
 
 // `suffix` names the i-th of `count` files (default: -1, -2, ... when there
 // are several); variations use it for -v1, -v2, ...
+// <dir>/<base><ext>, or <base>-2<ext>, -3... when taken: saved files are never
+// overwritten (a --name used twice, or a file the person already had). A WebP
+// also needs its PNG twin free, since saveResult writes one beside it.
+export function freePath(dir: string, base: string, ext: string): string {
+  const taken = (p: string) => fs.existsSync(p) || (/\.webp$/i.test(p) && fs.existsSync(p.replace(/\.webp$/i, ".png")));
+  let target = path.join(dir, `${base}${ext}`);
+  for (let n = 2; taken(target); n++) target = path.join(dir, `${base}-${n}${ext}`);
+  return target;
+}
+
 export async function downloadAll(
   urls: string[],
   dir: string,
@@ -72,10 +82,7 @@ export async function downloadAll(
   const saved: SavedFile[] = [];
   for (const [i, url] of urls.entries()) {
     const ext = path.extname(new URL(url).pathname) || "";
-    let target = path.join(dir, `${prefix}${suffix(i, urls.length)}${ext}`);
-    for (let n = 2; fs.existsSync(target); n++) {
-      target = path.join(dir, `${prefix}${suffix(i, urls.length)}-${n}${ext}`);
-    }
+    const target = freePath(dir, `${prefix}${suffix(i, urls.length)}`, ext);
     let res: Response;
     try {
       res = await fetch(url, { signal: AbortSignal.timeout(5 * 60 * 1000) });
@@ -136,7 +143,7 @@ export function extractInlineFiles(
       const buffer = Buffer.from(m ? value.slice(m[0].length) : value, "base64");
       if (!save) return `<${buffer.length} bytes of base64 omitted; run without --no-download to save it>`;
       fs.mkdirSync(save.dir, { recursive: true });
-      const target = path.join(save.dir, `${save.prefix}-${key.replace(/_b64$/, "")}${extensionFor(buffer, m?.[1])}`);
+      const target = freePath(save.dir, `${save.prefix}-${key.replace(/_b64$/, "")}`, extensionFor(buffer, m?.[1]));
       fs.writeFileSync(target, buffer);
       log?.(`Saved ${target}`);
       files.push({ url: `(inline ${key})`, path: target });

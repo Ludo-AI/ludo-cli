@@ -77,6 +77,38 @@ export function mainHelp(commands: Command[]): string {
   ].join("\n");
 }
 
+// Usage for the commands that do something straight away. `--help` on them
+// prints this and nothing else: `ludo login --help` must not start a login,
+// nor `ludo logout --help` revoke the key.
+export const BUILTIN_HELP: Record<string, string> = {
+  login: [
+    "Usage: ludo login [--no-browser]",
+    "       ludo login --with-key [<key>]   (or pipe the key on stdin)",
+    "",
+    "Logs in through the browser: it opens a page where you log in (or create an account) and approve",
+    "this CLI, and waits up to 10 minutes. --no-browser prints the page instead of opening it.",
+    "--with-key saves an existing API key instead, for CI and machines without a browser.",
+    ""
+  ].join("\n"),
+  logout: ["Usage: ludo logout", "", "Forgets the saved key, and revokes it when `ludo login` created it.", ""].join("\n"),
+  billing: ["Usage: ludo billing", "", "Opens the billing page (buy credits, change plan or auto top-up), or prints its URL.", ""].join("\n"),
+  update: [
+    "Usage: ludo update",
+    "",
+    "Updates ludo with npm install -g @ludoai/cli@latest. Outside an interactive terminal it prints",
+    "the command instead of running it.",
+    ""
+  ].join("\n"),
+  spec: [
+    "Usage: ludo spec [refresh|path]",
+    "",
+    "Shows where the API spec the commands are built from came from. refresh fetches it again;",
+    "path prints the cached file's path.",
+    ""
+  ].join("\n"),
+  version: ["Usage: ludo version", "", "Prints the version (also ludo --version).", ""].join("\n")
+};
+
 export function groupHelp(commands: Command[], group: string): string {
   const cmds = commands.filter(c => c.group === group && !c.hidden);
   return [
@@ -136,7 +168,7 @@ export function commandHelp(c: Command): string {
   if (required.length) out.push("", "Required flags:", table(required.map(f => [flagLabel(f), flagDescription(f)])));
   if (optional.length) out.push("", "Flags:", table(optional.map(f => [flagLabel(f), flagDescription(f)])));
   const globals = Object.entries(GLOBAL_FLAGS)
-    .filter(([name]) => c.isJob || !["--no-wait", "--no-download", "--timeout", "--out"].includes(name))
+    .filter(([name]) => c.isJob || !["--no-wait", "--no-download", "--timeout", "--out", "--name"].includes(name))
     .map(([name, g]) => [g.value ? `${name} <value>` : name, g.description] as [string, string]);
   out.push("", "Global flags:", table(globals));
   out.push("", `API operation: ${c.operationId} (${c.method} /api${c.path})`);
@@ -164,6 +196,8 @@ ${groups}
 - Files: pass a local path to any image/audio/video/model flag (\`--image ./knight.png\`); the CLI uploads it (15MB max). URLs work too. Never base64-encode files yourself.
 - Complex bodies: \`--input body.json\` (or \`--input -\` for stdin); flags override its fields.
 - Generations block until done, then save every result file to \`./ludo-output\` (\`--out <dir>\` to change).
+  Name them with \`--name <base>\` (\`--name sfx_pump\` -> \`sfx_pump.mp3\`) rather than renaming files afterwards;
+  an existing file is never overwritten (the new one gets \`-2\`).
 - Game engines: \`--engine godot\` also writes a Godot 4 SpriteFrames \`.tres\` next to a spritesheet (listed in \`files\`).
   Long jobs: \`--no-wait\` returns \`{id, status}\`; resume with \`ludo jobs wait <id>\`.
 
@@ -181,8 +215,9 @@ ${groups}
   duration-priced models are upper bounds.
 - A spending budget (\`LUDO_MAX_CREDITS\` or \`max_credits\`) stops the CLI once reached: exit code 11. Do not work
   around it; tell the user what was spent (\`ludo spend\`) and ask.
-- \`--n 4\` makes four variations (files \`-v1\`..\`-v4\`, JSON lists each). Look at them, keep the best, delete the rest.
-- Several different assets: write a jobs file and run \`ludo batch jobs.json\` (see \`ludo batch --help\`).
+- \`--n 4\` makes four variations (files \`-v1\`..\`-v4\`, JSON lists each; with \`--name\`, \`<name>-v1\`..). Look at them, keep the best, delete the rest.
+- Several different assets: write a jobs file and run \`ludo batch jobs.json\` (see \`ludo batch --help\`); a job's
+  \`"name"\` names its files.
 
 ## Exit codes
 0 ok, 1 error, 2 bad usage, 3 auth, 4 rejected by the API, 5 not enough credits, 6 job failed (credits refunded;

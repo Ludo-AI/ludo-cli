@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Parsed } from "./args.js";
+import { fileBaseName, type Parsed } from "./args.js";
 import { absolutizeBody, findAsset, logFile, readAssets } from "./assets.js";
 import { budgetLimit, readSpend, resetSpend, spendFile } from "./budget.js";
 import { findCommand, type Command } from "./commands.js";
@@ -216,6 +216,7 @@ export const BATCH_HELP = [
   "",
   "`command` is \"<group> <command>\" or the API id; the other keys are the command's fields",
   "(snake_case or kebab-case). File paths are relative to jobs.json. .ludo.json defaults apply.",
+  "An optional \"name\" names that job's saved files, like --name (sfx_sword.mp3).",
   "The spending guard checks the total before anything runs; a failed item does not stop the",
   "others. --concurrency sets how many run at once (default 4, at most 50).",
   ""
@@ -241,7 +242,9 @@ export function loadBatch(ctx: Ctx, parsed: Parsed, file: string, commands: Comm
   const preps = items.map((item: any, i: number) => {
     const where = `${file} item ${i + 1}`;
     if (!item || typeof item !== "object" || typeof item.command !== "string") throw new CliError(`${where}: needs a "command"`, EXIT.USAGE, BATCH_HELP);
-    const { command: name, ...fields } = item;
+    // "name" names the saved files, like --name; it is not sent to the API.
+    const { command: name, name: fileName, ...fields } = item;
+    const base = fileName === undefined ? undefined : fileBaseName(String(fileName), `${where}: "name"`);
     const { command } = findCommand(commands, name.trim().split(/\s+/));
     if (!command) throw specMismatch(`${where}: unknown command "${name}"`);
     if (!command.isJob) throw new CliError(`${where}: \`${name}\` is not a generation`, EXIT.USAGE);
@@ -255,7 +258,8 @@ export function loadBatch(ctx: Ctx, parsed: Parsed, file: string, commands: Comm
       const fix = (v: unknown) => (typeof v === "string" ? containedPath(root, baseDir, v, `${where}, field ${snake}`) : v);
       fields[key] = Array.isArray(fields[key]) ? fields[key].map(fix) : fix(fields[key]);
     }
-    return prepare(ctx, command, empty, [], [{ values: fields, source: where }]);
+    const prep = prepare(ctx, command, empty, [], [{ values: fields, source: where }]);
+    return base ? { ...prep, name: base } : prep;
   });
   return { preps, limit };
 }

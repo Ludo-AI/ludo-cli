@@ -13,7 +13,7 @@ import { exitNow, handleSignals, onExit } from "./shutdown.js";
 import { armTelemetry, sendTelemetry } from "./telemetry.js";
 import { CliError, EXIT, specMismatch } from "./errors.js";
 import { makeCtx, printJson, runBatch, runCommand, runJobWait, type Ctx } from "./generate.js";
-import { agentHelp, commandHelp, groupHelp, mainHelp } from "./help.js";
+import { agentHelp, BUILTIN_HELP, commandHelp, groupHelp, mainHelp } from "./help.js";
 import { flushNotes, latestVersion } from "./notices.js";
 import { loadProject } from "./project.js";
 import { embeddedSpecPath, loadSpec } from "./spec.js";
@@ -148,7 +148,7 @@ async function preview(ctx: Ctx, parsed: Parsed, words: string[]): Promise<numbe
   const flag = (name: string) => parsed.flags.get(name)?.find(v => v !== "\u0000flag");
   if (!file || ctx.globals.help) {
     process.stdout.write("Usage: ludo preview <file.png> [--grid <cols>x<rows>] [--fps <n>] [--frames <n>]\n\nDraws a PNG in the terminal. Spritesheets saved by ludo play automatically;\nfor other sheets pass --grid (and --fps, default 10).\n");
-    return file ? EXIT.OK : EXIT.USAGE;
+    return ctx.globals.help ? EXIT.OK : EXIT.USAGE;
   }
   if (!fs.existsSync(file)) throw new CliError(`file not found: ${file}`, EXIT.USAGE);
   if (!ctx.vis.enabled) {
@@ -291,6 +291,10 @@ async function main(argv: string[]): Promise<number> {
   const [first, second] = words;
   if (["version", "login", "logout", "billing", "update", "spec", "help", "agent-help", "preview", "skill", "feedback", "init", "assets", "spend", "batch"].includes(first)) commandLabel = first;
 
+  if (globals.help && BUILTIN_HELP[first]) {
+    process.stdout.write(BUILTIN_HELP[first]);
+    return EXIT.OK;
+  }
   if (first === "version" || argv.includes("--version") || argv.includes("-v")) {
     process.stdout.write(`${VERSION}\n`);
     return EXIT.OK;
@@ -348,6 +352,7 @@ async function main(argv: string[]): Promise<number> {
       return globals.help ? EXIT.OK : EXIT.USAGE;
     }
     if (globals.n !== undefined) throw new CliError("--n does not apply to a batch; list each job instead", EXIT.USAGE);
+    if (globals.name) throw new CliError("--name does not apply to a batch; give each job its own \"name\"", EXIT.USAGE);
     if (!globals.wait) throw new CliError("ludo batch waits for its jobs; drop --no-wait", EXIT.USAGE);
     const { preps, limit } = loadBatch(pctx, parsed, words[1], commands);
     return runBatch(pctx, preps, limit);
