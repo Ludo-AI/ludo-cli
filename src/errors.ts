@@ -1,3 +1,6 @@
+import path from "node:path";
+import { configDir } from "./config.js";
+
 // Stable exit codes. Agents branch on these, so never renumber one: add new
 // codes at the end.
 export const EXIT = {
@@ -51,7 +54,12 @@ export function localFsError(err: unknown): CliError | undefined {
   if (!reason) return undefined;
   const target = e?.path ? ` ${e.path}` : "";
   const verb = e?.syscall ? `${e.syscall}${target}` : `access${target}`;
-  return new CliError(`Could not ${verb}: ${reason}.`, EXIT.ERROR, "Save somewhere writable with --out <dir>, or fix the folder's permissions.");
+  // The saved login lives in the config folder, which --out doesn't move.
+  const inConfig = !!e?.path && path.resolve(e.path).startsWith(path.resolve(configDir()));
+  const hint = inConfig
+    ? "Set LUDO_CONFIG_DIR to a folder you can write to, or fix the folder's permissions."
+    : "Save somewhere writable with --out <dir>, or fix the folder's permissions.";
+  return new CliError(`Could not ${verb}: ${reason}.`, EXIT.ERROR, hint);
 }
 
 export function specMismatch(message: string, hint?: string): CliError {

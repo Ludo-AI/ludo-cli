@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { buildCommands, commandName, findCommand } from "../dist/commands.js";
 import { parseArgv, resolveFlags } from "../dist/args.js";
+import { CliError, EXIT } from "../dist/errors.js";
 
 const spec = JSON.parse(fs.readFileSync(new URL("../spec/openapi.json", import.meta.url), "utf8"));
 const commands = buildCommands(spec);
@@ -92,4 +93,11 @@ test("--input supplies the body and flags override it", () => {
   fs.writeFileSync(file, JSON.stringify({ prompt: "from file", image_type: "sprite" }));
   const r = resolveFlags(byId("createImage"), parseArgv(["--input", file.pathname, "--prompt", "from flag"]), []);
   assert.deepEqual(r.body, { prompt: "from flag", image_type: "sprite" });
+});
+
+test("a missing --input or @file is a usage error, not a crash", () => {
+  const c = byId("createImage");
+  assert.throws(() => resolveFlags(c, parseArgv(["--input", "/nope/body.json"]), []), err => err instanceof CliError && err.exitCode === EXIT.USAGE && /--input: file not found: \/nope\/body\.json/.test(err.message));
+  const dir = new URL("./fixtures/", import.meta.url).pathname;
+  assert.throws(() => resolveFlags(c, parseArgv(["--input", dir]), []), /is a folder, not a file/);
 });

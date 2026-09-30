@@ -195,7 +195,7 @@ function coerce(field: Field, raw: string, type = field.type): unknown {
     }
     case "object":
     case "array": {
-      const text = raw.startsWith("@") ? fs.readFileSync(raw.slice(1), "utf8") : raw;
+      const text = raw.startsWith("@") ? readUserFile(raw.slice(1), field.flag) : raw;
       try {
         return JSON.parse(text);
       } catch {
@@ -231,8 +231,21 @@ function readStdin(): string {
   return stdinText;
 }
 
+// A file the person named on the command line: a wrong path is their typo,
+// not a CLI bug, so it is a usage error rather than a crash report.
+function readUserFile(file: string, flag: string): string {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") throw new CliError(`${flag}: file not found: ${file}`, EXIT.USAGE);
+    if (code === "EISDIR") throw new CliError(`${flag}: ${file} is a folder, not a file`, EXIT.USAGE);
+    throw err;
+  }
+}
+
 function readInput(input: string): Record<string, unknown> {
-  const text = input === "-" ? readStdin() : fs.readFileSync(input, "utf8");
+  const text = input === "-" ? readStdin() : readUserFile(input, "--input");
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
