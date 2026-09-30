@@ -1,6 +1,6 @@
 {
   "name": "@ludoai/cli",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Command-line access to the Ludo AI API for humans and coding agents: game sprites, animations, 3D models, video and audio.",
   "keywords": [
     "ludo",
