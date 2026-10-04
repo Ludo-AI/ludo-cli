@@ -33,6 +33,20 @@ test("command names are unique", () => {
   }
 });
 
+test("a live spec whose operations collide still reaches each of them", () => {
+  const live = structuredClone(spec);
+  const rotate = live.paths["/assets/sprite/rotate"].post;
+  live.paths["/assets/sprite/new-view"] = { post: { ...structuredClone(rotate), operationId: "rotateSpritesheet" } };
+  const cmds = buildCommands(live);
+  const name = id => cmds.find(c => c.operationId === id).name;
+  assert.equal(name("rotateSprite"), "rotate");
+  assert.equal(name("rotateSpritesheet"), "rotate-spritesheet");
+  assert.equal(findCommand(cmds, ["sprite", "rotate-spritesheet"]).command.operationId, "rotateSpritesheet");
+
+  live.paths["/assets/sprite/new-view"].post["x-cli-name"] = "rotate-sheet";
+  assert.equal(buildCommands(live).find(c => c.operationId === "rotateSpritesheet").name, "rotate-sheet");
+});
+
 test("commandName keeps the verb when nothing is left", () => {
   assert.equal(commandName("docs", "docs"), "docs");
 });

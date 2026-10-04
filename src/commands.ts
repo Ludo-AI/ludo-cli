@@ -243,7 +243,20 @@ export function buildCommands(spec: Spec): Command[] {
     }
   }
   dropSharedCreate(commands);
+  dedupeNames(commands);
   return commands;
+}
+
+// The spec is loaded live, so a new operation can reduce to a name that is
+// already taken (rotateSpritesheet became a second `sprite rotate`) and
+// findCommand would never reach it. The first keeps the short name; later ones
+// fall back to every word of their operationId (`sprite rotate-spritesheet`).
+function dedupeNames(commands: Command[]) {
+  const seen = new Set<string>();
+  for (const c of commands) {
+    if (seen.has(`${c.group} ${c.name}`)) c.name = splitWords(c.operationId).join("-");
+    seen.add(`${c.group} ${c.name}`);
+  }
 }
 
 // When every command in a group starts with "create" (audio: createMusic,
