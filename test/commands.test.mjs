@@ -36,15 +36,17 @@ test("command names are unique", () => {
 test("a live spec whose operations collide still reaches each of them", () => {
   const live = structuredClone(spec);
   const rotate = live.paths["/assets/sprite/rotate"].post;
-  live.paths["/assets/sprite/new-view"] = { post: { ...structuredClone(rotate), operationId: "rotateSpritesheet" } };
+  // rotateSprites reduces to `sprite rotate` too (the group noun is dropped),
+  // the way rotateSpritesheet did before the spec gave it an x-cli-name.
+  live.paths["/assets/sprite/rotate-many"] = { post: { ...structuredClone(rotate), operationId: "rotateSprites" } };
   const cmds = buildCommands(live);
   const name = id => cmds.find(c => c.operationId === id).name;
   assert.equal(name("rotateSprite"), "rotate");
-  assert.equal(name("rotateSpritesheet"), "rotate-spritesheet");
-  assert.equal(findCommand(cmds, ["sprite", "rotate-spritesheet"]).command.operationId, "rotateSpritesheet");
+  assert.equal(name("rotateSprites"), "rotate-sprites");
+  assert.equal(findCommand(cmds, ["sprite", "rotate-sprites"]).command.operationId, "rotateSprites");
 
-  live.paths["/assets/sprite/new-view"].post["x-cli-name"] = "rotate-sheet";
-  assert.equal(buildCommands(live).find(c => c.operationId === "rotateSpritesheet").name, "rotate-sheet");
+  live.paths["/assets/sprite/rotate-many"].post["x-cli-name"] = "rotate-many";
+  assert.equal(buildCommands(live).find(c => c.operationId === "rotateSprites").name, "rotate-many");
 });
 
 test("commandName keeps the verb when nothing is left", () => {

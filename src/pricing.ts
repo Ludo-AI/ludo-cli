@@ -47,7 +47,9 @@ export function parseModelRates(text: string): ModelRate[] {
       id: modelId(m[1]),
       rate: Number(m[2]),
       minimum: Number(m[4] || m[5] || 0),
-      shortest: Number(m[3] || 0),
+      // Newer specs state only the minimum charge ("minimum charge 9 credits
+      // per generation"); the duration table still starts at the shortest.
+      shortest: Number(m[3] || 0) || (seconds.length ? Math.min(...seconds) : 0),
       longest: seconds.length ? Math.max(...seconds) : 0
     });
   }
