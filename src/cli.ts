@@ -367,7 +367,7 @@ async function main(argv: string[]): Promise<number> {
     }
     ctx.api.requireKey();
     const results = [];
-    for (const file of words.slice(2)) results.push({ path: file, url: await uploadFile(ctx.api, file, "", ctx.log) });
+    for (const file of words.slice(2)) results.push({ path: file, url: await uploadFile(ctx.api, file, "", ctx.log, { reuse: false }) });
     if (ctx.jsonOut) printJson(results, false);
     else results.forEach(r => process.stdout.write(`${r.url}\n`));
     return EXIT.OK;

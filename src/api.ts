@@ -3,6 +3,7 @@ import path from "node:path";
 import { VERSION } from "./config.js";
 import { CliError, EXIT, exitCodeForStatus } from "./errors.js";
 import { observeHeaders, upgradeRequired } from "./notices.js";
+import { reuseOrUpload, uploadKey } from "./upload-cache.js";
 
 export interface ApiResponse {
   status: number;
@@ -11,6 +12,10 @@ export interface ApiResponse {
 
 export class Api {
   constructor(private apiUrl: string, private apiKey: string | undefined) {}
+
+  get baseUrl(): string {
+    return this.apiUrl;
+  }
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
     const headers: Record<string, string> = {
@@ -109,7 +114,14 @@ export function apiError(res: ApiResponse): CliError {
       ? "Your plan does not include API access. Change plan with `ludo billing`."
       : "Not enough credits. Buy credits or set up auto top-up with `ludo billing`; `ludo account` shows your balance.";
   }
-  if (res.status === 429) hint = b?.code === "PENDING_JOBS_LIMIT" ? "Too many jobs queued at once; wait for some to finish (`ludo jobs list`)." : "Rate limited; slow down and retry shortly.";
+  if (res.status === 429) {
+    if (b?.code === "PENDING_JOBS_LIMIT") hint = "Too many jobs queued at once; wait for some to finish (`ludo jobs list`).";
+    else if (typeof b?.reset_at === "string" && !Number.isNaN(Date.parse(b.reset_at))) {
+      // The server names the limit and when it lifts: a daily cap is hours
+      // away, and retrying before then only fails again.
+      hint = `Rate limited until ${new Date(b.reset_at).toLocaleString()}; retrying earlier fails again.`;
+    } else hint = "Rate limited; slow down and retry shortly.";
+  }
   return new CliError(String(message).replace(/^Error:\s*/, ""), exitCodeForStatus(res.status), hint, b);
 }
 
@@ -142,8 +154,17 @@ export function mimeFor(file: string, fieldName = ""): string | undefined {
 
 // Uploads a local file through createUpload and returns its public URL:
 // ask the API for an upload session, then PUT the bytes straight to storage.
-// Both steps are safe to repeat, so each gets one retry.
-export async function uploadFile(api: Api, file: string, fieldName = "", log?: (msg: string) => void): Promise<string> {
+// Both steps are safe to repeat, so each gets one retry. A file uploaded
+// before with the same content is not uploaded again (see upload-cache);
+// `reuse: false` (`ludo files upload`, which promises a fresh 7-day URL)
+// always uploads.
+export async function uploadFile(
+  api: Api,
+  file: string,
+  fieldName = "",
+  log?: (msg: string) => void,
+  opts: { reuse?: boolean } = {}
+): Promise<string> {
   let stat: fs.Stats;
   try {
     stat = fs.statSync(file);
@@ -164,9 +185,18 @@ export async function uploadFile(api: Api, file: string, fieldName = "", log?: (
     );
   }
 
-  log?.(`Uploading ${path.basename(file)} (${formatBytes(stat.size)})`);
-  const { body: session } = await api.call("POST", "/assets/uploads", { body: { mime_type: mime, size: stat.size }, retry: true });
   const bytes = fs.readFileSync(file);
+  return reuseOrUpload(
+    uploadKey(api.baseUrl, mime, bytes),
+    bytes.length,
+    () => putNewUpload(api, file, mime, bytes, log),
+    { reuse: opts.reuse, onReuse: () => log?.(`Reusing the earlier upload of ${path.basename(file)}`) }
+  );
+}
+
+async function putNewUpload(api: Api, file: string, mime: string, bytes: Buffer<ArrayBuffer>, log?: (msg: string) => void): Promise<string> {
+  log?.(`Uploading ${path.basename(file)} (${formatBytes(bytes.length)})`);
+  const { body: session } = await api.call("POST", "/assets/uploads", { body: { mime_type: mime, size: bytes.length }, retry: true });
   const putOnce = () =>
     fetch(session.upload_url, {
       method: "PUT",

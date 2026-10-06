@@ -28,6 +28,7 @@ let loginOutcome = "approved";
 let flakyPolls = 0;
 let flakyUploads = 0;
 let flakyJobGets = 0;
+let rateLimitedUploads = false;
 const ACCOUNT = {
   credits: { available: 1840.5, plan_credits: 2000, used: 460, extra: 300.5, resets_at: 1790000000, team_pool: false, paused: false, grace_until: null },
   plan: { name: "Pro", api_access: true },
@@ -124,6 +125,16 @@ before(async () => {
       res.writeHead(200);
       return res.end("{}");
     }
+    if (req.method === "POST" && url.pathname === "/api/assets/uploads" && rateLimitedUploads) {
+      return json(res, 429, {
+        message: "Error: Rate limit reached: 500 requests per 1 day on POST /api/assets/uploads. Try again in 5 h. Contact us if you need more volume.",
+        code: "RATE_LIMITED",
+        limit: 500,
+        window_seconds: 86400,
+        retry_after: 18000,
+        reset_at: "2026-10-07T01:00:00.000Z"
+      });
+    }
     if (req.method === "POST" && url.pathname === "/api/assets/uploads" && flakyUploads > 0) {
       flakyUploads--;
       return json(res, 502, { message: "backend_connection_closed_before_data_sent_to_client" });
@@ -140,6 +151,11 @@ before(async () => {
     if (req.method === "PUT" && url.pathname === "/upload/u1") {
       blobs.set("/files/u1.png", raw);
       res.writeHead(200);
+      return res.end();
+    }
+    if (req.method === "HEAD" && url.pathname.startsWith("/files/")) {
+      const blob = blobs.get(url.pathname);
+      res.writeHead(blob ? 200 : 404, blob ? { "content-length": blob.length } : {});
       return res.end();
     }
     if (req.method === "GET" && url.pathname.startsWith("/files/")) {
@@ -751,6 +767,68 @@ test("importing the CLI's modules sends nothing: only the ludo command reports",
     process.env = saved;
   }
   assert.ok(!seen.slice(from).some(s => s.path === "/api/cli/events" || s.path === "/api/42/envelope/"));
+});
+
+test("the same file is uploaded once and its URL reused, until it changes or is gone", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-reuse-"));
+  const src = path.join(cwd, "photo.png");
+  fs.writeFileSync(src, PNG);
+  const uploads = from => seen.slice(from).filter(s => s.path === "/api/assets/uploads").length;
+  const submitted = from => JSON.parse(seen.slice(from).filter(s => s.path === "/api/assets/image/remove-background").pop().raw).image;
+  const removeBg = () => run(["image", "remove-background", "--image", src, "--json"], {}, cwd);
+
+  let from = seen.length;
+  polls = 0;
+  assert.equal((await removeBg()).code, 0);
+  assert.equal(uploads(from), 1);
+
+  // Same bytes: no createUpload call, the same URL goes in the request.
+  from = seen.length;
+  polls = 0;
+  const again = await removeBg();
+  assert.equal(again.code, 0, again.stderr);
+  assert.equal(uploads(from), 0);
+  assert.equal(submitted(from), `${base}/files/u1.png`);
+  assert.ok(seen.slice(from).some(s => s.method === "HEAD" && s.path === "/files/u1.png"), "checked the file is still there");
+
+  // Gone from storage (expired, deleted): uploaded again.
+  blobs.delete("/files/u1.png");
+  from = seen.length;
+  polls = 0;
+  assert.equal((await removeBg()).code, 0);
+  assert.equal(uploads(from), 1);
+
+  // Different content under the same name: a new upload.
+  fs.writeFileSync(src, Buffer.concat([PNG, Buffer.from([0])]));
+  from = seen.length;
+  polls = 0;
+  assert.equal((await removeBg()).code, 0);
+  assert.equal(uploads(from), 1);
+
+  // Turned off: always uploads.
+  from = seen.length;
+  polls = 0;
+  assert.equal((await run(["image", "remove-background", "--image", src, "--json"], { LUDO_UPLOAD_CACHE: "0" }, cwd)).code, 0);
+  assert.equal(uploads(from), 1);
+
+  // `ludo files upload` promises a fresh 7-day URL, so it never reuses.
+  from = seen.length;
+  assert.equal((await run(["files", "upload", src], {}, cwd)).code, 0);
+  assert.equal(uploads(from), 1);
+});
+
+test("a rate-limited upload says when the limit lifts", async () => {
+  const src = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-src-")), "photo.png");
+  fs.writeFileSync(src, PNG);
+  rateLimitedUploads = true;
+  try {
+    const { code, stderr } = await run(["image", "remove-background", "--image", src]);
+    assert.equal(code, 8);
+    assert.match(stderr, /500 requests per 1 day on POST \/api\/assets\/uploads/);
+    assert.match(stderr, /Rate limited until .+; retrying earlier fails again/);
+  } finally {
+    rateLimitedUploads = false;
+  }
 });
 
 test("an upload that meets a 502 is retried once and goes through", async () => {
