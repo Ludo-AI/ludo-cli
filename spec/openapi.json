@@ -4013,7 +4013,7 @@
           "frame_size": {
             "type": "number",
             "format": "integer",
-            "description": "Size of each frame in pixels (width and height). It sizes the exported frames only - it does not change how the sprite is generated. 0 is maximum resolution. -1 is AI 1.5x upscaling. -9 is True Size: frames keep the size and position of the input frame, untrimmed, so the spritesheet lines up exactly with the input image - use it (not margin_ratio_mode \"none\") whenever the output must align with your input; it works with any margin mode. Exporting larger than the input image adds no detail: do not pick a size above the input's own resolution, and 0 or -1 gain nothing on inputs under 512 px. True Size crops at the input image's edges, so anything the animation adds beyond them (an aura, a spell effect, a swung weapon) is cut off: use a fixed size or 0 for those. adjustSpritesheet re-exports a finished animation at another size for free.",
+            "description": "Size of the sprite in pixels, not of the frame: it sets how big the character is drawn in the exported sheet, and each frame also holds the space around the sprite, so frames come out larger than this value. It changes the export only, not how the sprite is generated. 0 is maximum resolution. -1 is AI 1.5x upscaling. -9 is True Size: frames keep the size and position of the input frame, untrimmed, so the spritesheet lines up exactly with the input image - use it (not margin_ratio_mode \"none\") whenever the output must align with your input; it works with any margin mode. Exporting larger than the input image adds no detail: do not pick a size above the input's own resolution, and 0 or -1 gain nothing on inputs under 512 px. True Size crops at the input image's edges, so anything the animation adds beyond them (an aura, a spell effect, a swung weapon) is cut off: use a fixed size or 0 for those. adjustSpritesheet re-exports a finished animation at another size for free.",
             "default": 0,
             "enum": [
               32,
@@ -4261,7 +4261,7 @@
           "frame_size": {
             "type": "number",
             "format": "integer",
-            "description": "Size of each frame in pixels (width and height). It sizes the exported frames only - it does not change how the sprite is generated. 0 is maximum resolution. -1 is AI 1.5x upscaling. -9 is True Size: frames keep the size and position of the input frame, untrimmed, so the spritesheet lines up exactly with the input image - use it (not margin_ratio_mode \"none\") whenever the output must align with your input; it works with any margin mode. Exporting larger than the input image adds no detail: do not pick a size above the input's own resolution, and 0 or -1 gain nothing on inputs under 512 px. True Size crops at the input image's edges, so anything the animation adds beyond them (an aura, a spell effect, a swung weapon) is cut off: use a fixed size or 0 for those. adjustSpritesheet re-exports a finished animation at another size for free.",
+            "description": "Size of the sprite in pixels, not of the frame: it sets how big the character is drawn in the exported sheet, and each frame also holds the space around the sprite, so frames come out larger than this value. It changes the export only, not how the sprite is generated. 0 is maximum resolution. -1 is AI 1.5x upscaling. -9 is True Size: frames keep the size and position of the input frame, untrimmed, so the spritesheet lines up exactly with the input image - use it (not margin_ratio_mode \"none\") whenever the output must align with your input; it works with any margin mode. Exporting larger than the input image adds no detail: do not pick a size above the input's own resolution, and 0 or -1 gain nothing on inputs under 512 px. True Size crops at the input image's edges, so anything the animation adds beyond them (an aura, a spell effect, a swung weapon) is cut off: use a fixed size or 0 for those. adjustSpritesheet re-exports a finished animation at another size for free.",
             "default": 0,
             "enum": [
               32,
@@ -4612,7 +4612,7 @@
           "frame_size": {
             "type": "number",
             "format": "integer",
-            "description": "Size of each frame in pixels (width and height). 0 is maximum resolution. Exporting larger than the input image adds no detail: do not pick a size above the input's own resolution, and 0 gains nothing on inputs under 512 px. True Size is not available here: the image is not the first frame of the result, so there is nothing to align to.",
+            "description": "Size of the sprite in pixels, not of the frame: it sets how big the character is drawn in the exported sheet, and each frame also holds the space around the sprite, so frames come out larger than this value. 0 is maximum resolution. Exporting larger than the input image adds no detail: do not pick a size above the input's own resolution, and 0 gains nothing on inputs under 512 px. True Size is not available here: the image is not the first frame of the result, so there is nothing to align to.",
             "default": 0,
             "enum": [
               32,
@@ -4860,7 +4860,7 @@
           "frame_size": {
             "type": "number",
             "format": "integer",
-            "description": "Size of each frame in pixels (width and height). 0 is for maximum resolution. Omit to keep the source spritesheet's frame size.",
+            "description": "Size of the sprite in pixels, not of the frame - it sets how big the character is drawn, and each frame also holds the space around it, so frames come out larger than this value. 0 is for maximum resolution. Omit to keep the source spritesheet's setting.",
             "enum": [
               32,
               64,
@@ -4969,7 +4969,7 @@
           "frame_size": {
             "type": "number",
             "format": "integer",
-            "description": "Size of each frame in pixels (width and height). 0 is for maximum resolution. Omit to keep the source spritesheet's frame size.",
+            "description": "Size of the sprite in pixels, not of the frame - it sets how big the character is drawn, and each frame also holds the space around it, so frames come out larger than this value. 0 is for maximum resolution. Omit to keep the source spritesheet's setting.",
             "enum": [
               32,
               64,
@@ -5040,7 +5040,7 @@
           "frame_size": {
             "type": "number",
             "format": "integer",
-            "description": "Size of each frame in pixels (width and height). Omit to keep the source's frame size. 0 is maximum resolution. -9 is True Size: frames keep the size and position of the source's input image, so anything the animation adds beyond its edges is cut off - pick a fixed size or 0 to get it back.",
+            "description": "Size of the sprite in pixels, not of the frame: it sets how big the character is drawn, and each frame also holds the space around it, so frames come out larger than this value. Omit to keep the source's setting. 0 is maximum resolution. -9 is True Size: frames keep the size and position of the source's input image, so anything the animation adds beyond its edges is cut off - pick a fixed size or 0 to get it back.",
             "enum": [
               32,
               64,
