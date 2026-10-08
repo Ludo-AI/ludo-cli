@@ -213,7 +213,7 @@ async function update(ctx: Ctx): Promise<number> {
 
 const FEEDBACK_CATEGORIES = ["limitation", "bug", "feature_request", "praise", "other"];
 const FEEDBACK_HELP = [
-  "Usage: ludo feedback <message> [--category <c>] [--operation <id>] [--job <id>]",
+  "Usage: ludo feedback <message> [--category <c>] [--operation <id>] [--job <id>]...",
   "       echo <message> | ludo feedback - [...]",
   "",
   "Sends feedback to the Ludo team: a limitation you hit, a bug, something you'd like",
@@ -221,7 +221,7 @@ const FEEDBACK_HELP = [
   "",
   `  --category   ${FEEDBACK_CATEGORIES.join(", ")} (default: other)`,
   "  --operation  the command or operation it is about, e.g. animateSprite",
-  "  --job        the job id it is about, when there is one",
+  "  --job        a job id it is about; repeat it for each job involved (up to 10)",
   ""
 ].join("\n");
 
@@ -250,12 +250,20 @@ async function feedback(ctx: Ctx, parsed: Parsed, words: string[]): Promise<numb
       "Run `ludo login` (it can create an account), or open an issue at https://github.com/Ludo-AI/ludo-cli/issues"
     );
   }
-  const body: Record<string, string> = { category, message };
+  const body: Record<string, string | string[]> = { category, message };
   const operation = flag("--operation");
-  const job = flag("--job");
+  const jobs = [...new Set((parsed.flags.get("--job") || [])
+    .filter(v => v !== "\u0000flag")
+    .flatMap(v => v.split(","))
+    .map(v => v.trim())
+    .filter(Boolean))];
+  if (jobs.length > 10) throw new CliError(`--job takes at most 10 job ids (got ${jobs.length})`, EXIT.USAGE);
   const agent = agentName();
   if (operation) body.operation = operation.slice(0, 100);
-  if (job) body.job_id = job.slice(0, 64);
+  // job_id alone for one job, so a single-job report also works on an API
+  // from before job_ids.
+  if (jobs.length) body.job_id = jobs[0].slice(0, 64);
+  if (jobs.length > 1) body.job_ids = jobs.map(j => j.slice(0, 64));
   if (agent) body.agent = agent;
   const res = await ctx.api.call("POST", "/assets/feedback", { body });
   if (ctx.jsonOut) printJson(res.body, false);

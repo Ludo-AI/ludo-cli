@@ -37,9 +37,10 @@ they log in or create an account (and pick a plan with API access if needed) and
 10. When you hit a limitation you cannot work around, a bug, or something the user needed that Ludo
    cannot do, send one short report and tell the user you did:
    `ludo feedback "<what you tried, what happened, what would have helped>" --category limitation`
-   (or `bug`, `feature_request`, `praise`, `other`; add `--operation` and `--job <id>` when they
-   apply). It is free but capped at a few a day, so one report per issue, and never include secrets,
-   personal data or file contents.
+   (or `bug`, `feature_request`, `praise`, `other`; add `--operation`, and `--job <id>` for every
+   job the report is about, repeated for each one, so the Ludo team can see what went in and what
+   came out). It is free but capped at a few a day, so one report per issue, and never include
+   secrets, personal data or file contents.
 
 ## Examples
 

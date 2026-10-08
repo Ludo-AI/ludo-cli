@@ -521,6 +521,22 @@ test("feedback posts the message, category and the agent driving the CLI", async
   });
 });
 
+test("feedback sends every --job, repeated or comma-separated, as job_ids", async () => {
+  const from = seen.length;
+  const { code } = await run(["feedback", "Patches", "--category", "bug", "--job", "job-1", "--job", "job-2,job-3", "--job", "job-1"]);
+  assert.equal(code, 0);
+  const sent = seen.slice(from).find(s => s.path === "/api/assets/feedback");
+  const body = JSON.parse(sent.raw);
+  assert.equal(body.job_id, "job-1");
+  assert.deepEqual(body.job_ids, ["job-1", "job-2", "job-3"]);
+});
+
+test("feedback refuses more than 10 jobs", async () => {
+  const jobs = Array.from({ length: 11 }, (_, i) => ["--job", `job-${i}`]).flat();
+  const { code } = await run(["feedback", "Too many", ...jobs]);
+  assert.equal(code, 2);
+});
+
 test("feedback reads the message from stdin with -", async () => {
   const from = seen.length;
   const { code } = await run(["feedback", "-", "--category", "praise"], {}, undefined, "Loved the walk cycle\n");

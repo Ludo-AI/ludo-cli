@@ -214,8 +214,9 @@ code 5) at a terminal, the CLI offers to open that page.
 
 `ludo feedback "<message>"` sends a note to the Ludo team: a limitation you hit, a bug, something
 you'd like Ludo to support, or something that worked well. Add `--category` (limitation, bug,
-feature_request, praise, other), `--operation` and `--job <id>` to point at what it is about, or
-pipe the message in with `ludo feedback -`. It needs a Ludo account (`ludo login`).
+feature_request, praise, other), `--operation` and `--job <id>` (repeat it for each job) to point
+at what it is about, or pipe the message in with `ludo feedback -`. It needs a Ludo account
+(`ludo login`).
 
 ## Usage stats and crash reports
 
