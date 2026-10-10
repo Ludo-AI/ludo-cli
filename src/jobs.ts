@@ -83,14 +83,22 @@ export async function downloadAll(
   for (const [i, url] of urls.entries()) {
     const ext = path.extname(new URL(url).pathname) || "";
     const target = freePath(dir, `${prefix}${suffix(i, urls.length)}`, ext);
+    const failed = (err: any) => new CliError(`Download failed for ${url}: ${err?.cause?.code || err?.message || err}`, EXIT.ERROR);
     let res: Response;
     try {
       res = await fetch(url, { signal: AbortSignal.timeout(5 * 60 * 1000) });
     } catch (err: any) {
-      throw new CliError(`Download failed for ${url}: ${err?.cause?.code || err?.message || err}`, EXIT.ERROR);
+      throw failed(err);
     }
     if (!res.ok) throw new CliError(`Download failed for ${url}: HTTP ${res.status}`, EXIT.ERROR);
-    fs.writeFileSync(target, Buffer.from(await res.arrayBuffer()));
+    // The timeout also covers the body: a slow download can abort here.
+    let data: ArrayBuffer;
+    try {
+      data = await res.arrayBuffer();
+    } catch (err: any) {
+      throw failed(err);
+    }
+    fs.writeFileSync(target, Buffer.from(data));
     log?.(`Saved ${target}`);
     saved.push({ url, path: target });
   }

@@ -652,6 +652,15 @@ test("skill install writes the bundled skill, updates its own copy and protects 
   assert.ok(!fs.existsSync(target));
 });
 
+test("skill install into a config folder that can't be created is a plain error", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-"));
+  fs.writeFileSync(path.join(cwd, "not-a-folder"), "");
+  const r = await run(["skill", "install"], { CLAUDE_CONFIG_DIR: path.join(cwd, "not-a-folder", "claude") }, cwd);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /Could not create .*: part of the path is not a folder/);
+  assert.match(r.stderr, /CLAUDE_CONFIG_DIR/);
+});
+
 // A converter is on every macOS machine (sips); on Linux it needs dwebp,
 // ImageMagick or ffmpeg, which CI images normally carry.
 const { convertToPng } = await import("../dist/tty/image.js");

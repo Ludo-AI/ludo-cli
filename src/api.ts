@@ -63,6 +63,11 @@ export class Api {
       if (Array.isArray(v)) v.forEach(item => url.searchParams.append(k, String(item)));
       else url.searchParams.set(k, String(v));
     }
+    const unreachable = (err: any) => {
+      const e = new CliError(`Could not reach ${this.apiUrl}: ${err?.cause?.code || err?.message || err}`, EXIT.ERROR);
+      e.network = true;
+      return e;
+    };
     let res: Response;
     try {
       res = await fetch(url, {
@@ -72,12 +77,17 @@ export class Api {
         signal: AbortSignal.timeout(opts.timeoutMs || 120_000)
       });
     } catch (err: any) {
-      const e = new CliError(`Could not reach ${this.apiUrl}: ${err?.cause?.code || err?.message || err}`, EXIT.ERROR);
-      e.network = true;
-      throw e;
+      throw unreachable(err);
     }
     observeHeaders(res.headers);
-    const text = await res.text();
+    // The timeout still runs while the body streams in, so a stalled body
+    // fails here too, not only in fetch() (LUDO-CLI-6).
+    let text: string;
+    try {
+      text = await res.text();
+    } catch (err: any) {
+      throw unreachable(err);
+    }
     let body: any = text;
     try {
       body = text ? JSON.parse(text) : null;

@@ -48,8 +48,22 @@ export function installSkill(opts: { project: boolean; force: boolean }): SkillR
     throw new CliError(`${target} exists and was not written by ludo`, EXIT.USAGE, "Pass --force to replace it.");
   }
   if (existing === content) return { path: target, action: "unchanged" };
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, content);
+  try {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content);
+  } catch (err) {
+    // A base folder that can't be resolved (a CLAUDE_CONFIG_DIR on a missing
+    // drive, a broken link): the person's setup, not a crash (LUDO-CLI-7).
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") throw err;
+    throw new CliError(
+      `Could not create ${path.dirname(target)}: ${code === "ENOENT" ? "a folder on the way does not exist" : "part of the path is not a folder"}.`,
+      EXIT.ERROR,
+      opts.project
+        ? "Run it from a project folder you can write to."
+        : "Check that CLAUDE_CONFIG_DIR (or ~/.claude) points to a folder that exists, or install into this project with --project."
+    );
+  }
   return { path: target, action: existing === undefined ? "installed" : "updated" };
 }
 
