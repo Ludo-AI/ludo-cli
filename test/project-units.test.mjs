@@ -54,7 +54,9 @@ test("model price tables parse into rates, minimums and durations", () => {
   const rates = parseModelRates(byId("animateSprite").creditDetail);
   const hydra = rates.find(r => r.id === "hydra");
   assert.deepEqual(hydra, { id: "hydra", rate: 3, minimum: 9, shortest: 3, longest: 5 });
-  assert.equal(rates.find(r => r.id === "forge").minimum, 4);
+  // Current models bill rate x seconds; only legacy ones keep a minimum.
+  assert.equal(rates.find(r => r.id === "forge").minimum, 0);
+  assert.equal(rates.find(r => r.id === "eagle").minimum, 4);
   assert.ok(rates.some(r => r.id === "eagle-audio"));
 });
 
@@ -62,7 +64,8 @@ test("estimates follow the published prices", () => {
   assert.deepEqual(estimatePrice(byId("createImage"), { n: 3 }), { credits: 1.5, exact: true });
   assert.equal(estimatePrice(byId("createMusic"), {}).credits, 3);
   assert.equal(estimatePrice(byId("animateSprite"), { model: "forge", duration: 4 }).credits, 6);
-  assert.equal(estimatePrice(byId("animateSprite"), { model: "forge", duration: 1 }).credits, 4); // minimum charge
+  assert.equal(estimatePrice(byId("animateSprite"), { model: "forge", duration: 1 }).credits, 1.5);
+  assert.equal(estimatePrice(byId("animateSprite"), { model: "eagle", duration: 1 }).credits, 4); // legacy minimum charge
   assert.equal(estimatePrice(byId("createVideo"), { model: "griffin", duration: 2 }).credits, 7.5); // shortest duration
   assert.equal(estimatePrice(byId("editSpritesheet"), { edit_mode: "outpaint", duration: 3 }).credits, 3);
   assert.equal(estimatePrice(byId("upscaleVideo"), {}).credits, undefined);
