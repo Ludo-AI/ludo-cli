@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import { buildCommands } from "../dist/commands.js";
 import { estimatePrice, parseModelRates } from "../dist/pricing.js";
@@ -113,6 +114,34 @@ test("the asset log replaces an entry for the same job and file, and takes over 
   const entries = readAssets(log);
   assert.deepEqual(entries.map(e => [e.file, e.credits]), [["b.png", 1], ["a.png", 2]]);
   assert.ok(!fs.existsSync(`${log}.lock`));
+});
+
+test("the asset log keeps inline base64 once in ludo-inputs/, also for entries an older CLI wrote", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-log-"));
+  const log = path.join(dir, "ludo-assets.json");
+  const png = Buffer.concat([Buffer.from("\x89PNG\r\n\x1a\n", "latin1"), Buffer.alloc(600, 7)]);
+  const webp = Buffer.concat([Buffer.from("RIFF\0\0\0\0WEBPVP8 ", "latin1"), Buffer.alloc(600, 9)]);
+  const dataUri = `data:image/png;base64,${png.toString("base64")}`;
+  const text = "A".repeat(800); // base64 alphabet, but no file type in its bytes
+  const entry = (file, body) => ({ file, command: "c", operation_id: "o", body, job_id: file, created_at: "t" });
+  // An older CLI's log: the same image inlined in every entry.
+  fs.writeFileSync(log, JSON.stringify({ assets: [entry("old-1.png", { initial_image: dataUri }), entry("old-2.png", { initial_image: dataUri })] }));
+  appendAssets(log, [
+    entry("new.png", { initial_image: png.toString("base64"), references: [webp.toString("base64"), "ref.png"], motion_prompt: "walk", note: text })
+  ]);
+  const entries = readAssets(log);
+  const hash = b => crypto.createHash("sha256").update(b).digest("hex");
+  const pngPath = path.join("ludo-inputs", `${hash(png)}.png`);
+  const webpPath = path.join("ludo-inputs", `${hash(webp)}.webp`);
+  assert.deepEqual(entries.map(e => e.body.initial_image), [pngPath, pngPath, pngPath]);
+  assert.deepEqual(entries[2].body.references, [webpPath, "ref.png"]);
+  assert.equal(entries[2].body.motion_prompt, "walk");
+  assert.equal(entries[2].body.note, text);
+  assert.deepEqual(fs.readFileSync(path.join(dir, pngPath)), png);
+  assert.deepEqual(fs.readFileSync(path.join(dir, webpPath)), webp);
+  assert.deepEqual(fs.readdirSync(path.join(dir, "ludo-inputs")).sort(), [".gitignore", `${hash(png)}.png`, `${hash(webp)}.webp`].sort());
+  assert.equal(fs.readFileSync(path.join(dir, "ludo-inputs", ".gitignore"), "utf8"), "*\n");
+  assert.ok(fs.statSync(log).size < 2000);
 });
 
 test("saved files never overwrite: taken names get -2, -3; a WebP needs its PNG twin free", () => {

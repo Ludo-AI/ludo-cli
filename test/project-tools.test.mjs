@@ -270,6 +270,24 @@ test("every saved file is logged, and ludo assets redo runs the same request wit
   assert.equal(JSON.parse(fs.readFileSync(path.join(cwd, "ludo-assets.json"), "utf8")).assets.length, 2);
 });
 
+test("base64 passed inline is logged as a file in ludo-inputs/, which redo uploads", async () => {
+  const cwd = tmp();
+  fs.writeFileSync(path.join(cwd, ".ludo.json"), "{}");
+  const image = Buffer.concat([PNG, Buffer.alloc(600)]).toString("base64");
+  const from = seen.length;
+  const first = await run(["image", "generate-with-style", "--style-image", image, "--prompt", "a knight"], { cwd });
+  assert.equal(first.code, 0, first.stderr);
+  assert.equal(posts(from, "/api/assets/image/style")[0].body.style_image, image);
+  const log = JSON.parse(fs.readFileSync(path.join(cwd, "ludo-assets.json"), "utf8")).assets;
+  assert.match(log[0].body.style_image, /^ludo-inputs[\\/][0-9a-f]{64}\.png$/);
+  assert.equal(fs.readFileSync(path.join(cwd, log[0].body.style_image)).toString("base64"), image);
+
+  const again = seen.length;
+  const redo = await run(["assets", "redo", log[0].file], { cwd });
+  assert.equal(redo.code, 0, redo.stderr);
+  assert.equal(posts(again, "/api/assets/image/style")[0].body.style_image, `${base}/files/uploaded.png`);
+});
+
 test("ludo init writes the config and agent instructions, and re-running changes nothing", async () => {
   const cwd = tmp();
   fs.mkdirSync(path.join(cwd, ".cursor"));

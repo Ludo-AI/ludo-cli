@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Api } from "./api.js";
 import { CliError, EXIT } from "./errors.js";
+import { extensionFor, looksLikeBase64 } from "./inline.js";
 
 export const TERMINAL = ["succeeded", "failed", "canceled"];
 const LONG_POLL_S = 30;
@@ -107,35 +108,6 @@ export async function downloadAll(
 
 // Inline base64 in a result (hydra's `audio_b64`) is written to a file and
 // replaced by its path, so it never floods an agent's context.
-const MAGIC: [RegExp, string][] = [
-  [/^ID3|^\xff[\xe0-\xff]/, ".mp3"],
-  [/^RIFF.{4}WAVE/s, ".wav"],
-  [/^OggS/, ".ogg"],
-  [/^fLaC/, ".flac"],
-  [/^\x89PNG/, ".png"],
-  [/^GIF8/, ".gif"],
-  [/^\xff\xd8/, ".jpg"],
-  [/^.{4}ftyp/s, ".mp4"],
-  [/^glTF/, ".glb"]
-];
-
-function extensionFor(buffer: Buffer, dataUrlMime?: string): string {
-  if (dataUrlMime) {
-    const sub = dataUrlMime.split("/")[1] || "";
-    const map: Record<string, string> = { mpeg: ".mp3", mp3: ".mp3", wav: ".wav", "x-wav": ".wav", ogg: ".ogg", png: ".png", jpeg: ".jpg", webp: ".webp", mp4: ".mp4" };
-    if (map[sub]) return map[sub];
-  }
-  const head = buffer.subarray(0, 12).toString("latin1");
-  for (const [re, ext] of MAGIC) if (re.test(head)) return ext;
-  return ".bin";
-}
-
-function looksLikeBase64(value: string): boolean {
-  if (/^https?:\/\//i.test(value)) return false;
-  const body = value.replace(/^data:[^,]*,/, "");
-  return /^[A-Za-z0-9+/_-]+={0,2}$/.test(body.slice(0, 4096).replace(/\s+/g, ""));
-}
-
 export function extractInlineFiles(
   result: unknown,
   save: { dir: string; prefix: string } | null,

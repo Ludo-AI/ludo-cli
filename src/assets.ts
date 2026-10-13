@@ -1,6 +1,8 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { CliError, EXIT } from "./errors.js";
+import { extensionFor, looksLikeBase64 } from "./inline.js";
 import { containedPath, writeJsonFile, type Project } from "./project.js";
 
 // `ludo-assets.json`: one entry per file a generation saved, next to the
@@ -10,8 +12,14 @@ import { containedPath, writeJsonFile, type Project } from "./project.js";
 // variation set stays recognisable as one request.
 //
 // Paths are relative to the log, so the project can move.
+//
+// The log is an index, not a store: file content a request carried inline as
+// base64 is kept once in ludo-inputs/ (git-ignored), named by its hash, and the
+// entry holds that path. Copying it into every entry (one per saved file, so once per
+// frame) grew one log past the longest string Node can write.
 
 export const LOG_NAME = "ludo-assets.json";
+export const INPUTS_DIR = "ludo-inputs";
 
 export interface AssetEntry {
   file: string;
@@ -87,18 +95,66 @@ export function withLock<T>(file: string, fn: () => T): T {
   }
 }
 
+// Writes inline file content to ludo-inputs/<sha256><ext> (once) and returns
+// its path relative to the log; undefined for anything that isn't file content.
+// Bare base64 counts only when its first bytes name a file type.
+function storeInline(value: string, logDir: string, memo: Map<string, string>): string | undefined {
+  const known = memo.get(value);
+  if (known) return known;
+  if (value.length < 512 || !looksLikeBase64(value)) return undefined;
+  const m = /^data:([^;,]+)[^,]*,/.exec(value);
+  const buffer = Buffer.from(m ? value.slice(m[0].length) : value, "base64");
+  const ext = extensionFor(buffer, m?.[1]);
+  if (!m && ext === ".bin") return undefined;
+  const rel = path.join(INPUTS_DIR, crypto.createHash("sha256").update(buffer).digest("hex") + ext);
+  const abs = path.join(logDir, rel);
+  if (!fs.existsSync(abs)) {
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    // Copies of what was sent, not project files: the folder keeps itself out of git.
+    const ignore = path.join(path.dirname(abs), ".gitignore");
+    if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, "*\n");
+    const tmp = `${abs}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, buffer);
+    fs.renameSync(tmp, abs);
+  }
+  memo.set(value, rel);
+  return rel;
+}
+
+// Every body value (or array item) that is inline file content becomes a path.
+// Runs over the whole log on each write, so a log from an older CLI shrinks the
+// first time it is written.
+function storeInlineBodies(entries: AssetEntry[], logDir: string): AssetEntry[] {
+  const memo = new Map<string, string>();
+  const one = (v: unknown) => (typeof v === "string" ? (storeInline(v, logDir, memo) ?? v) : v);
+  return entries.map(e => {
+    if (!e.body) return e;
+    let changed = false;
+    const body: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(e.body)) {
+      body[k] = Array.isArray(v) ? v.map(one) : one(v);
+      if (Array.isArray(v) ? (body[k] as unknown[]).some((x, i) => x !== v[i]) : body[k] !== v) changed = true;
+    }
+    return changed ? { ...e, body } : e;
+  });
+}
+
+function writeAssets(file: string, entries: AssetEntry[]) {
+  writeJsonFile(file, { assets: storeInlineBodies(entries, path.dirname(file)) });
+}
+
 // Adds entries; one already there for the same job and file is replaced.
 export function appendAssets(file: string, entries: AssetEntry[]) {
   if (!entries.length) return;
   const key = (e: AssetEntry) => `${e.job_id ?? ""}\u0000${e.file}`;
   withLock(file, () => {
     const incoming = new Set(entries.map(key));
-    writeJsonFile(file, { assets: [...readAssets(file).filter(e => !incoming.has(key(e))), ...entries] });
+    writeAssets(file, [...readAssets(file).filter(e => !incoming.has(key(e))), ...entries]);
   });
 }
 
 export function updateAssets(file: string, fn: (entries: AssetEntry[]) => AssetEntry[]) {
-  withLock(file, () => writeJsonFile(file, { assets: fn(readAssets(file)) }));
+  withLock(file, () => writeAssets(file, fn(readAssets(file))));
 }
 
 // Local file paths in a request body, rewritten relative to the log (and back).

@@ -172,6 +172,8 @@ Every file a generation saves is recorded in `ludo-assets.json` (next to `.ludo.
 output folder): the command, its flags, the job and what it cost. `ludo assets` lists them;
 `ludo assets redo <file> --prompt "…in blue"` makes one again with changes. Files saved by
 `ludo jobs wait` are listed but can't be replayed, since the request that made them is unknown.
+Inputs passed inline as base64 are kept once in `ludo-inputs/` beside the log (git-ignored), and
+the log points to them.
 
 ### Variations and batches
 
