@@ -68,7 +68,11 @@ test("estimates follow the published prices", () => {
   assert.equal(estimatePrice(byId("animateSprite"), { model: "forge", duration: 1 }).credits, 1.5);
   assert.equal(estimatePrice(byId("animateSprite"), { model: "eagle", duration: 1 }).credits, 4); // legacy minimum charge
   assert.equal(estimatePrice(byId("createVideo"), { model: "griffin", duration: 2 }).credits, 7.5); // shortest duration
-  assert.equal(estimatePrice(byId("editSpritesheet"), { edit_mode: "outpaint", duration: 3 }).credits, 3);
+  // Fixes bill the source sheet's length, whatever duration is asked for.
+  assert.deepEqual(estimatePrice(byId("editSpritesheet"), { edit_mode: "outpaint", duration: 3 }), { credits: 5, exact: false, note: "at most, for the source's length" });
+  // Improve is flat too, not hydra's 3/s, and the model sent is ignored.
+  assert.equal(estimatePrice(byId("editSpritesheet"), { edit_mode: "improve", model: "forge" }).credits, 5);
+  assert.equal(estimatePrice(byId("editSpritesheet"), { edit_mode: "prompt", model: "hydra", duration: 4 }).credits, 12);
   assert.equal(estimatePrice(byId("upscaleVideo"), {}).credits, undefined);
 });
 

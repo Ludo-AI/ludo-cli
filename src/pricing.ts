@@ -76,13 +76,19 @@ export function estimatePrice(command: Command, body: Record<string, unknown>): 
   const requested = typeof body.duration === "number" ? body.duration : (fieldDefault(command, "duration") as number | undefined);
   const longest = Math.max(0, ...rates.map(r => r.longest));
 
-  // editSpritesheet's loop fixes and outpaints: flat per second, model ignored.
-  const flat = /edit_mode "fix_loop" \/ "outpaint": flat ([\d.]+) credits? per second/i.exec(text);
+  // editSpritesheet's loop fixes, outpaints and improves: flat per second,
+  // model ignored, held for and capped at the source sheet's video length, so
+  // `duration` does not change the price and the longest duration stands in.
   const mode = body.edit_mode ?? fieldDefault(command, "edit_mode");
-  if (flat && (mode === "fix_loop" || mode === "outpaint")) {
-    const seconds = requested ?? longest;
-    if (!seconds) return { exact: false, note: "the price depends on the source's duration" };
-    return { credits: round1(Number(flat[1]) * seconds), exact: requested !== undefined, note: requested === undefined ? "at most, for the longest duration" : undefined };
+  const flat =
+    mode === "fix_loop" || mode === "outpaint"
+      ? /edit_mode "fix_loop" \/ "outpaint": flat ([\d.]+) credits? per second/i.exec(text)
+      : mode === "improve"
+        ? /edit_mode "improve"[^:;]*: flat ([\d.]+) credits? per second/i.exec(text)
+        : null;
+  if (flat) {
+    if (!longest) return { exact: false, note: "the price depends on the source's duration" };
+    return { credits: round1(Number(flat[1]) * longest), exact: false, note: "at most, for the source's length" };
   }
 
   if (rates.length) {
