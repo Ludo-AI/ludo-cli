@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { CliError, EXIT } from "./errors.js";
-import { extensionFor, looksLikeBase64 } from "./inline.js";
+import { extensionFor, isInlineFile } from "./inline.js";
 import { containedPath, writeJsonFile, type Project } from "./project.js";
 
 // `ludo-assets.json`: one entry per file a generation saved, next to the
@@ -101,11 +101,10 @@ export function withLock<T>(file: string, fn: () => T): T {
 function storeInline(value: string, logDir: string, memo: Map<string, string>): string | undefined {
   const known = memo.get(value);
   if (known) return known;
-  if (value.length < 512 || !looksLikeBase64(value)) return undefined;
+  if (!isInlineFile(value)) return undefined;
   const m = /^data:([^;,]+)[^,]*,/.exec(value);
   const buffer = Buffer.from(m ? value.slice(m[0].length) : value, "base64");
   const ext = extensionFor(buffer, m?.[1]);
-  if (!m && ext === ".bin") return undefined;
   const rel = path.join(INPUTS_DIR, crypto.createHash("sha256").update(buffer).digest("hex") + ext);
   const abs = path.join(logDir, rel);
   if (!fs.existsSync(abs)) {

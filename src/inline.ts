@@ -31,3 +31,11 @@ export function looksLikeBase64(value: string): boolean {
   const body = value.replace(/^data:[^,]*,/, "");
   return /^[A-Za-z0-9+/_-]+={0,2}$/.test(body.slice(0, 4096).replace(/\s+/g, ""));
 }
+
+// File content passed inline in a request: a data: URI, or bare base64 whose
+// first bytes name a file type. Short strings never count.
+export function isInlineFile(value: string): boolean {
+  if (value.length < 512 || !looksLikeBase64(value)) return false;
+  const m = /^data:([^;,]+)[^,]*,/.exec(value);
+  return !!m || extensionFor(Buffer.from(value.slice(0, 64), "base64")) !== ".bin";
+}

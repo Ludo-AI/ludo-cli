@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CliError, EXIT } from "./errors.js";
+import { isInlineFile } from "./inline.js";
 
 // A project's `.ludo.json`, found by walking up from the current directory
 // (never above the home directory). Every agent session and teammate in the
@@ -106,9 +107,9 @@ export const isUrl = (value: string) => /^(https?:|data:)/i.test(value);
 // made absolute against `base` and required to stay inside `root`: a cloned
 // repo must not be able to make ludo upload ~/.ssh/id_rsa or write files
 // elsewhere, through ../ or a symlink. Paths people type as flags are theirs
-// and are not checked. URLs pass through.
+// and are not checked. URLs and inline base64 file content pass through.
 export function containedPath(root: string, base: string, value: string, label: string): string {
-  if (isUrl(value)) return value;
+  if (isUrl(value) || isInlineFile(value)) return value;
   const abs = path.resolve(base, value.startsWith("@") ? value.slice(1) : value);
   const rel = path.relative(realish(root), realish(abs));
   if (rel.startsWith("..") || path.isAbsolute(rel)) {

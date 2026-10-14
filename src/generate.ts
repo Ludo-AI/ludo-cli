@@ -18,6 +18,7 @@ import { AUDIO_EXT, copyText, IMAGE_EXT, openFile, playAudio } from "./tty/actio
 import { creditsBar, nextStep, spinner } from "./tty/flair.js";
 import { writeGodotSpriteFrames } from "./tty/godot.js";
 import { convertToPng, loadImage } from "./tty/image.js";
+import { isInlineFile } from "./inline.js";
 import { exitNow } from "./shutdown.js";
 import { noteJob } from "./telemetry.js";
 import { canShowImages, gridFromResult, previewFile, previewSkipped, stampGrid } from "./tty/preview.js";
@@ -87,6 +88,10 @@ function isLocalPathish(value: string): boolean {
   return !/^(https?:|data:)/i.test(value);
 }
 
+// Once per run: an agent that inlines base64 puts the whole file in its own
+// context on every call, and bypasses the upload cache a path would hit.
+let base64Hinted = false;
+
 // Local files in file-accepting fields are uploaded and replaced by their URL.
 // `@path` forces a file even where the value would otherwise be ambiguous.
 // Returns a new body; the original keeps its local paths for the asset log.
@@ -96,6 +101,10 @@ export async function uploadLocalFiles(ctx: Ctx, command: Command, input: Record
     const value = body[field.name];
     const one = async (v: unknown): Promise<unknown> => {
       if (typeof v !== "string") return v;
+      if (!base64Hinted && isInlineFile(v)) {
+        base64Hinted = true;
+        ctx.log("Tip: pass a file path instead of base64; the CLI uploads it once and reuses the upload.");
+      }
       const explicit = v.startsWith("@");
       const candidate = explicit ? v.slice(1) : v;
       if (!isLocalPathish(candidate)) return v;

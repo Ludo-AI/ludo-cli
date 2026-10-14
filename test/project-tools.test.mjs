@@ -288,6 +288,27 @@ test("base64 passed inline is logged as a file in ludo-inputs/, which redo uploa
   assert.equal(posts(again, "/api/assets/image/style")[0].body.style_image, `${base}/files/uploaded.png`);
 });
 
+test("inline base64 in a file field is sent as is, with one tip per run, and none with --quiet or a path", async () => {
+  const cwd = tmp();
+  const image = Buffer.concat([PNG, Buffer.alloc(600)]).toString("base64");
+  const job = n => ({ command: "image generate-with-style", style_image: image, prompt: `knight ${n}` });
+  fs.writeFileSync(path.join(cwd, "jobs.json"), JSON.stringify([job(1), job(2), job(3)]));
+  const tip = /Tip: pass a file path instead of base64/g;
+  const from = seen.length;
+  const batch = await run(["batch", "jobs.json"], { cwd });
+  assert.equal(batch.code, 0, batch.stderr);
+  assert.equal(batch.stderr.match(tip)?.length, 1);
+  // A jobs file's base64 is file content, not a path to resolve against the jobs file.
+  assert.deepEqual(posts(from, "/api/assets/image/style").map(p => p.body.style_image), [image, image, image]);
+  const quiet = await run(["batch", "jobs.json", "--quiet"], { cwd });
+  assert.equal(quiet.code, 0, quiet.stderr);
+  assert.doesNotMatch(quiet.stderr, tip);
+  fs.writeFileSync(path.join(cwd, "style.png"), Buffer.from(image, "base64"));
+  const fromPath = await run(["image", "generate-with-style", "--style-image", "style.png", "--prompt", "a knight"], { cwd });
+  assert.equal(fromPath.code, 0, fromPath.stderr);
+  assert.doesNotMatch(fromPath.stderr, tip);
+});
+
 test("ludo init writes the config and agent instructions, and re-running changes nothing", async () => {
   const cwd = tmp();
   fs.mkdirSync(path.join(cwd, ".cursor"));
