@@ -29,8 +29,10 @@ export function gridFromResult(result: any): Grid | undefined {
     if (side * side !== frames) return undefined;
     cols = rows = side;
   }
+  // A sheet says its frame rate (Directional Sprites) or its duration.
+  const rate = Number(result?.fps);
   const duration = Number(result?.duration);
-  const fps = duration > 0 ? frames / duration : 10;
+  const fps = rate > 0 ? rate : duration > 0 ? frames / duration : 10;
   return { cols, rows, frames, fps: Math.round(fps * 100) / 100 };
 }
 

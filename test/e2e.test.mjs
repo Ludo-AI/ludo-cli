@@ -80,6 +80,24 @@ before(async () => {
       res.writeHead(200);
       return res.end(SHEET);
     }
+    if (req.method === "POST" && url.pathname === "/api/assets/sprite/directional") {
+      // Directional Sprites: one sheet per direction, each with its fps.
+      const sheet = d => ({ direction: d, spritesheet_url: `${base}/files/dir-${d}.png`, num_frames: 4, num_cols: 2, num_rows: 2, fps: 8, render_3d: { style_id: "cel_anime", direction: d } });
+      return json(res, 200, { id: "job-direct01", status: "succeeded", task_type: "createDirectionalSprites", credits_charged: 2, result: { sheets: [sheet("SW"), sheet("N")] } });
+    }
+    if (req.method === "POST" && url.pathname === "/api/assets/sprite/directional-preview") {
+      // A newer preview of the same account replaced this one.
+      if (JSON.parse(raw).style_id === "replaced") {
+        res.writeHead(204);
+        return res.end();
+      }
+      const preview = d => ({ direction: d, frame_urls: [1, 2].map(n => `${base}/files/pv-${d}-${n}.png`), num_frames: 2, fps: 1.6, render_3d: { style_id: "cel_anime", direction: d } });
+      return json(res, 200, { previews: [preview("SW"), preview("N")] });
+    }
+    if (req.method === "GET" && /^\/files\/(dir|pv)-/.test(url.pathname)) {
+      res.writeHead(200);
+      return res.end(SHEET);
+    }
     if (req.method === "POST" && url.pathname === "/api/cli/auth/start") {
       const body = JSON.parse(raw);
       loginPolls = 0;
@@ -881,4 +899,40 @@ test("a generation submit is never retried: it could run and charge twice", asyn
   const { code } = await run(["image", "remove-background", "--image", "https://example.com/502.png", "--json"], { LUDO_RETRY_DELAY_MS: "1" });
   assert.equal(code, 1);
   assert.equal(seen.slice(from).filter(s => s.path === "/api/assets/image/remove-background").length, 1);
+});
+
+test("directional sprites: files named per direction, each sheet with its grid", async () => {
+  const { code, stdout, stderr, cwd } = await run(["sprite", "directional", "--model", "https://example.com/hero.glb", "--directions", "SW", "--directions", "N", "--json"]);
+  assert.equal(code, 0, stderr);
+  const submit = seen.filter(s => s.path === "/api/assets/sprite/directional").pop();
+  assert.deepEqual(JSON.parse(submit.raw).directions, ["SW", "N"]);
+  const out = JSON.parse(stdout);
+  const paths = out.files.map(f => path.basename(f.path)).sort();
+  assert.deepEqual(paths, ["createDirectionalSprites-job-dire-N.png", "createDirectionalSprites-job-dire-SW.png"]);
+  for (const f of out.files) {
+    const grid = readGrid(fs.readFileSync(path.join(cwd, f.path)));
+    assert.deepEqual(grid, { cols: 2, rows: 2, frames: 4, fps: 8 });
+  }
+});
+
+test("directional preview saves each direction's frames, though it is not a job", async () => {
+  const { code, stdout, stderr, cwd } = await run(["sprite", "directional-preview", "--model", "https://example.com/hero.glb", "--json"]);
+  assert.equal(code, 0, stderr);
+  const out = JSON.parse(stdout);
+  assert.equal(out.status, "succeeded");
+  assert.deepEqual(out.files.map(f => path.basename(f.path)), [
+    "directional-preview-SW-f1.png",
+    "directional-preview-SW-f2.png",
+    "directional-preview-N-f1.png",
+    "directional-preview-N-f2.png"
+  ]);
+  for (const f of out.files) assert.ok(fs.existsSync(path.join(cwd, f.path)));
+  const submit = seen.filter(s => s.path === "/api/assets/sprite/directional-preview").pop();
+  assert.equal(JSON.parse(submit.raw).async, undefined, "a preview is not submitted as a job");
+});
+
+test("a directional preview replaced by a newer one exits as canceled", async () => {
+  const { code, stdout } = await run(["sprite", "directional-preview", "--model", "https://example.com/hero.glb", "--style-id", "replaced", "--json"]);
+  assert.equal(code, 7);
+  assert.equal(JSON.parse(stdout).status, "canceled");
 });
