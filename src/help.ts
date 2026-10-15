@@ -199,6 +199,10 @@ ${groups}
   Name them with \`--name <base>\` (\`--name sfx_pump\` -> \`sfx_pump.mp3\`) rather than renaming files afterwards;
   an existing file is never overwritten (the new one gets \`-2\`).
 - Game engines: \`--engine godot\` also writes a Godot 4 SpriteFrames \`.tres\` next to a spritesheet (listed in \`files\`).
+- Directional Sprites (a character seen from up to 8 directions that line up): make a rigged model
+  (\`ludo model create --image hero.png --rig\`), pick a style (\`ludo sprite directional-styles\`), check the look
+  with \`ludo sprite directional-preview\` (free; saves the frames as images to look at; one preview at a time per
+  account), then render \`ludo sprite directional\` (one sheet per direction, files named \`-SW\`, \`-N\`, ...).
   Long jobs: \`--no-wait\` returns \`{id, status}\`; resume with \`ludo jobs wait <id>\`.
 
 ## Output

@@ -237,7 +237,11 @@ export async function saveResult(ctx: Ctx, job: any, label: string, naming: Nami
     const inline = extractInlineFiles(job.result, globals.download ? { dir, prefix } : null, ctx.log);
     record.result = inline.result;
     const urls = collectUrls(record.result);
-    const downloaded: SavedResult["files"] = globals.download && urls.length ? await downloadAll(urls, dir, prefix, ctx.log, naming.suffix) : [];
+    // Files of a per-direction result are named after their direction
+    // (-SW, -N); variations keep their own -v1, -v2.
+    const directions = directionsOf(record.result);
+    const suffix = naming.suffix || (directions.size ? (i: number) => (directions.has(urls[i]) ? `-${directions.get(urls[i])}` : "") : undefined);
+    const downloaded: SavedResult["files"] = globals.download && urls.length ? await downloadAll(urls, dir, prefix, ctx.log, suffix) : [];
     downloaded.forEach((f, i) => (f.variation = naming.variationOf?.(i)));
     // WebP results also get a PNG copy side by side: engines and tools take
     // PNG everywhere, and the PNG is what carries a spritesheet's grid.
@@ -251,15 +255,25 @@ export async function saveResult(ctx: Ctx, job: any, label: string, naming: Nami
       }
     }
     // A spritesheet remembers its grid inside the PNG, for `ludo preview`
-    // and engine exports.
-    const grid = gridFromResult(job.result);
-    const sheetFile = downloaded.find(f => f.url === job.result?.spritesheet_url);
-    const sheetPng = sheetFile && (pngOf.get(sheetFile.path) || (/\.png$/i.test(sheetFile.path) ? sheetFile.path : undefined));
-    if (grid && sheetPng) {
-      stampGrid(sheetPng, grid);
-      sheet = sheetPng;
+    // and engine exports. Directional Sprites answer one sheet per direction.
+    const sheetResults: any[] = Array.isArray(job.result?.sheets) ? job.result.sheets : [job.result];
+    const stamped: { file: SavedFile & { variation?: number }; png: string; grid: ReturnType<typeof gridFromResult> }[] = [];
+    for (const result of sheetResults) {
+      const grid = gridFromResult(result);
+      const sheetFile = downloaded.find(f => f.url === result?.spritesheet_url);
+      const sheetPng = sheetFile && (pngOf.get(sheetFile.path) || (/\.png$/i.test(sheetFile.path) ? sheetFile.path : undefined));
+      if (grid && sheetFile && sheetPng) {
+        stampGrid(sheetPng, grid);
+        stamped.push({ file: sheetFile, png: sheetPng, grid });
+      }
     }
-    const engineFiles = globals.engine ? await engineExport(ctx, sheet, grid) : [];
+    sheet = stamped[0]?.png;
+    const sheetFile = stamped[0]?.file;
+    const engineFiles = !globals.engine
+      ? []
+      : stamped.length
+      ? (await Promise.all(stamped.map(s => engineExport(ctx, s.png, s.grid)))).flat()
+      : await engineExport(ctx, undefined, undefined);
     const constant = naming.variationOf?.(-1);
     const rel = (p: string) => path.relative(process.cwd(), p) || p;
     files = [
@@ -275,6 +289,19 @@ export async function saveResult(ctx: Ctx, job: any, label: string, naming: Nami
     if (sheet) sheet = rel(sheet);
   }
   return { record, sheet, files };
+}
+
+// Directional Sprites results hold one item per direction (`sheets`,
+// `images`, a preview's `previews`), each naming its `direction`: the URL of
+// every file in an item, mapped to that direction.
+export function directionsOf(result: any): Map<string, string> {
+  const found = new Map<string, string>();
+  const items = [result?.sheets, result?.images, result?.previews].filter(Array.isArray).flat();
+  for (const item of items) {
+    if (!item || typeof item.direction !== "string") continue;
+    for (const url of collectUrls(item)) if (!found.has(url)) found.set(url, item.direction);
+  }
+  return found;
 }
 
 // Records what a finished job spent and the files it saved.
@@ -473,6 +500,7 @@ export async function runCommand(ctx: Ctx, command: Command, parsed: Parsed, pos
     if (["succeeded", "failed", "canceled"].includes(response.status)) return finishJob(ctx, response, prep.label, prep);
     return runJobWait(ctx, response.id, prep.label, prep);
   }
+  if (command.operationId === "previewDirectionalSprites") return finishPreview(ctx, response, prep);
   if (command.operationId === "getAccount" && !ctx.jsonOut) {
     const c = response?.credits || {};
     if (ctx.vis.enabled && typeof c.available === "number") process.stderr.write(`  ${creditsBar(c.available, (c.plan_credits || 0) + (c.extra || 0))}\n`);
@@ -481,6 +509,44 @@ export async function runCommand(ctx: Ctx, command: Command, parsed: Parsed, pos
   }
   // Some operations answer 200 with no body (validate-api-key).
   printJson(response === null || response === "" ? { ok: true } : response, prettyJson(ctx));
+  return EXIT.OK;
+}
+
+// A Directional Sprites preview is not a job, but its answer is files: each
+// direction's frames as images. They are saved like a job's (named
+// <name>-<direction>-f1..), so an agent can look at them. An empty answer
+// (204) means a newer preview of the same account replaced this one.
+async function finishPreview(ctx: Ctx, response: any, prep: Prepared): Promise<number> {
+  const { globals } = ctx;
+  if (!response || !Array.isArray(response.previews)) {
+    const message = "Preview replaced by a newer one: an account runs one preview at a time.";
+    if (ctx.jsonOut) printJson({ status: "canceled", message }, prettyJson(ctx));
+    else process.stdout.write(`✗ ${message}\n`);
+    return EXIT.JOB_CANCELED;
+  }
+  const urls = collectUrls(response);
+  const directions = directionsOf(response);
+  const frameNo = new Map<string, number>();
+  const suffix = (i: number) => {
+    const direction = directions.get(urls[i]) || "frame";
+    const n = (frameNo.get(direction) || 0) + 1;
+    frameNo.set(direction, n);
+    return `-${direction}-f${n}`;
+  };
+  const prefix = prep.name || "directional-preview";
+  const downloaded = globals.download && urls.length ? await downloadAll(urls, ctx.outDir, prefix, ctx.log, suffix) : [];
+  const rel = (p: string) => path.relative(process.cwd(), p) || p;
+  const files = downloaded.map(f => ({ url: f.url, path: rel(f.path), absolute_path: path.resolve(f.path) }));
+  if (ctx.jsonOut) {
+    printJson({ status: "succeeded", result: response, files }, prettyJson(ctx));
+    return EXIT.OK;
+  }
+  process.stdout.write(`✓ preview: ${response.previews.length} direction${response.previews.length === 1 ? "" : "s"} (free)\n`);
+  for (const f of files) process.stdout.write(`  ${f.path}\n`);
+  if (!files.length) printJson(response, true);
+  if (ctx.vis.enabled && files[0] && (await previewFile(files[0].path, ctx.vis)) === "unsupported") {
+    process.stderr.write(`${previewSkipped()}\n`);
+  }
   return EXIT.OK;
 }
 
