@@ -6,10 +6,26 @@
     "ludo",
     "ludo-ai",
     "game-assets",
+    "game-development",
+    "gamedev",
     "sprites",
+    "spritesheet",
+    "pixel-art",
+    "sprite-animation",
+    "3d-models",
+    "sound-effects",
+    "game-music",
+    "godot",
+    "unity",
     "cli",
     "ai",
-    "agents"
+    "agents",
+    "agent-skills",
+    "claude-code",
+    "codex",
+    "cursor",
+    "gemini-cli",
+    "mcp"
   ],
   "homepage": "https://ludo.ai",
   "repository": {
@@ -35,7 +51,8 @@
     "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
     "test": "npm run build && node --test",
     "sync-spec": "node scripts/sync-spec.mjs",
-    "prepublishOnly": "npm test"
+    "prepublishOnly": "npm test",
+    "version": "node scripts/sync-manifest-versions.mjs && git add .claude-plugin/plugin.json gemini-extension.json"
   },
   "devDependencies": {
     "@types/node": "^22.20.4",

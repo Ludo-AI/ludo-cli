@@ -247,7 +247,10 @@ To turn both off, set `LUDO_TELEMETRY=0` (or the standard `DO_NOT_TRACK=1`).
   project's `.claude/skills` with `--project`, to share it through the repository). Re-run it after
   updating the CLI. It is also available as a plugin: `/plugin marketplace add Ludo-AI/ludo-cli`,
   then `/plugin install ludo@ludo`.
-- Other agents: point them at `ludo agent-help`, or copy
+- Codex, Cursor, Gemini CLI, GitHub Copilot and other agents that read skills:
+  `npx skills add Ludo-AI/ludo-cli` installs the same skill for the agents it finds.
+- Gemini CLI: `gemini extensions install https://github.com/Ludo-AI/ludo-cli`.
+- Anything else: point it at `ludo agent-help`, or copy
   [`skills/ludo/SKILL.md`](skills/ludo/SKILL.md) into your agent instructions.
 
 ## How it stays current
@@ -265,3 +268,8 @@ npm test                                  # build + unit and end-to-end tests ag
 LUDO_API_URL=http://localhost:5000 node dist/cli.js --help   # against a local backend
 LUDO_SPEC=path/to/openapi.json node dist/cli.js --help       # against a local spec file
 ```
+
+## License
+
+The code is [MIT](LICENSE). The Ludo name and logo are trademarks of Ludo AI and are not covered by
+that license: a fork is welcome, but under its own name.
