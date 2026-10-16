@@ -1,7 +1,7 @@
 {
   "name": "ludo",
   "description": "Generate game assets (sprites, animations, 3D models, video, audio) with the Ludo AI `ludo` CLI.",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "author": {
     "name": "Ludo AI",
     "url": "https://ludo.ai"
