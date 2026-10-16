@@ -1,0 +1,26 @@
+{
+  "name": "ludo",
+  "displayName": "Ludo AI",
+  "version": "0.1.10",
+  "description": "Generate game assets with the Ludo AI ludo CLI: sprites and spritesheet animations, images, directional sprites, 3D models with rigging and animation, video, sound effects, music and voices.",
+  "author": {
+    "name": "Ludo AI",
+    "email": "support@ludo.ai"
+  },
+  "homepage": "https://ludo.ai/developers/cli",
+  "repository": "https://github.com/Ludo-AI/ludo-cli",
+  "license": "MIT",
+  "keywords": [
+    "game-development",
+    "gamedev",
+    "game-assets",
+    "sprites",
+    "spritesheet",
+    "pixel-art",
+    "3d-models",
+    "sound-effects",
+    "godot",
+    "unity"
+  ],
+  "logo": "assets/logo.png"
+}

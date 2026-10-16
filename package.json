@@ -52,7 +52,7 @@
     "test": "npm run build && node --test",
     "sync-spec": "node scripts/sync-spec.mjs",
     "prepublishOnly": "npm test",
-    "version": "node scripts/sync-manifest-versions.mjs && git add .claude-plugin/plugin.json gemini-extension.json"
+    "version": "node scripts/sync-manifest-versions.mjs && git add .claude-plugin/plugin.json .cursor-plugin/plugin.json gemini-extension.json"
   },
   "devDependencies": {
     "@types/node": "^22.20.4",
