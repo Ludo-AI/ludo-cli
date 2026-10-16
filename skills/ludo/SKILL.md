@@ -7,7 +7,8 @@ description: Generate game assets with the Ludo AI `ludo` CLI - sprites, sprites
 
 Use the `ludo` command (install: `npm install -g @ludoai/cli`, or prefix commands with `npx @ludoai/cli`).
 It needs a prior `ludo login` or an API key in `LUDO_API_KEY`. If a command exits with code 3, do not
-ask for a key in the chat: ask the user to run `! ludo login` themselves. It opens their browser, where
+ask for a key in the chat: ask the user to run `ludo login` in their own terminal (in Claude Code,
+`! ludo login`). It opens their browser, where
 they log in or create an account (and pick a plan with API access if needed) and approve the CLI.
 
 ## Workflow
@@ -27,7 +28,8 @@ they log in or create an account (and pick a plan with API access if needed) and
    `ludo account`, and the price with `--dry-run`. Cap a command with `--max-credits <n>`.
    Exit code 11 means the spending budget is reached: stop, tell the user (`ludo spend`), and ask.
 6. Exit code 5 means not enough credits, or a plan without API access. Do not retry: tell the user, and
-   that `! ludo billing` opens the page to buy credits, change plan or turn on auto top-up.
+   that `ludo billing` (run in their terminal) opens the page to buy credits, change plan or turn on auto
+   top-up.
 7. Before generating, check `ludo assets`: the asset may already exist. `ludo assets redo <file>
    --prompt "..."` remakes one with changes.
 8. To choose between options, `--n 3` makes three variations (`-v1`..`-v3`). Look at them, keep the
