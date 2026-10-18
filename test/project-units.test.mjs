@@ -63,6 +63,9 @@ test("model price tables parse into rates, minimums and durations", () => {
 
 test("estimates follow the published prices", () => {
   assert.deepEqual(estimatePrice(byId("createImage"), { n: 3 }), { credits: 1.5, exact: true });
+  const editImage = { fields: [], creditDetail: "This endpoint consumes 0.5 credits per result; 1 credit per result with a mask" };
+  assert.equal(estimatePrice(editImage, { n: 2 }).credits, 1);
+  assert.equal(estimatePrice(editImage, { n: 2, mask: "./mask.png" }).credits, 2);
   assert.equal(estimatePrice(byId("createMusic"), {}).credits, 3);
   assert.equal(estimatePrice(byId("animateSprite"), { model: "forge", duration: 4 }).credits, 6);
   assert.equal(estimatePrice(byId("animateSprite"), { model: "forge", duration: 1 }).credits, 1.5);

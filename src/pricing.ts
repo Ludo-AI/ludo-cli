@@ -4,6 +4,7 @@ import type { Command } from "./commands.js";
 // pricing the spec publishes for each operation (x-credit-description):
 //
 //   "consumes 0.5 credits per result"   x the request's n
+//   "...; 1 credit per result with a mask"   the same, when a mask is sent
 //   "consumes 3 credits per call"       flat
 //   "Available models: Hydra (3 credits/s, shortest duration 3s, so 9 credits
 //    minimum; 3s = 9, ...) · Forge (1.5 credits/s, minimum charge 4 credits
@@ -67,7 +68,9 @@ export function estimatePrice(command: Command, body: Record<string, unknown>): 
   const perResult = /consumes ([\d.]+) credits? per result/i.exec(text);
   if (perResult) {
     const n = Number(body.n ?? fieldDefault(command, "n") ?? 1) || 1;
-    return { credits: round1(Number(perResult[1]) * n), exact: true };
+    // editImage with a mask runs inpainting, which has its own rate.
+    const masked = body.mask ? /([\d.]+) credits? per result with a mask/i.exec(text) : null;
+    return { credits: round1(Number((masked || perResult)[1]) * n), exact: true };
   }
   const perCall = /consumes ([\d.]+) credits? per call/i.exec(text);
   if (perCall) return { credits: Number(perCall[1]), exact: true };
