@@ -61,6 +61,32 @@ function fieldDefault(command: Command, name: string): unknown {
   return command.fields.find(f => f.name === name)?.default;
 }
 
+// create3DModel prices each model and an optional rig:
+//   "consumes 4 credits per call with model "prop" (default), 15 credits per
+//    call with model "hero"; rig true adds 1 credit when the model comes back
+//    rigged"
+// The rig credit is charged only when the result is rigged, so with rig the
+// estimate is an upper bound.
+function perCallPrice(command: Command, body: Record<string, unknown>, text: string, first: number): Price {
+  const byModel = [...text.matchAll(/([\d.]+) credits? per call with model "([^"]+)"/gi)];
+  let credits = first;
+  const notes: string[] = [];
+  if (byModel.length) {
+    const model = String(body.model ?? fieldDefault(command, "model") ?? "");
+    const known = byModel.find(m => m[2] === model);
+    credits = known ? Number(known[1]) : Math.max(...byModel.map(m => Number(m[1])));
+    if (!known) notes.push("the model's price is not listed, so the dearest model's price is used");
+  }
+  const rig = /rig true adds ([\d.]+) credits?/i.exec(text);
+  const rigged = body.rig ?? fieldDefault(command, "rig");
+  if (rig && (rigged === true || rigged === "true")) {
+    credits += Number(rig[1]);
+    notes.push("the rig credit is charged only if the model comes back rigged");
+  }
+  if (!notes.length) return { credits: round1(credits), exact: true };
+  return { credits: round1(credits), exact: false, note: `at most (${notes.join("; ")})` };
+}
+
 export function estimatePrice(command: Command, body: Record<string, unknown>): Price {
   const text = command.creditDetail || command.credits || "";
   if (!text) return { credits: 0, exact: true };
@@ -73,7 +99,7 @@ export function estimatePrice(command: Command, body: Record<string, unknown>): 
     return { credits: round1(Number((masked || perResult)[1]) * n), exact: true };
   }
   const perCall = /consumes ([\d.]+) credits? per call/i.exec(text);
-  if (perCall) return { credits: Number(perCall[1]), exact: true };
+  if (perCall) return perCallPrice(command, body, text, Number(perCall[1]));
 
   const rates = parseModelRates(text);
   const requested = typeof body.duration === "number" ? body.duration : (fieldDefault(command, "duration") as number | undefined);

@@ -67,6 +67,15 @@ test("estimates follow the published prices", () => {
   assert.equal(estimatePrice(editImage, { n: 2 }).credits, 1);
   assert.equal(estimatePrice(editImage, { n: 2, mask: "./mask.png" }).credits, 2);
   assert.equal(estimatePrice(byId("createMusic"), {}).credits, 3);
+  // create3DModel: per model, plus the rig credit as an upper bound.
+  const create3D = byId("create3DModel");
+  assert.deepEqual(estimatePrice(create3D, {}), { credits: 4, exact: true });
+  assert.deepEqual(estimatePrice(create3D, { model: "hero" }), { credits: 15, exact: true });
+  const heroRig = estimatePrice(create3D, { model: "hero", rig: true });
+  assert.equal(heroRig.credits, 16);
+  assert.equal(heroRig.exact, false);
+  assert.equal(estimatePrice(create3D, { rig: true }).credits, 5);
+  assert.equal(estimatePrice(create3D, { model: "titan" }).credits, 15); // unlisted: dearest
   assert.equal(estimatePrice(byId("animateSprite"), { model: "forge", duration: 4 }).credits, 6);
   assert.equal(estimatePrice(byId("animateSprite"), { model: "forge", duration: 1 }).credits, 1.5);
   assert.equal(estimatePrice(byId("animateSprite"), { model: "eagle", duration: 1 }).credits, 4); // legacy minimum charge

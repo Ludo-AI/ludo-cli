@@ -138,6 +138,11 @@ function flagDescription(f: Field): string {
   const parts = [f.description || ""];
   if (f.isFile) parts.push("Accepts a local file path (uploaded for you) or a URL.");
   if (f.enum) parts.push(`One of: ${f.enum.join(", ")}.`);
+  const hasMin = typeof f.minimum === "number";
+  const hasMax = typeof f.maximum === "number";
+  if (hasMin && hasMax) parts.push(`Range: ${f.minimum} to ${f.maximum}.`);
+  else if (hasMin) parts.push(`Minimum: ${f.minimum}.`);
+  else if (hasMax) parts.push(`Maximum: ${f.maximum}.`);
   if (f.default !== undefined && f.default !== null && f.default !== "") parts.push(`Default: ${JSON.stringify(f.default)}.`);
   if (f.type === "array" && !f.isFile) parts.push("Repeat the flag, or pass a JSON array.");
   return parts.filter(Boolean).join(" ");
