@@ -47,8 +47,21 @@ export function spendFile(project: Project | undefined): string {
   return path.join(stateDir(project, cacheDir()), "spend.jsonl");
 }
 
+// The ledger is bookkeeping: a folder the CLI cannot write to (a read-only
+// project, Windows Controlled Folder Access) must not stop a command after its
+// job was submitted, so a failed write is a warning, given once per run.
+let warnedUnwritable = false;
+
 function append(project: Project | undefined, line: LedgerLine) {
-  fs.appendFileSync(spendFile(project), JSON.stringify(line) + "\n");
+  try {
+    fs.appendFileSync(spendFile(project), JSON.stringify(line) + "\n");
+  } catch (err) {
+    if (warnedUnwritable) return;
+    warnedUnwritable = true;
+    process.stderr.write(
+      `Warning: could not record spending (${(err as NodeJS.ErrnoException)?.code || (err as Error)?.message}); \`ludo spend\` and the budget will not count this run.\n`
+    );
+  }
 }
 
 export function recordEstimate(project: Project | undefined, jobId: unknown, credits: number | undefined) {

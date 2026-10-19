@@ -5,7 +5,7 @@ import fs from "node:fs";
 import { buildCommands } from "../dist/commands.js";
 import { estimatePrice, parseModelRates } from "../dist/pricing.js";
 import { compareVersions, decodeNotice, pendingLines } from "../dist/notices.js";
-import { totalOf } from "../dist/budget.js";
+import { recordEstimate, recordFinal, totalOf } from "../dist/budget.js";
 import { validateConfig } from "../dist/project.js";
 import { upsertSection } from "../dist/workspace.js";
 import { parsePick } from "../dist/generate.js";
@@ -91,6 +91,21 @@ test("estimates follow the published prices", () => {
 test("a total is unknown when any part is", () => {
   assert.deepEqual(totalOf([{ credits: 2, exact: true }, { credits: 1.5, exact: true }]), { credits: 3.5, exact: true, note: undefined });
   assert.equal(totalOf([{ credits: 2, exact: true }, { exact: false, note: "?" }]).credits, undefined);
+});
+
+test("an unwritable spend ledger warns once instead of failing the command", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-ro-"));
+  fs.chmodSync(root, 0o500);
+  t.after(() => {
+    fs.chmodSync(root, 0o700);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const project = { root, file: path.join(root, ".ludo.json"), config: {} };
+  const written = [];
+  t.mock.method(process.stderr, "write", msg => written.push(String(msg)) || true);
+  assert.doesNotThrow(() => recordEstimate(project, "job-1", 2));
+  assert.doesNotThrow(() => recordFinal(project, { id: "job-1", status: "succeeded", credits_charged: 1.5 }));
+  assert.equal(written.filter(m => m.includes("could not record spending")).length, 1);
 });
 
 test("config validation names unknown fields and bad values", () => {
