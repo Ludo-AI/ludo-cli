@@ -1,7 +1,7 @@
 {
   "name": "ludo",
   "displayName": "Ludo AI",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Generate game assets with the Ludo AI ludo CLI: sprites and spritesheet animations, images, directional sprites, 3D models with rigging and animation, video, sound effects, music and voices.",
   "author": {
     "name": "Ludo AI",
