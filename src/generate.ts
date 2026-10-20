@@ -685,12 +685,18 @@ export async function runVariations(ctx: Ctx, prep: Prepared, n: number): Promis
   ctx.api.requireKey();
   // Upload local files once; every job reuses the URLs.
   const uploaded = await uploadLocalFiles(ctx, command, prep.body);
+  // The API dedupes by request_id, so jobs sharing the caller's id would all
+  // come back as the first one. Each job gets <id>-v<its first variation>;
+  // a single job keeps the id as given.
+  const requestId = typeof uploaded.request_id === "string" && uploaded.request_id ? uploaded.request_id : undefined;
   const units: Unit[] = preps.map((p, i) => {
     const { offset, count } = chunks[i];
     const base = prep.name || `${command.operationId}-${set}`;
+    const body: Record<string, unknown> = native ? { ...uploaded, n: count } : { ...uploaded };
+    if (requestId && preps.length > 1) body.request_id = `${requestId}-v${offset + 1}`;
     return {
       prep: p,
-      body: native ? { ...uploaded, n: count } : uploaded,
+      body,
       naming: native
         ? { prefix: base, suffix: (j: number) => (j < count ? `-v${offset + j + 1}` : `-x${j + 1}`), variationOf: (j: number) => (j >= 0 && j < count ? offset + j + 1 : undefined) }
         : { prefix: `${base}-v${offset + 1}`, variationOf: () => offset + 1 }

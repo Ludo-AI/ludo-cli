@@ -396,6 +396,24 @@ test("--n uses the API's own n where it exists, splitting above its maximum", as
   for (const f of out.files) assert.match(f.path, new RegExp(`-v${f.variation}\\.png$`));
 });
 
+test("--n with --request-id gives each job its own id, so the API does not dedupe them", async () => {
+  const cwd = tmp();
+  let from = seen.length;
+  let r = await run(["audio", "sound-effect", "--description", "boom", "--request-id", "zap", "--n", "3"], { cwd });
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(posts(from, "/api/audio/sound-effect").map(p => p.body.request_id), ["zap-v1", "zap-v2", "zap-v3"]);
+
+  from = seen.length;
+  r = await run(["image", "generate-with-style", "--style-image", "https://example.com/s.png", "--prompt", "knight", "--request-id", "kn", "--n", "6"], { cwd });
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(posts(from, "/api/assets/image/style").map(p => p.body.request_id), ["kn-v1", "kn-v5"]);
+
+  from = seen.length;
+  r = await run(["image", "generate-with-style", "--style-image", "https://example.com/s.png", "--prompt", "knight", "--request-id", "one", "--n", "3"], { cwd });
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(posts(from, "/api/assets/image/style").map(p => p.body.request_id), ["one"]);
+});
+
 test("--n prices every variation and applies to generations only", async () => {
   const dry = JSON.parse((await run(["audio", "sound-effect", "--description", "boom", "--n", "5", "--dry-run"])).stdout);
   assert.equal(dry.credits, 10);
