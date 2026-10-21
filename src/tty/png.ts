@@ -114,24 +114,41 @@ function paeth(a: number, b: number, c: number): number {
 }
 
 // Reverses the row filters of one (sub-)image in place: `rows` rows of
-// `stride` bytes, each preceded by its filter byte, starting at `start`.
+// `stride` bytes, each preceded by its filter byte, starting at `start`. One
+// tight loop per filter type: this is the hot path of every decode.
 function unfilter(raw: Buffer, start: number, stride: number, rows: number, bpp: number) {
   for (let y = 0; y < rows; y++) {
     const at = start + y * (stride + 1);
     const filter = raw[at];
     const cur = at + 1;
-    const prev = y === 0 ? -1 : cur - (stride + 1);
+    const prev = cur - (stride + 1); // only read when y > 0
     if (filter === 0) continue;
     if (filter > 4) throw new PngError("CORRUPT", `unknown row filter ${filter}`);
-    for (let x = 0; x < stride; x++) {
-      const a = x >= bpp ? raw[cur + x - bpp] : 0;
-      const b = prev >= 0 ? raw[prev + x] : 0;
-      let v = raw[cur + x];
-      if (filter === 1) v += a;
-      else if (filter === 2) v += b;
-      else if (filter === 3) v += (a + b) >> 1;
-      else v += paeth(a, b, x >= bpp && prev >= 0 ? raw[prev + x - bpp] : 0);
-      raw[cur + x] = v & 0xff;
+    if (filter === 1) {
+      for (let x = bpp; x < stride; x++) raw[cur + x] = (raw[cur + x] + raw[cur + x - bpp]) & 0xff;
+    } else if (filter === 2) {
+      if (y > 0) for (let x = 0; x < stride; x++) raw[cur + x] = (raw[cur + x] + raw[prev + x]) & 0xff;
+    } else if (filter === 3) {
+      for (let x = 0; x < stride; x++) {
+        const a = x >= bpp ? raw[cur + x - bpp] : 0;
+        const b = y > 0 ? raw[prev + x] : 0;
+        raw[cur + x] = (raw[cur + x] + ((a + b) >> 1)) & 0xff;
+      }
+    } else if (y === 0) {
+      // Paeth with no row above is Sub.
+      for (let x = bpp; x < stride; x++) raw[cur + x] = (raw[cur + x] + raw[cur + x - bpp]) & 0xff;
+    } else {
+      for (let x = 0; x < bpp && x < stride; x++) raw[cur + x] = (raw[cur + x] + raw[prev + x]) & 0xff;
+      for (let x = bpp; x < stride; x++) {
+        const a = raw[cur + x - bpp];
+        const b = raw[prev + x];
+        const c = raw[prev + x - bpp];
+        const p = a + b - c;
+        const pa = p > a ? p - a : a - p;
+        const pb = p > b ? p - b : b - p;
+        const pc = p > c ? p - c : c - p;
+        raw[cur + x] = (raw[cur + x] + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c)) & 0xff;
+      }
     }
   }
 }
@@ -435,35 +452,60 @@ export function encodePng(img: Image, opts: EncodeOptions = {}): Buffer {
   // row the filter with the smallest sum of absolute signed bytes, libpng's
   // heuristic.
   const raw = Buffer.alloc(height * (stride + 1));
-  const trial = Buffer.alloc(stride);
+  const zero = new Uint8Array(stride);
+  const out = new Uint8Array(stride);
+  // Writes filter f's residuals (what the file stores) into `out`, and
+  // returns their sum of absolute signed values, stopping once it reaches
+  // `limit`. One tight loop per filter: this is the encoder's hot path.
+  // Stores one residual byte and returns its absolute signed value.
+  const put = (x: number, v: number) => {
+    v &= 0xff;
+    out[x] = v;
+    return v < 128 ? v : 256 - v;
+  };
+  const filterRow = (f: number, cur: Uint8Array, prev: Uint8Array, limit: number): number => {
+    let score = 0;
+    let x = 0;
+    if (f === 0) for (; x < stride && score < limit; x++) score += put(x, cur[x]);
+    else if (f === 1) {
+      for (; x < bpp && x < stride; x++) score += put(x, cur[x]);
+      for (; x < stride && score < limit; x++) score += put(x, cur[x] - cur[x - bpp]);
+    } else if (f === 2) for (; x < stride && score < limit; x++) score += put(x, cur[x] - prev[x]);
+    else if (f === 3) {
+      for (; x < bpp && x < stride; x++) score += put(x, cur[x] - (prev[x] >> 1));
+      for (; x < stride && score < limit; x++) score += put(x, cur[x] - ((cur[x - bpp] + prev[x]) >> 1));
+    } else {
+      for (; x < bpp && x < stride; x++) score += put(x, cur[x] - prev[x]);
+      for (; x < stride && score < limit; x++) {
+        const a = cur[x - bpp];
+        const b = prev[x];
+        const c = prev[x - bpp];
+        const p = a + b - c;
+        const pa = p > a ? p - a : a - p;
+        const pb = p > b ? p - b : b - p;
+        const pc = p > c ? p - c : c - p;
+        score += put(x, cur[x] - (pa <= pb && pa <= pc ? a : pb <= pc ? b : c));
+      }
+    }
+    return x < stride ? Infinity : score;
+  };
   for (let y = 0; y < height; y++) {
     const cur = rows.subarray(y * stride, (y + 1) * stride);
-    const prev = y ? rows.subarray((y - 1) * stride, y * stride) : undefined;
-    const out = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
-    if (ihdr[9] === 3) {
-      cur.copy(out);
-      continue;
-    }
-    let best = -1;
-    let bestScore = Infinity;
-    for (let f = 0; f <= 4; f++) {
-      let score = 0;
-      for (let x = 0; x < stride; x++) {
-        const a = x >= bpp ? cur[x - bpp] : 0;
-        const b = prev ? prev[x] : 0;
-        const c = prev && x >= bpp ? prev[x - bpp] : 0;
-        const pred = f === 0 ? 0 : f === 1 ? a : f === 2 ? b : f === 3 ? (a + b) >> 1 : paeth(a, b, c);
-        const v = (cur[x] - pred) & 0xff;
-        trial[x] = v;
-        score += v < 128 ? v : 256 - v;
-      }
-      if (score < bestScore) {
-        bestScore = score;
-        best = f;
-        trial.copy(out);
+    const prev = y ? rows.subarray((y - 1) * stride, y * stride) : zero;
+    const at = y * (stride + 1);
+    let best = 0;
+    if (ihdr[9] !== 3) {
+      // Every filter scored (stopping once it is beaten), the winner kept:
+      // the minimum sum of absolute differences, libpng's heuristic.
+      let bestScore = Infinity;
+      for (let f = 0; f <= 4 && bestScore > 0; f++) {
+        const score = filterRow(f, cur, prev, bestScore);
+        if (score < bestScore) (bestScore = score), (best = f);
       }
     }
-    raw[y * (stride + 1)] = best;
+    raw[at] = best;
+    filterRow(best, cur, prev, Infinity);
+    raw.set(out, at + 1);
   }
 
   // A later chunk replaces an earlier one it conflicts with: tEXt with the
@@ -487,7 +529,9 @@ export function encodePng(img: Image, opts: EncodeOptions = {}): Buffer {
     ...write(t => BEFORE_PLTE.has(t)),
     ...extra,
     ...write(t => BEFORE_IDAT.has(t)),
-    chunk("IDAT", zlib.deflateSync(raw, { level: 9, memLevel: 9 })),
+    // Level 9 costs several times level 6's time for a percent or two; worth it
+    // only on palette images, which are small.
+    chunk("IDAT", zlib.deflateSync(raw, ihdr[9] === 3 ? { level: 9, memLevel: 9 } : { level: 6 })),
     ...write(t => !BEFORE_PLTE.has(t) && !BEFORE_IDAT.has(t)),
     chunk("IEND", Buffer.alloc(0))
   ]);

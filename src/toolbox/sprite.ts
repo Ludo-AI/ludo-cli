@@ -43,7 +43,7 @@ function sheetGrid(src: Loaded, call: ToolCall): { grid: Grid; from: "flag" | "s
       throw new CliError(
         `Could not tell the grid of ${src.file} for sure (best guess: ${best})`,
         EXIT.BAD_INPUT,
-        `Pass it with --grid <columns>x<rows>, like --grid ${sure(guess.x) ? guess.x.count : 4}x${sure(guess.y) ? guess.y.count : 4}.`,
+        `Pass it with --grid ${sure(guess.x) ? guess.x.count : "<columns>"}x${sure(guess.y) ? guess.y.count : "<rows>"}.`,
         { guess: { cols: guess.cols, rows: guess.rows, confidence: Math.round(guess.confidence * 100) / 100 } }
       );
     }
