@@ -61,6 +61,6 @@ export function itermSequence(png: Buffer, cols: number, rows: number): string {
 }
 
 export function imageSequence(protocol: Exclude<Protocol, undefined>, img: Image, cols: number, rows: number, id?: number): string {
-  const png = encodePng(img);
+  const png = encodePng(img, { fast: true });
   return protocol === "kitty" ? kittySequence(png, cols, rows, id) : itermSequence(png, cols, rows);
 }
