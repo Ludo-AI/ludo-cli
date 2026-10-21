@@ -22,6 +22,7 @@ import { logo } from "./tty/flair.js";
 import { installSkill, isInstalled, skillTarget, uninstallSkill } from "./skill.js";
 import { accountLine, accountSummary, agentName, billingUrlFor, browserLogin, canOpenBrowser, isAgent, openBrowser } from "./login.js";
 import { assets, BATCH_HELP, init, loadBatch, spend } from "./workspace.js";
+import { toolbox } from "./toolbox/index.js";
 
 async function promptSecret(question: string): Promise<string> {
   if (!process.stdin.isTTY) return fs.readFileSync(0, "utf8").trim();
@@ -313,6 +314,8 @@ async function main(argv: string[]): Promise<number> {
   if (first === "feedback") return feedback(ctx, parsed, words.slice(1));
   if (first === "update") return update(ctx);
   if (first === "init") return init(ctx, parsed);
+  // Free and offline: dispatched before the API spec is loaded.
+  if (first === "toolbox") return toolbox(ctx, parsed, argv, label => (commandLabel = label));
 
   const apiUrl = resolveApiUrl(globals.apiUrl);
   if (first === "spec") {

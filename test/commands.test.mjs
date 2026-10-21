@@ -24,6 +24,10 @@ test("derives command names from tags and operationIds", () => {
   assert.equal(names.searchDocs, "docs search");
 });
 
+test("no API group or command is called toolbox, the free tools' word", () => {
+  assert.ok(!commands.some(c => c.group === "toolbox" || c.name === "toolbox" || c.operationId.toLowerCase() === "toolbox"));
+});
+
 test("command names are unique", () => {
   const seen = new Set();
   for (const c of commands) {

@@ -17,6 +17,13 @@ if (!spec.paths || !spec.info?.version) {
   console.error(`${url} did not return an OpenAPI spec`);
   process.exit(1);
 }
+// `toolbox` is the CLI's own word for its free offline tools: an API tag or
+// operation by that name would be shadowed by them.
+const clash = Object.values(spec.paths).flatMap(item => Object.values(item)).find(op => /^toolbox$/i.test(op?.operationId || "") || (op?.tags || []).some(t => /^toolbox$/i.test(t)));
+if (clash) {
+  console.error(`The API spec now has a "toolbox" tag or operation (${clash.operationId}); it would collide with \`ludo toolbox\`.`);
+  process.exit(1);
+}
 const before = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : "";
 if (before === text) {
   console.log(`Spec unchanged (API ${spec.info.version})`);

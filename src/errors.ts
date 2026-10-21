@@ -16,6 +16,7 @@ export const EXIT = {
   TIMEOUT: 9, // --timeout elapsed while the job was still running
   UPGRADE_REQUIRED: 10, // this CLI version is below the API's minimum (426)
   BUDGET: 11, // the spending guard refused: over --max-credits or the session budget
+  BAD_INPUT: 12, // a local file the toolbox cannot read or use, or a guess it is not sure of
   INTERRUPTED: 130
 } as const;
 

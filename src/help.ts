@@ -1,6 +1,7 @@
 import { GLOBAL_FLAGS } from "./args.js";
 import { Command, Field, GROUP_INFO, groupsOf } from "./commands.js";
 import { VERSION } from "./config.js";
+import { TOOLS, toolboxSummary } from "./toolbox/index.js";
 
 const WIDTH = Math.min(process.stdout.columns || 100, 110);
 
@@ -47,6 +48,7 @@ export function mainHelp(commands: Command[]): string {
     "Groups:",
     table(rows),
     "",
+    ...(TOOLS.length ? ["Free tools (offline, no account):", table([["toolbox", toolboxSummary()]]), ""] : []),
     "Other commands:",
     table([
       ["login", "Log in with your browser (--with-key to paste an API key instead)"],

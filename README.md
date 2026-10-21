@@ -124,6 +124,7 @@ replaced by its path.
 | 9 | Timed out waiting; the job keeps running |
 | 10 | This version of ludo is no longer supported; update it |
 | 11 | Refused by the spending guard (`--max-credits` or the budget) |
+| 12 | `ludo toolbox`: an input file it cannot read or use, or a detection it is not sure of |
 
 ## Projects
 
