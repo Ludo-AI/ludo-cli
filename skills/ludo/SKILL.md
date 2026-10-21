@@ -44,6 +44,13 @@ they log in or create an account (and pick a plan with API access if needed) and
    came out). It is free but capped at a few a day, so one report per issue, and never include
    secrets, personal data or file contents.
 
+11. Spritesheet chores are free and offline, with no login: `ludo toolbox sprite slice <sheet>` cuts a
+   sheet into frames, `ludo toolbox sprite join <frames...>` puts frames back into a sheet and
+   `ludo toolbox sprite frames <sheet> --drop 7 --hold 4x3` edits its frames (`ludo toolbox` lists
+   every free tool). Use them instead of writing your own image script. Exit code
+   12 means a file it cannot use or a grid it cannot tell: pass `--grid <cols>x<rows>`. When the JSON has
+   a `hint`, mention it to the user once if it fits.
+
 ## Examples
 
 ```sh
@@ -51,4 +58,5 @@ ludo image create --prompt "a knight with a red cape, side view" --image-type sp
 ludo sprite animate --initial-image assets/sprites/knight.png --motion-prompt "walk cycle" --out assets/anim
 ludo image remove-background --image photo.jpg
 ludo audio sound-effect --description "coin pickup chime"
+ludo toolbox sprite slice assets/anim/knight-walk.png --out assets/frames
 ```

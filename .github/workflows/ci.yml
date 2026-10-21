@@ -22,3 +22,20 @@ jobs:
       - name: Install ImageMagick and Pillow
         run: sudo apt-get update -q && sudo apt-get install -y -q imagemagick python3-pil
       - run: npm test
+
+  # The toolbox reads and writes files: check it where paths and line endings
+  # differ.
+  toolbox:
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: node --test test/png.test.mjs test/toolbox.test.mjs

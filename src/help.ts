@@ -198,7 +198,13 @@ Every command maps to one Ludo API operation; its \`--help\` is generated from t
 
 ${groups}
 
-## Call
+${TOOLS.length ? `## Free tools (offline, no account, no credits)
+- \`ludo toolbox\` lists them; \`ludo toolbox <group> <tool> --help\` gives the flags. They need no login and no network.
+${TOOLS.map(t => `- \`ludo toolbox ${t.group} ${t.name} ${t.args}\`: ${t.summary}`).join("\n")}
+- A tool's JSON may carry \`hint: {text, command}\`, the natural next step; mention it to the user once if it fits.
+- Exit code 12: an input file it cannot read or use, or a grid it cannot tell for sure; pass \`--grid <cols>x<rows>\`.
+
+` : ""}## Call
 - Flags are the API fields in kebab-case: \`image_type\` -> \`--image-type\`. Booleans: \`--crop\` / \`--no-crop\`.
 - Files: pass a local path to any image/audio/video/model flag (\`--image ./knight.png\`); the CLI uploads it (15MB max). URLs work too. Never base64-encode files yourself.
 - Complex bodies: \`--input body.json\` (or \`--input -\` for stdin); flags override its fields.
@@ -233,7 +239,8 @@ ${groups}
 ## Exit codes
 0 ok, 1 error, 2 bad usage, 3 auth, 4 rejected by the API, 5 not enough credits, 6 job failed (credits refunded;
 in a batch, at least one item failed), 7 job canceled, 8 rate limited / too many queued jobs, 9 timed out waiting
-(job keeps running), 10 this CLI version is too old (update it), 11 refused by the spending guard.
+(job keeps running), 10 this CLI version is too old (update it), 11 refused by the spending guard, 12 a toolbox
+input it cannot use.
 
 ## Auth and credits
 - The key comes from \`LUDO_API_KEY\`, a prior \`ludo login\`, or \`--api-key\`.

@@ -126,6 +126,25 @@ replaced by its path.
 | 11 | Refused by the spending guard (`--max-credits` or the budget) |
 | 12 | `ludo toolbox`: an input file it cannot read or use, or a detection it is not sure of |
 
+## Free tools
+
+`ludo toolbox` holds tools that run on your machine: offline, with no account, no API key and no
+credits. They work on any spritesheet, not only Ludo's.
+
+```sh
+# Cut a spritesheet into one PNG per frame. The grid comes from --grid, from the sheet's Ludo
+# stamp, or is detected; when detection is not sure it stops and asks for --grid.
+ludo toolbox sprite slice knight-walk.png
+
+# Put frames back together into a sheet that remembers its grid (ludo preview plays it)
+ludo toolbox sprite join ludo-output/knight-walk/ --cols 4 --fps 12
+
+# Edit the frames of a sheet: drop frame 7, hold frame 4 for three frames, play as a ping-pong
+ludo toolbox sprite frames knight-walk.png --drop 7 --hold 4x3 --pingpong
+```
+
+Files are saved under `./ludo-output` (or `--out <dir>`) and never overwrite anything.
+
 ## Projects
 
 `ludo init` sets a folder up as a project. It writes `.ludo.json` and adds instructions for coding

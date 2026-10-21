@@ -6,9 +6,10 @@ import path from "node:path";
 import zlib from "node:zlib";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { decodePng, encodePng, readPng, readText, textChunk, PngError } from "../dist/tty/png.js";
 
-const SUITE = new URL("./corpus/pngsuite/", import.meta.url).pathname;
+const SUITE = fileURLToPath(new URL("./corpus/pngsuite/", import.meta.url));
 const EXPECTED = JSON.parse(fs.readFileSync(SUITE + "expected.json", "utf8"));
 const suiteFiles = fs.readdirSync(SUITE).filter(f => f.endsWith(".png")).sort();
 
@@ -252,7 +253,8 @@ function oracles() {
   };
   const list = [];
   // ImageMagick 7 is `magick`; 6 (Ubuntu's package) is `convert`.
-  const im = has("magick", ["-version"]) ? "magick" : has("convert", ["-version"]) ? "convert" : undefined;
+  // (On Windows `convert` is the system's FAT-to-NTFS tool: never call it.)
+  const im = has("magick", ["-version"]) ? "magick" : process.platform !== "win32" && has("convert", ["-version"]) ? "convert" : undefined;
   if (im) list.push({ name: "ImageMagick", decode: file => execFileSync(im, [file, "-depth", "8", "RGBA:-"], { maxBuffer: 1 << 26 }) });
   if (has("python3", ["-I", "-c", "import PIL"])) {
     const code = "import sys;from PIL import Image;sys.stdout.buffer.write(Image.open(sys.argv[1]).convert('RGBA').tobytes())";

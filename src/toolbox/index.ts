@@ -1,40 +1,16 @@
 import { GLOBAL_FLAGS, type Parsed } from "../args.js";
 import { CliError, EXIT } from "../errors.js";
 import type { Ctx } from "../generate.js";
+import { TOOL_GROUPS, TOOLS, type Tool, type ToolCall } from "./registry.js";
+import "./sprite.js";
+
+export { TOOLS } from "./registry.js";
 
 // `ludo toolbox <group> <tool>`: free tools that run offline, with no account
 // and no API spec. Everything under the one word `toolbox` is free, so these
 // names never collide with the paid commands generated from the API spec.
 // The image work itself lives in pure functions next to this file; a tool
 // here only reads its arguments, calls them and writes files.
-
-export interface ToolFlag {
-  flag: string; // "--grid"
-  value?: string; // placeholder when it takes a value: "CxR"
-  description: string;
-}
-
-export interface ToolCall {
-  args: string[]; // positionals after `toolbox <group> <tool>`
-  flags: Map<string, string | true>; // the last value given wins
-}
-
-export interface Tool {
-  group: string;
-  name: string;
-  args: string; // usage for the positionals: "<sheet>"
-  summary: string;
-  details?: string[];
-  flags: ToolFlag[];
-  run(ctx: Ctx, call: ToolCall): Promise<number>;
-}
-
-export const TOOL_GROUPS: Record<string, string> = {
-  sprite: "Spritesheets and frames",
-  image: "Pixel cleanup"
-};
-
-export const TOOLS: Tool[] = [];
 
 const groupsInUse = () => Object.keys(TOOL_GROUPS).filter(g => TOOLS.some(t => t.group === g));
 
