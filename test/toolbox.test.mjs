@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import net from "node:net";
 import http from "node:http";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parseToolArgv } from "../dist/toolbox/index.js";
 import { CONFIDENT, guessGrid } from "../dist/toolbox/grid.js";
@@ -14,6 +14,8 @@ import { readGrid } from "../dist/tty/preview.js";
 import { applyFrameOps, parseFrameList, parseHolds } from "../dist/toolbox/frames.js";
 import { analyseLoop, frameDifferences } from "../dist/toolbox/loop.js";
 import { backgroundOf } from "../dist/toolbox/grid.js";
+import { contentBox, emptiness, extrude, flip, pad, rotate, scaleDown, scaleUp } from "../dist/toolbox/pixels.js";
+import { crop } from "../dist/toolbox/sheet.js";
 import { parseArgv } from "../dist/args.js";
 import { EXIT } from "../dist/errors.js";
 
@@ -564,4 +566,220 @@ test("a ping-pong made by sprite frames is reported as mirrored, with a smooth s
   const report = JSON.parse((await run(["toolbox", "sprite", "loop", path.resolve(made.sheet)])).stdout);
   assert.equal(report.mirrored, true);
   assert.equal(report.seam.verdict, "smooth");
+});
+
+// ---- ludo toolbox image ----
+
+// Random pixels, each channel 0-255, with a clear border of the given width.
+function noise(w, h, border = 0, seed = 7) {
+  const rnd = (s => () => ((s = (s * 16807) % 2147483647) / 2147483647))(seed);
+  const rgba = new Uint8Array(w * h * 4);
+  for (let y = border; y < h - border; y++) for (let x = border; x < w - border; x++) for (let k = 0; k < 4; k++) rgba[(y * w + x) * 4 + k] = Math.floor(rnd() * 256);
+  for (let i = 3; i < rgba.length; i += 4) if (rgba[i] === 0 && rgba[i - 1] + rgba[i - 2] + rgba[i - 3]) rgba[i] = 1;
+  return { width: w, height: h, rgba };
+}
+
+const same = (a, b) => a.width === b.width && a.height === b.height && Buffer.from(a.rgba).equals(Buffer.from(b.rgba));
+
+test("pixel edits undo each other exactly", () => {
+  const img = noise(13, 7);
+  assert.ok(same(scaleDown(scaleUp(img, 3), 3), img), "scale 3x and back");
+  assert.ok(same(flip(flip(img, "horizontal"), "horizontal"), img), "two horizontal flips");
+  assert.ok(same(flip(flip(img, "vertical"), "vertical"), img), "two vertical flips");
+  assert.ok(same(rotate(rotate(img, 1), 3), img), "90 then -90");
+  assert.ok(same(rotate(rotate(rotate(rotate(img, 1), 1), 1), 1), img), "four quarter turns");
+  assert.ok(same(rotate(img, 2), flip(flip(img, "horizontal"), "vertical")), "180 is both flips");
+  const r = rotate(img, 1);
+  assert.deepEqual([r.width, r.height], [7, 13]);
+  // Clockwise: the top-left pixel ends up top-right.
+  assert.deepEqual([...r.rgba.subarray((0 * 7 + 6) * 4, (0 * 7 + 6) * 4 + 4)], [...img.rgba.subarray(0, 4)]);
+  const p = pad(img, { top: 1, right: 2, bottom: 3, left: 4 });
+  assert.deepEqual([p.width, p.height], [19, 11]);
+  const box = contentBox([p], emptiness([p]));
+  assert.deepEqual(box, { x: 4, y: 1, w: 13, h: 7 });
+  assert.ok(same(scaleDown(scaleUp(img, 2), 2), img));
+  const d = scaleDown(noise(9, 9), 2);
+  assert.deepEqual([d.width, d.height], [4, 4]);
+});
+
+test("extrude repeats the edge pixels outward", () => {
+  const img = { width: 2, height: 1, rgba: Uint8Array.from([10, 20, 30, 255, 40, 50, 60, 255]) };
+  const e = extrude(img, 2);
+  assert.deepEqual([e.width, e.height], [6, 5]);
+  const at = (x, y) => [...e.rgba.subarray((y * 6 + x) * 4, (y * 6 + x) * 4 + 4)];
+  assert.deepEqual([at(0, 0), at(2, 2), at(3, 2), at(5, 4)], [[10, 20, 30, 255], [10, 20, 30, 255], [40, 50, 60, 255], [40, 50, 60, 255]]);
+});
+
+test("trim finds the content of every frame, on clear and on solid backgrounds", () => {
+  const a = pad(noise(4, 4), { top: 2, right: 5, bottom: 1, left: 3 });
+  const b = pad(noise(6, 2), { top: 5, right: 1, bottom: 0, left: 5 });
+  // One shared box holds both.
+  assert.deepEqual(contentBox([a, b], emptiness([a, b])), { x: 3, y: 2, w: 8, h: 5 });
+  const solid = pad({ width: 3, height: 3, rgba: new Uint8Array(36).fill(255) }, { top: 1, right: 1, bottom: 1, left: 1 }, [20, 40, 60, 255]);
+  solid.rgba.set([200, 10, 10, 255], (1 * 5 + 1) * 4);
+  assert.deepEqual(contentBox([solid], emptiness([solid])), { x: 1, y: 1, w: 3, h: 3 });
+  // A threshold treats faint pixels as empty.
+  const faint = pad(noise(2, 2), { top: 1, right: 1, bottom: 1, left: 1 });
+  faint.rgba.set([255, 255, 255, 5], 0);
+  assert.deepEqual(contentBox([faint], emptiness([faint], 0)), { x: 0, y: 0, w: 3, h: 3 });
+  assert.deepEqual(contentBox([faint], emptiness([faint], 5)), { x: 1, y: 1, w: 2, h: 2 });
+});
+
+function imageRun(args) {
+  return run(["toolbox", "image", ...args]).then(r => ({ ...r, out: r.stdout ? JSON.parse(r.stdout) : undefined }));
+}
+
+const readImage = file => readPng(fs.readFileSync(path.resolve(file))).image;
+
+test("trim then pad --restore gives back the very same sheet, through rotate, flip and scale", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-image-"));
+  const out = path.join(dir, "out");
+  const sheet = makeSheet({ cols: 3, rows: 2, frames: 5, margin: 0.2 });
+  const file = writeSheet(dir, "walk.png", sheet, { cols: 3, rows: 2, frames: 5, fps: 12 });
+  const original = canonical(sheet.rgba);
+
+  const trimmed = await imageRun(["trim", file, "--out", out]);
+  assert.equal(trimmed.code, EXIT.OK, trimmed.stderr);
+  const t = trimmed.out;
+  assert.equal(t.grid.frames, 5);
+  assert.ok(t.grid.frame_width < 48 && t.grid.frame_height < 64);
+  assert.deepEqual([t.trim.source_width, t.trim.source_height], [48, 64]);
+  assert.deepEqual(readGrid(fs.readFileSync(path.resolve(t.image))), { cols: 3, rows: 2, frames: 5, fps: 12 });
+
+  const restored = await imageRun(["pad", path.resolve(t.image), "--restore", "--out", out]);
+  assert.equal(restored.code, EXIT.OK, restored.stderr);
+  // Five frames in a 3x2 grid: the empty sixth cell stays empty.
+  assert.deepEqual(Buffer.from(readImage(restored.out.image).rgba), original);
+
+  // An edit in between, its inverse after the restore: the trim record has
+  // to follow the pixels through each one.
+  const pairs = [
+    [["rotate", "--by", "90"], ["rotate", "--by", "-90"]],
+    [["rotate", "--by", "180"], ["rotate", "--by", "180"]],
+    [["flip"], ["flip"]],
+    [["flip", "--vertical"], ["flip", "--vertical"]],
+    [["scale", "--by", "2"], ["scale", "--by", "1/2"]]
+  ];
+  for (const [edit, undo] of pairs) {
+    const a = await imageRun([edit[0], path.resolve(t.image), ...edit.slice(1), "--out", out]);
+    assert.equal(a.code, EXIT.OK, a.stderr);
+    assert.ok(a.out.trim, `${edit.join(" ")} keeps the trim record`);
+    const b = await imageRun(["pad", path.resolve(a.out.image), "--restore", "--out", out]);
+    assert.equal(b.code, EXIT.OK, b.stderr);
+    const c = await imageRun([undo[0], path.resolve(b.out.image), ...undo.slice(1), "--out", out]);
+    assert.equal(c.code, EXIT.OK, c.stderr);
+    assert.deepEqual(Buffer.from(readImage(c.out.image).rgba), original, edit.join(" "));
+  }
+});
+
+test("rotate swaps the cells of a sheet with frames that are not square, and re-stamps it", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-image-"));
+  const file = writeSheet(dir, "s.png", makeSheet({ cols: 4, rows: 1 }), { cols: 4, rows: 1, frames: 4, fps: 8 });
+  const { code, out, stderr } = await imageRun(["rotate", file, "--out", path.join(dir, "out")]);
+  assert.equal(code, EXIT.OK, stderr);
+  assert.deepEqual([out.width, out.height, out.grid.frame_width, out.grid.frame_height], [256, 48, 64, 48]);
+  assert.deepEqual(readGrid(fs.readFileSync(path.resolve(out.image))), { cols: 4, rows: 1, frames: 4, fps: 8 });
+});
+
+test("an image without a grid is one image, and --grid makes it a sheet", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-image-"));
+  const out = path.join(dir, "out");
+  // Two different frames side by side, unstamped.
+  const pair = { width: 16, height: 8, rgba: new Uint8Array(16 * 8 * 4) };
+  pasteInto(pair, noise(8, 8, 0, 3), 0, 0);
+  pasteInto(pair, noise(8, 8, 0, 5), 8, 0);
+  const file = writeSheet(dir, "pair.png", pair);
+  const whole = await imageRun(["flip", file, "--out", out]);
+  assert.equal(whole.out.grid, undefined);
+  assert.match(whole.out.hint.command, /^ludo sprite animate --initial-image/);
+  const flipped = readImage(whole.out.image);
+  const perFrame = await imageRun(["flip", file, "--grid", "2x1", "--out", out]);
+  assert.deepEqual([perFrame.out.grid.cols, perFrame.out.grid.frames], [2, 2]);
+  // Flipped as one image the figures swap places; flipped per frame they do not.
+  const a = readImage(perFrame.out.image);
+  assert.deepEqual(Buffer.from(flipped.rgba), canonical(flip(pair, "horizontal").rgba));
+  const halves = { width: 16, height: 8, rgba: new Uint8Array(16 * 8 * 4) };
+  pasteInto(halves, flip(noise(8, 8, 0, 3), "horizontal"), 0, 0);
+  pasteInto(halves, flip(noise(8, 8, 0, 5), "horizontal"), 8, 0);
+  assert.deepEqual(Buffer.from(a.rgba), canonical(halves.rgba));
+  assert.ok(readGrid(fs.readFileSync(path.resolve(perFrame.out.image))));
+});
+
+test("pad grows to a size with an anchor and a colour, and extrude grows every frame", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-image-"));
+  const out = path.join(dir, "out");
+  const file = writeSheet(dir, "dot.png", { width: 2, height: 2, rgba: new Uint8Array(16).fill(200) });
+  const grown = await imageRun(["pad", file, "--to", "6x4", "--anchor", "bottom", "--color", "#102030", "--out", out]);
+  assert.equal(grown.code, EXIT.OK, grown.stderr);
+  assert.deepEqual(grown.out.added, { top: 2, right: 2, bottom: 0, left: 2 });
+  const img = readImage(grown.out.image);
+  const at = (x, y) => [...img.rgba.subarray((y * 6 + x) * 4, (y * 6 + x) * 4 + 4)];
+  assert.deepEqual([at(0, 0), at(2, 2), at(3, 3)], [[16, 32, 48, 255], [200, 200, 200, 200], [200, 200, 200, 200]]);
+
+  const sheet = writeSheet(dir, "s.png", makeSheet({ cols: 3, rows: 1 }), { cols: 3, rows: 1, frames: 3, fps: 10 });
+  const ex = await imageRun(["extrude", sheet, "--by", "2", "--out", out]);
+  assert.deepEqual([ex.out.grid.frame_width, ex.out.grid.frame_height, ex.out.width], [52, 68, 156]);
+});
+
+test("image tools refuse bad flags and empty images clearly", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-image-"));
+  const file = writeSheet(dir, "x.png", noise(8, 8));
+  const empty = writeSheet(dir, "empty.png", { width: 4, height: 4, rgba: new Uint8Array(64) });
+  const cases = [
+    [["pad", file], /Pass one of --by, --to or --restore/],
+    [["pad", file, "--by", "1,2,3"], /--by takes pixels/],
+    [["pad", file, "--to", "4x4"], /smaller than the 8x8 image/],
+    [["pad", file, "--by", "2", "--anchor", "top"], /--anchor only goes with --to/],
+    [["pad", file, "--by", "2", "--color", "red"], /hex colour/],
+    [["scale", file, "--by", "1.5"], /--by takes 2 to 16/],
+    [["scale", file, "--by", "1/16"], /too small to scale/],
+    [["rotate", file, "--by", "45"], /--by takes 90, 180, 270/],
+    [["trim", file, "--threshold", "300"], /--threshold must be/]
+  ];
+  for (const [args, msg] of cases) {
+    const r = await run(["toolbox", "image", ...args]);
+    assert.equal(r.code, EXIT.USAGE, args.join(" "));
+    assert.match(r.stderr, msg, args.join(" "));
+  }
+  const nothing = await run(["toolbox", "image", "trim", empty]);
+  assert.equal(nothing.code, EXIT.BAD_INPUT);
+  assert.match(nothing.stderr, /is empty/);
+  const noRecord = await run(["toolbox", "image", "pad", file, "--restore"]);
+  assert.equal(noRecord.code, EXIT.BAD_INPUT);
+  assert.match(noRecord.stderr, /no trim record/);
+});
+
+test("pixel edits match ImageMagick's", t => {
+  // ImageMagick 7 is `magick`; 6 is `convert`, which on Windows is another tool entirely.
+  const im = ["magick", ...(process.platform === "win32" ? [] : ["convert"])].find(cmd => {
+    try {
+      execFileSync(cmd, ["-version"], { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  if (!im) return t.skip("ImageMagick is not installed");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-image-im-"));
+  try {
+    const img = noise(9, 6, 0, 11);
+    const big = noise(12, 12, 0, 13);
+    const padded = pad(img, { top: 2, right: 3, bottom: 1, left: 4 });
+    for (const [name, x] of Object.entries({ img, big, padded })) fs.writeFileSync(path.join(dir, `${name}.png`), encodePng(x));
+    const magick = (name, ...ops) => execFileSync(im, [path.join(dir, `${name}.png`), ...ops, "-depth", "8", "RGBA:-"]);
+    const cases = [
+      ["-flop", magick("img", "-flop"), flip(img, "horizontal")],
+      ["-flip", magick("img", "-flip"), flip(img, "vertical")],
+      ["-rotate 90", magick("img", "-rotate", "90"), rotate(img, 1)],
+      ["-rotate 180", magick("img", "-rotate", "180"), rotate(img, 2)],
+      ["-rotate 270", magick("img", "-rotate", "270"), rotate(img, 3)],
+      ["-sample 300%", magick("img", "-sample", "300%"), scaleUp(img, 3)],
+      ...[2, 3, 4].map(n => [`-sample 1/${n}`, magick("big", "-sample", `${12 / n}x${12 / n}`), scaleDown(big, n)]),
+      ["-trim", magick("padded", "-trim", "+repage"), crop(padded, contentBox([padded], emptiness([padded])))],
+      ["-gravity center -extent", magick("img", "-background", "none", "-gravity", "center", "-extent", "14x9"), pad(img, { top: 1, right: 3, bottom: 2, left: 2 })]
+    ];
+    for (const [name, theirs, ours] of cases) assert.deepEqual(canonical(theirs), canonical(ours.rgba), name);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

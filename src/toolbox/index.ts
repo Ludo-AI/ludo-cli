@@ -3,6 +3,7 @@ import { CliError, EXIT } from "../errors.js";
 import type { Ctx } from "../generate.js";
 import { TOOL_GROUPS, TOOLS, type Tool, type ToolCall } from "./registry.js";
 import "./sprite.js";
+import "./image.js";
 
 export { TOOLS } from "./registry.js";
 

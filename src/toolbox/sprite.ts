@@ -2,29 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { CliError, EXIT } from "../errors.js";
 import { printJson, type Ctx } from "../generate.js";
-import { parseGrid, type Grid } from "../tty/preview.js";
+import type { Grid } from "../tty/preview.js";
 import { backgroundOf, CONFIDENT, countFrames, guessGrid } from "./grid.js";
 import { baseOf, carriedChunks, freeName, loadImageFile, shown, writePng, type Loaded } from "./io.js";
 import { joinFrames, sliceSheet } from "./sheet.js";
 import { applyFrameOps, parseFrameList, parseHolds, type FrameOps } from "./frames.js";
 import { analyseLoop, frameDifferences } from "./loop.js";
+import { gridFlag, positiveInt, positiveNumber } from "./flags.js";
 import { hint, TOOLS, type ToolCall } from "./registry.js";
-
-function positiveInt(call: ToolCall, flag: string): number | undefined {
-  const raw = call.flags.get(flag);
-  if (raw === undefined) return undefined;
-  const n = Number(raw);
-  if (raw === true || !Number.isInteger(n) || n < 1) throw new CliError(`${flag} must be a whole number above 0`, EXIT.USAGE);
-  return n;
-}
-
-function positiveNumber(call: ToolCall, flag: string): number | undefined {
-  const raw = call.flags.get(flag);
-  if (raw === undefined) return undefined;
-  const n = Number(raw);
-  if (raw === true || !Number.isFinite(n) || n <= 0) throw new CliError(`${flag} must be a number above 0`, EXIT.USAGE);
-  return n;
-}
 
 // A sheet's grid: --grid, else its Ludo stamp, else detected. A detection
 // that is not sure refuses (exit code 12) with its best guess.
@@ -75,14 +60,6 @@ function frameFiles(args: string[]): string[] {
 function commonBase(files: string[]): string {
   const names = files.map(f => baseOf(f).replace(/[-_ .]*\d+$/, ""));
   return names.every(n => n === names[0]) && names[0] ? names[0] : "sheet";
-}
-
-function gridFlag(call: ToolCall): { cols: number; rows: number } | undefined {
-  const raw = call.flags.get("--grid");
-  if (raw === undefined) return undefined;
-  const grid = typeof raw === "string" ? parseGrid(raw) : undefined;
-  if (!grid || grid.cols < 1 || grid.rows < 1) throw new CliError(`--grid takes columns x rows, like --grid 6x4 (got "${raw}")`, EXIT.USAGE);
-  return grid;
 }
 
 TOOLS.push({

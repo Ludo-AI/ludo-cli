@@ -2,9 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CliError, EXIT } from "../errors.js";
-import { encodePng, readPng, PngError, type Image, type PngInfo, type RawChunk } from "../tty/png.js";
+import { encodePng, readPng, readText, textChunk, PngError, type Image, type PngInfo, type RawChunk } from "../tty/png.js";
 import { convertToPng } from "../tty/image.js";
 import { readGrid, GRID_KEY, type Grid } from "../tty/preview.js";
+import { parseTrim, TRIM_KEY, type Trim } from "./pixels.js";
 
 // Reading and writing the toolbox's files. The image work stays in pure
 // functions; this is the only place that touches the disk.
@@ -14,6 +15,7 @@ export interface Loaded {
   image: Image;
   info: PngInfo;
   grid?: Grid; // the ludo:grid stamp, when the sheet has one
+  trim?: Trim; // the ludo:trim stamp: where a trimmed image (or each frame) sat
 }
 
 const KEEP = new Set(["gAMA", "cHRM", "sRGB", "iCCP", "pHYs"]);
@@ -47,7 +49,7 @@ export function loadImageFile(file: string): Loaded {
   }
   try {
     const { image, info } = readPng(buf);
-    return { file, image, info, grid: readGrid(buf) };
+    return { file, image, info, grid: readGrid(buf), trim: parseTrim(readText(buf)[TRIM_KEY]) };
   } catch (err) {
     if (!(err instanceof PngError)) throw err;
     const hint =
@@ -56,11 +58,12 @@ export function loadImageFile(file: string): Loaded {
   }
 }
 
-// The source's colour space and pixel size, for files cut from it; its text
-// (including any old grid stamp) does not carry over.
-export function carriedChunks(src: Loaded, grid?: Grid): RawChunk[] {
+// The source's colour space and pixel size, for files made from it; its text
+// (including any old grid or trim stamp) does not carry over.
+export function carriedChunks(src: Loaded, grid?: Grid, trim?: Trim): RawChunk[] {
   const chunks = src.info.chunks.filter(c => KEEP.has(c.type));
-  if (grid) chunks.push({ type: "tEXt", data: Buffer.concat([Buffer.from(GRID_KEY, "latin1"), Buffer.from([0]), Buffer.from(JSON.stringify(grid), "latin1")]) });
+  if (grid) chunks.push(textChunk(GRID_KEY, JSON.stringify(grid)));
+  if (trim) chunks.push(textChunk(TRIM_KEY, JSON.stringify(trim)));
   return chunks;
 }
 

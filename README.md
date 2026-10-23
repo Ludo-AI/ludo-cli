@@ -145,6 +145,16 @@ ludo toolbox sprite frames knight-walk.png --drop 7 --hold 4x3 --pingpong
 # Check that it loops: the seam from the last frame back to the first, against a typical step.
 # When it jumps or repeats, it finds the best loop inside; --apply saves the sheet trimmed to it.
 ludo toolbox sprite loop knight-walk.png --apply
+
+# Pixel cleanup. On a sheet (its Ludo stamp, or --grid) every frame gets the same edit, so the
+# frames stay aligned.
+ludo toolbox image trim knight-walk.png             # cut the empty border, one box for all frames
+ludo toolbox image pad trimmed.png --restore        # put back what trim cut
+ludo toolbox image pad hero.png --to 128x128 --anchor bottom
+ludo toolbox image extrude tiles.png --by 2 --grid 8x8
+ludo toolbox image scale hero.png --by 4            # nearest neighbour; --by 1/4 scales down
+ludo toolbox image flip knight-walk.png             # face the other way; --vertical for upside down
+ludo toolbox image rotate hero.png --by 90
 ```
 
 Files are saved under `./ludo-output` (or `--out <dir>`) and never overwrite anything.
