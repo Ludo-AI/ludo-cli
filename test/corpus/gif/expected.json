@@ -1,0 +1,149 @@
+{
+  "2x2.gif": {
+    "width": 2,
+    "height": 2,
+    "delays": [
+      0
+    ],
+    "frames": [
+      "f38d522927a4f3eebe2cc4647870653de12ad51f6937f0e49fb398a9324ec6d6"
+    ]
+  },
+  "alpha_gif_a.gif": {
+    "width": 256,
+    "height": 256,
+    "delays": [
+      0
+    ],
+    "frames": [
+      "a05220d5d89b6632f3907f1ee193e92ac482aded52a67a543cab758c855dbec9"
+    ]
+  },
+  "anim-gr.gif": {
+    "width": 100,
+    "height": 50,
+    "delays": [
+      1,
+      10000
+    ],
+    "frames": [
+      "42f918becde1d7a197cb96baebd4e9f7217e4492414f277e39198c4a7d17721d",
+      "d9ff8ebeb617ae638af9958d864976fec2c845877399febd5d4866b1ff72d818"
+    ]
+  },
+  "beacon.gif": {
+    "width": 6,
+    "height": 6,
+    "delays": [
+      0,
+      0
+    ],
+    "frames": [
+      "72d724e2348d479c87488ff799adefb69dafd30559f17c0d82aee83c08541401",
+      "74a4cf92ed25ec201fed93710123eaf41400f1f696adf93bf3db4ead41267404"
+    ]
+  },
+  "beacon_icc.gif": {
+    "width": 6,
+    "height": 6,
+    "delays": [
+      0,
+      0
+    ],
+    "frames": [
+      "72d724e2348d479c87488ff799adefb69dafd30559f17c0d82aee83c08541401",
+      "74a4cf92ed25ec201fed93710123eaf41400f1f696adf93bf3db4ead41267404"
+    ]
+  },
+  "beacon_xmp.gif": {
+    "width": 6,
+    "height": 6,
+    "delays": [
+      0,
+      0
+    ],
+    "frames": [
+      "72d724e2348d479c87488ff799adefb69dafd30559f17c0d82aee83c08541401",
+      "74a4cf92ed25ec201fed93710123eaf41400f1f696adf93bf3db4ead41267404"
+    ]
+  },
+  "bufo-thinks-about-fishsticks.gif": {
+    "width": 128,
+    "height": 128,
+    "delays": [
+      0
+    ],
+    "frames": [
+      "c71e95bd186b0a4cb6af41250dd590a7dc6d60eca957e5e9a5d490ecdeaffe1d"
+    ]
+  },
+  "crash-issue-117-out-of-range.gif": {
+    "refused": true
+  },
+  "crash-issue-96-small-codesize-2.gif": {
+    "refused": true
+  },
+  "crash-issue-96-small-codesize.gif": {
+    "refused": true
+  },
+  "interlaced.gif": {
+    "width": 540,
+    "height": 330,
+    "delays": [
+      0
+    ],
+    "frames": [
+      "6e313bb8c71a5456536b9b4d73d15fe2625205397a88cd357cce51eb8ebc0ee1"
+    ]
+  },
+  "regression-issue-208-block-type-beta.gif": {
+    "width": 8,
+    "height": 8,
+    "delays": [
+      0
+    ],
+    "frames": [
+      "857c1ae69026d63fd2c7aaf9494a23f5e9f24d4eaf858a4ed6c654c9185e1e5e"
+    ]
+  },
+  "regression-issue-208-block-type.gif": {
+    "width": 8,
+    "height": 8,
+    "delays": [
+      0
+    ],
+    "frames": [
+      "857c1ae69026d63fd2c7aaf9494a23f5e9f24d4eaf858a4ed6c654c9185e1e5e"
+    ]
+  },
+  "regression-issue-209-extension-block-type.gif": {
+    "width": 1,
+    "height": 1,
+    "delays": [
+      0
+    ],
+    "frames": [
+      "ad95131bc0b799c0b1af477fb14fcf26a6a9f76079e48bf090acb7e8367bfd0e"
+    ]
+  },
+  "sample_1.gif": {
+    "width": 10,
+    "height": 10,
+    "delays": [
+      0
+    ],
+    "frames": [
+      "6a9402fd06b3491c8372ce0356c07b7010c4a39f0a23a3b90289c709ad999099"
+    ]
+  },
+  "set_hsts.gif": {
+    "width": 1,
+    "height": 1,
+    "delays": [
+      0
+    ],
+    "frames": [
+      "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119"
+    ]
+  }
+}

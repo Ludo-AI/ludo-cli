@@ -161,6 +161,14 @@ ludo toolbox image scale hero.png --by 4            # nearest neighbour; --by 1/
 ludo toolbox image flip knight-walk.png             # face the other way; --vertical for upside down
 ludo toolbox image rotate hero.png --by 90
 
+# An animated GIF for sharing: one palette for every frame (the sheet's own colours when it has
+# 256 or fewer), 1-bit transparency (--alpha-threshold, --matte for soft edges), loops forever
+# unless --once. --scale 4 enlarges small pixel art.
+ludo toolbox sprite gif knight-walk.png --fps 12 --scale 4
+
+# A GIF reads as a sheet of its frames, so every sprite and image tool takes one.
+ludo toolbox sprite slice dance.gif
+
 # Engine files for a sheet you already have. Any toolbox tool that writes a sheet takes --engine
 # too, and a trimmed or extruded sheet exports each frame's original size and offset.
 ludo toolbox sprite export knight-walk.png --engine texturepacker

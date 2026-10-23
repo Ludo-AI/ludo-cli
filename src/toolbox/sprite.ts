@@ -8,19 +8,22 @@ import { baseOf, carriedChunks, engineFiles, freeName, loadImageFile, shown, wri
 import { crop, joinFrames, sliceSheet } from "./sheet.js";
 import { applyFrameOps, parseFrameList, parseHolds, type FrameOps } from "./frames.js";
 import { analyseLoop, frameDifferences } from "./loop.js";
-import { gridFlag, positiveInt, positiveNumber } from "./flags.js";
+import { gridFlag, hexColour, positiveInt, positiveNumber, textFlag } from "./flags.js";
+import { makeGif, MAX_GIF_FPS } from "./gif.js";
+import { scaleUp } from "./pixels.js";
+import { MAX_TOOLBOX_PIXELS } from "../tty/png.js";
 import { hint, TOOLS, type ToolCall } from "./registry.js";
 
-// A sheet's grid: --grid, else its Ludo stamp, else detected. A detection
+// A sheet's grid: --grid, else its Ludo stamp (or a GIF's frames), else detected. A detection
 // that is not sure refuses (exit code 12) with its best guess.
-function sheetGrid(src: Loaded, call: ToolCall): { grid: Grid; from: "flag" | "stamp" | "detected"; confidence?: number } {
+function sheetGrid(src: Loaded, call: ToolCall): { grid: Grid; from: "flag" | "stamp" | "gif" | "detected"; confidence?: number } {
   const { width, height } = src.image;
   const flagGrid = gridFlag(call);
   let out: ReturnType<typeof sheetGrid>;
   if (flagGrid) {
     out = { grid: { ...flagGrid, frames: countFrames(src.image, flagGrid.cols, flagGrid.rows), fps: src.grid?.fps ?? 10 }, from: "flag" };
   } else if (src.grid) {
-    out = { grid: src.grid, from: "stamp" };
+    out = { grid: src.grid, from: src.gif ? "gif" : "stamp" };
   } else {
     const guess = guessGrid(src.image);
     if (guess.confidence < CONFIDENT) {
@@ -121,7 +124,7 @@ TOOLS.push({
         false
       );
     } else {
-      const how = from === "flag" ? "from --grid" : from === "stamp" ? "from its Ludo stamp" : `detected, ${Math.round(confidence! * 100)}% sure`;
+      const how = from === "flag" ? "from --grid" : from === "stamp" ? "from its Ludo stamp" : from === "gif" ? "the GIF's frames" : `detected, ${Math.round(confidence! * 100)}% sure`;
       process.stdout.write(`${frames} frames of ${frameSize.frame_width}x${frameSize.frame_height} (${grid.cols}x${grid.rows} grid, ${how})\n`);
       process.stdout.write(`Saved to ${shown(dir)}${path.sep}\n`);
       if (!ctx.globals.quiet) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
@@ -361,7 +364,7 @@ TOOLS.push({
       );
     } else {
       const out = (line: string) => process.stdout.write(line + "\n");
-      out(`${n} frames (${grid.cols}x${grid.rows} grid${from === "stamp" ? ", from its Ludo stamp" : from === "flag" ? "" : ", detected"})`);
+      out(`${n} frames (${grid.cols}x${grid.rows} grid${from === "stamp" ? ", from its Ludo stamp" : from === "gif" ? ", the GIF's frames" : from === "flag" ? "" : ", detected"})`);
       const seamText = `${n} -> 1 is ${seam.ratio}x a typical step`;
       if (seam.verdict === "static") out("No frame moves: there is nothing to loop.");
       else if (seam.verdict === "smooth") out(`Loops smoothly: the seam ${seamText}.`);
@@ -431,6 +434,84 @@ TOOLS.push({
       );
     } else {
       process.stdout.write(`${grid.frames} frames (${grid.cols}x${grid.rows} grid) at ${fps} fps\n${savedLines(files)}`);
+      if (!ctx.globals.quiet) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
+    }
+    return EXIT.OK;
+  }
+});
+
+TOOLS.push({
+  group: "sprite",
+  name: "gif",
+  args: "<sheet>",
+  summary: "Turn a spritesheet into an animated GIF",
+  details: [
+    "GIF has 256 colours and no partial transparency. Pixels whose alpha is under --alpha-threshold",
+    "become transparent and the rest opaque; --matte blends soft edges into the colour the GIF will",
+    "sit on, so they do not fringe dark. Every frame shares one palette: the sheet's own colours when",
+    "it has 256 or fewer (255 with transparency), else the closest 256 by Wu's quantizer, no dithering.",
+    "Delays are whole hundredths of a second, so 12 fps plays 8 and 9 alternately; 50 fps is the most",
+    "browsers play. An extruded sheet (`ludo toolbox image extrude`) plays without its repeated border."
+  ],
+  flags: [
+    { flag: "--fps", value: "n", description: `Frame rate (default: the sheet's, else 10; at most ${MAX_GIF_FPS})` },
+    { flag: "--scale", value: "n", description: "Enlarge every pixel to n x n, for small pixel art (2-16)" },
+    { flag: "--alpha-threshold", value: "n", description: "Alpha below this is transparent, 1-255 (default 128)" },
+    { flag: "--matte", value: "hex", description: "Blend semi-transparent edges over this colour, like #1e1e2e" },
+    { flag: "--once", description: "Play once instead of looping forever" },
+    { flag: "--grid", value: "CxR", description: "The sheet's grid, when it has no Ludo stamp and detection is unsure" }
+  ],
+  async run(ctx: Ctx, call: ToolCall) {
+    if (call.args.length !== 1) throw new CliError("Usage: ludo toolbox sprite gif <sheet> [--fps n]", EXIT.USAGE);
+    const scale = positiveInt(call, "--scale") ?? 1;
+    if (scale > 16) throw new CliError("--scale goes up to 16", EXIT.USAGE);
+    const thresholdRaw = call.flags.get("--alpha-threshold");
+    const threshold = thresholdRaw === undefined ? 128 : Number(thresholdRaw);
+    if (!Number.isInteger(threshold) || threshold < 1 || threshold > 255) throw new CliError("--alpha-threshold must be a whole number from 1 to 255", EXIT.USAGE);
+    const matteText = textFlag(call, "--matte");
+    const matte = matteText === undefined ? undefined : hexColour(matteText, "--matte");
+    if (matte && matte[3] !== 255) throw new CliError("--matte takes an opaque colour (no alpha)", EXIT.USAGE);
+
+    const src = loadImageFile(call.args[0]);
+    const { grid, from } = sheetGrid(src, call);
+    const fps = positiveNumber(call, "--fps") ?? grid.fps;
+    const e = src.extrude ?? 0;
+    let frames = sliceSheet(src.image, grid.cols, grid.rows, grid.frames).map(img => (e ? crop(img, { x: e, y: e, w: img.width - 2 * e, h: img.height - 2 * e }) : img));
+    const [w, h] = [frames[0].width * scale, frames[0].height * scale];
+    if (w > 65535 || h > 65535) throw new CliError(`A GIF is at most 65535 pixels a side; ${w}x${h} is too big`, EXIT.USAGE);
+    if (w * h * frames.length > MAX_TOOLBOX_PIXELS) throw new CliError(`${frames.length} frames of ${w}x${h} is over ${MAX_TOOLBOX_PIXELS / 1024 / 1024} megapixels`, EXIT.USAGE);
+    if (scale > 1) frames = frames.map(f => scaleUp(f, scale));
+
+    const gif = makeGif(frames, { fps, alphaThreshold: threshold, matte: matte && [matte[0], matte[1], matte[2]], loop: !call.flags.has("--once") });
+    const file = freeName(ctx.outDir, ctx.globals.name || baseOf(src.file), ".gif");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, gif.bytes);
+
+    const next = hint("Animate another move for the same character with Ludo", `ludo sprite animate --initial-image <a frame> --motion-prompt "<what it does>"`);
+    if (ctx.jsonOut) {
+      printJson(
+        {
+          sheet: shown(src.file),
+          gif: shown(file),
+          grid: { cols: grid.cols, rows: grid.rows, frames: grid.frames, fps: grid.fps },
+          grid_from: from,
+          width: w,
+          height: h,
+          fps: gif.fps,
+          ...(gif.fps !== fps ? { fps_asked: fps } : {}),
+          colours: gif.colours,
+          palette: gif.exact ? "exact" : "quantized",
+          transparent: gif.transparent,
+          loops: !call.flags.has("--once"),
+          bytes: gif.bytes.length,
+          ...(ctx.globals.quiet ? {} : { hint: next })
+        },
+        false
+      );
+    } else {
+      const colours = gif.exact ? `${gif.colours} colours, all kept` : `reduced to ${gif.colours} colours`;
+      process.stdout.write(`${grid.frames} frames of ${w}x${h} at ${gif.fps} fps${gif.fps !== fps ? ` (${fps} asked; GIF plays ${MAX_GIF_FPS} at most)` : ""}, ${colours}${gif.transparent ? ", transparent background" : ""}\n`);
+      process.stdout.write(`Saved ${shown(file)} (${Math.max(1, Math.round(gif.bytes.length / 1024))} KB)\n`);
       if (!ctx.globals.quiet) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
     }
     return EXIT.OK;

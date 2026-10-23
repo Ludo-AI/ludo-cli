@@ -5,7 +5,7 @@ import type { Grid } from "../tty/preview.js";
 import { countFrames } from "./grid.js";
 import { baseOf, carriedChunks, engineFiles, freeName, loadImageFile, shown, writePng, type Loaded } from "./io.js";
 import { crop, joinFrames, sliceSheet } from "./sheet.js";
-import { gridFlag, positiveInt, textFlag } from "./flags.js";
+import { gridFlag, hexColour, positiveInt, textFlag } from "./flags.js";
 import {
   contentBox,
   emptiness,
@@ -119,15 +119,6 @@ function parseSides(spec: string, flag: string): Sides {
   return { top: t, right: r, bottom: b, left: l };
 }
 
-// #rgb, #rrggbb or #rrggbbaa.
-function parseColour(spec: string): [number, number, number, number] {
-  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(spec.trim());
-  if (!m) throw usageError(`--color takes a hex colour like #1e1e2e or #1e1e2e80 (got "${spec}")`);
-  const hex = m[1].length === 3 ? [...m[1]].map(c => c + c).join("") : m[1];
-  const v = (i: number) => parseInt(hex.slice(i, i + 2), 16);
-  return [v(0), v(2), v(4), hex.length === 8 ? v(6) : 255];
-}
-
 const ANCHORS = ["center", "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"];
 
 TOOLS.push({
@@ -191,7 +182,7 @@ TOOLS.push({
     if (!ANCHORS.includes(anchor)) throw usageError(`--anchor is one of ${ANCHORS.join(", ")} (got "${anchor}")`);
     if (call.flags.has("--anchor") && to === undefined) throw usageError("--anchor only goes with --to");
     const colourFlag = textFlag(call, "--color");
-    const fill = colourFlag === undefined ? undefined : parseColour(colourFlag);
+    const fill = colourFlag === undefined ? undefined : hexColour(colourFlag, "--color");
     return runEdit(ctx, call, "ludo toolbox image pad <image> --by 8 | --to WxH | --restore", (frames, src) => {
       const { width, height } = frames[0];
       let sides: Sides;

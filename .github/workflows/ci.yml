@@ -18,9 +18,9 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-      # Second opinions for the PNG encoder's tests (skipped when missing).
-      - name: Install ImageMagick and Pillow
-        run: sudo apt-get update -q && sudo apt-get install -y -q imagemagick python3-pil
+      # Second opinions for the PNG and GIF tests (skipped when missing).
+      - name: Install ImageMagick, Pillow and ffmpeg
+        run: sudo apt-get update -q && sudo apt-get install -y -q imagemagick python3-pil ffmpeg
       - run: npm test
 
   # The toolbox reads and writes files: check it where paths and line endings
@@ -38,7 +38,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: node --test test/png.test.mjs test/toolbox.test.mjs
+      - run: node --test test/png.test.mjs test/gif.test.mjs test/toolbox.test.mjs
 
   # TexturePacker JSON atlases loaded in real Phaser 3, Phaser 4 and PixiJS 8
   # (dev dependencies) in headless Chromium.

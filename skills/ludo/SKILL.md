@@ -45,9 +45,10 @@ they log in or create an account (and pick a plan with API access if needed) and
    secrets, personal data or file contents.
 
 11. Spritesheet chores are free and offline, with no login: `ludo toolbox sprite slice <sheet>` cuts a
-   sheet into frames, `ludo toolbox sprite join <frames...>` puts frames back into a sheet and
-   `ludo toolbox sprite frames <sheet> --drop 7 --hold 4x3` edits its frames and
-   `ludo toolbox sprite loop <sheet>` checks that it loops (`--apply` trims it to its best loop).
+   sheet into frames, `ludo toolbox sprite join <frames...>` puts frames back into a sheet,
+   `ludo toolbox sprite frames <sheet> --drop 7 --hold 4x3` edits its frames,
+   `ludo toolbox sprite loop <sheet>` checks that it loops (`--apply` trims it to its best loop),
+   `ludo toolbox sprite gif <sheet>` makes an animated GIF, and a GIF reads as a sheet of its frames.
    `ludo toolbox image trim|pad|extrude|scale|flip|rotate <image>` does pixel cleanup, per frame on
    a sheet, and `ludo toolbox sprite export <sheet> --engine texturepacker|godot` writes engine
    files (`ludo toolbox` lists every free tool). Use them instead of writing your own image script. Exit code

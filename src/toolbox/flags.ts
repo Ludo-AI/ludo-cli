@@ -34,3 +34,12 @@ export function gridFlag(call: ToolCall): { cols: number; rows: number } | undef
   return grid;
 }
 
+
+// #rgb, #rrggbb or #rrggbbaa, as RGBA.
+export function hexColour(spec: string, flag: string): [number, number, number, number] {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(spec.trim());
+  if (!m) throw new CliError(`${flag} takes a hex colour like #1e1e2e or #1e1e2e80 (got "${spec}")`, EXIT.USAGE);
+  const hex = m[1].length === 3 ? [...m[1]].map(c => c + c).join("") : m[1];
+  const v = (i: number) => parseInt(hex.slice(i, i + 2), 16);
+  return [v(0), v(2), v(4), hex.length === 8 ? v(6) : 255];
+}

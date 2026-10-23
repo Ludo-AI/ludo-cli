@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CliError, EXIT } from "../errors.js";
-import { encodePng, readPng, readText, textChunk, PngError, type Image, type PngInfo, type RawChunk } from "../tty/png.js";
+import { encodePng, MAX_TOOLBOX_PIXELS, readPng, readText, textChunk, PngError, type Image, type PngInfo, type RawChunk } from "../tty/png.js";
+import { decodeGif, GifError, isGif } from "../tty/gif.js";
+import { joinFrames } from "./sheet.js";
+import { gifFps } from "./gif.js";
 import { convertToPng } from "../tty/image.js";
 import { readGrid, GRID_KEY, type Grid } from "../tty/preview.js";
 import { EXTRUDE_KEY, parseExtrude, parseTrim, TRIM_KEY, type Trim } from "./pixels.js";
@@ -19,6 +22,7 @@ export interface Loaded {
   grid?: Grid; // the ludo:grid stamp, when the sheet has one
   trim?: Trim; // the ludo:trim stamp: where a trimmed image (or each frame) sat
   extrude?: number; // the ludo:extrude stamp: repeated border around each frame
+  gif?: true; // read from an animated GIF: its frames laid out as a sheet, `grid` from its timing
 }
 
 // What a sheet says about its frames beyond the grid.
@@ -39,6 +43,7 @@ export function loadImageFile(file: string): Loaded {
     if (code === "EISDIR") throw new CliError(`${file} is a folder, not an image`, EXIT.USAGE);
     throw err;
   }
+  if (isGif(buf)) return loadGif(file, buf);
   // WebP, JPEG and the rest go through a converter the system already has,
   // as previews do.
   if (!buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) && !/\.png$/i.test(file)) {
@@ -66,6 +71,25 @@ export function loadImageFile(file: string): Loaded {
       err.code === "TOO_LARGE" ? "Split it into smaller images first." : err.code === "ANIMATED" ? "Export its frames as separate PNGs first." : undefined;
     throw new CliError(`Cannot read ${file}: ${err.message}`, EXIT.BAD_INPUT, hint);
   }
+}
+
+// A GIF reads as its frames, as browsers show them, side by side in a
+// near-square grid: a sheet every sheet tool takes. The grid's fps comes
+// from its delays (gifFps).
+function loadGif(file: string, buf: Buffer): Loaded {
+  let gif;
+  try {
+    gif = decodeGif(buf, MAX_TOOLBOX_PIXELS);
+  } catch (err) {
+    if (!(err instanceof GifError)) throw err;
+    throw new CliError(`Cannot read ${file}: ${err.message}`, EXIT.BAD_INPUT, err.code === "TOO_LARGE" ? "Split it into shorter GIFs first." : undefined);
+  }
+  const info: PngInfo = { sourceDepth: 8, colorType: 6, interlaced: false, animated: false, chunks: [] };
+  const n = gif.frames.length;
+  if (n === 1) return { file, image: gif.frames[0], info, gif: true };
+  const cols = Math.ceil(Math.sqrt(n));
+  const { sheet, rows } = joinFrames(gif.frames, cols);
+  return { file, image: sheet, info, gif: true, grid: { cols, rows, frames: n, fps: gifFps(gif.delays) } };
 }
 
 // The source's colour space and pixel size, for files made from it; its text
