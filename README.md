@@ -171,6 +171,12 @@ ludo toolbox sprite gif knight-walk.png --fps 12 --scale 4
 ludo toolbox sprite pack idle.png walk.png jump.png --name knight --engine texturepacker
 ludo toolbox sprite pack --manifest ludo-output/knight/pack.json --size walk=1.1 --ground jump=3
 
+# Animations played one after another, each placed so it continues from the last frame of the one
+# before (image matching; --align ground lines up the feet instead): the web app's Export Sequence.
+# The output gives each transition's offset; sequence.json re-runs it, and you can edit them there.
+ludo toolbox sprite sequence idle.png jump.png land.png --name knight-jump --frame-size 256x256
+ludo toolbox sprite sequence idle.png jump.png --mode separate --engine godot
+
 # A GIF reads as a sheet of its frames, so every sprite and image tool takes one.
 ludo toolbox sprite slice dance.gif
 

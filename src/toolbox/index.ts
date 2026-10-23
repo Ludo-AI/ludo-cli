@@ -4,6 +4,7 @@ import type { Ctx } from "../generate.js";
 import { TOOL_GROUPS, TOOLS, type Tool, type ToolCall } from "./registry.js";
 import "./sprite.js";
 import "./sprite-pack.js";
+import "./sprite-sequence.js";
 import "./image.js";
 
 export { TOOLS } from "./registry.js";

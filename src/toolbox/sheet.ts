@@ -53,3 +53,23 @@ export function joinFrames(frames: Image[], cols: number): { sheet: Image; cellW
   });
   return { sheet, cellW, cellH, rows };
 }
+
+// Copies `src` onto `dst` at (x, y), clipped to dst (source-over onto
+// transparent cells is a copy).
+export function blit(dst: Image, src: Image, x: number, y: number) {
+  const x0 = Math.max(0, x);
+  const x1 = Math.min(dst.width, x + src.width);
+  if (x1 <= x0) return;
+  for (let row = Math.max(0, y); row < Math.min(dst.height, y + src.height); row++) {
+    const from = ((row - y) * src.width + (x0 - x)) * 4;
+    dst.rgba.set(src.rgba.subarray(from, from + (x1 - x0) * 4), (row * dst.width + x0) * 4);
+  }
+}
+
+/** Frames into a sheet of `cols` x `rows` cells, in reading order. */
+export function layoutSheet(frames: Image[], cols: number, rows: number): Image {
+  const { width: fw, height: fh } = frames[0];
+  const sheet: Image = { width: fw * cols, height: fh * rows, rgba: new Uint8Array(fw * cols * fh * rows * 4) };
+  frames.forEach((f, i) => blit(sheet, f, (i % cols) * fw, Math.floor(i / cols) * fh));
+  return sheet;
+}

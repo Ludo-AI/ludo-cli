@@ -1,16 +1,14 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { CliError, EXIT } from "../errors.js";
+import { EXIT } from "../errors.js";
 import { printJson, type Ctx } from "../generate.js";
-import { MAX_TOOLBOX_PIXELS, type Image } from "../tty/png.js";
+import { MAX_TOOLBOX_PIXELS } from "../tty/png.js";
 import type { Grid } from "../tty/preview.js";
-import { parseGrid } from "../tty/preview.js";
-import { baseOf, carriedChunks, engineFiles, freeName, loadImageFile, shown, writePng, type Loaded } from "./io.js";
-import { crop, joinFrames, sliceSheet } from "./sheet.js";
-import { buildPack, layoutSheet, type ArtMode } from "./pack.js";
+import { carriedChunks, engineFiles, freeName, shown, writePng } from "./io.js";
+import { layoutSheet } from "./sheet.js";
+import { buildPack, type ArtMode } from "./pack.js";
 import { MAX_TARGET_FRAME_PX, uniquifyNames } from "./packMath.js";
-import { frameFiles, resolveGrid } from "./sprite.js";
+import { folderName, frameSizeFlag, manifestPath, parseNumber, perAnimation, readInputs, readManifest, usage, type SavedAnimation } from "./animations.js";
 import { textFlag } from "./flags.js";
 import { hint, TOOLS, type ToolCall } from "./registry.js";
 
@@ -22,23 +20,7 @@ const MANIFEST_VERSION = 1;
 const MODES = ["sheets", "frames"] as const;
 type Mode = (typeof MODES)[number];
 
-interface Animation {
-  input: string; // as given (a sheet, or a folder of frames)
-  kind: "sheet" | "frames";
-  name: string; // the input's file or folder name, to pick it in flags
-  frames: Image[];
-  grid: Grid; // the layout its sheet keeps
-  src?: Loaded; // the sheet, for its colour chunks
-  sha256?: string;
-}
-
-interface ManifestAnimation {
-  input: string; // relative to the manifest
-  kind: "sheet" | "frames";
-  sha256?: string;
-  label: string;
-  grid: { cols: number; rows: number; frames: number };
-  fps: number;
+interface ManifestAnimation extends SavedAnimation {
   size: number;
   ground: number;
   offset_x: number;
@@ -52,122 +34,6 @@ interface Manifest {
   art: ArtMode;
   frame_size: { width?: number; height?: number } | null;
   animations: ManifestAnimation[];
-}
-
-const usage = (message: string, hintText?: string) => new CliError(message, EXIT.USAGE, hintText);
-const sha256 = (file: string) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-
-// The web's folder name: lower case, anything but letters and digits a dash.
-const folderName = (name: string) =>
-  name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "animation-pack";
-
-function loadAnimation(input: string, grid?: { cols: number; rows: number; frames?: number }, gridFlag = "--grid"): Animation {
-  const stat = fs.statSync(input, { throwIfNoEntry: false });
-  if (stat?.isDirectory()) {
-    const files = frameFiles([input]);
-    const loaded = files.map(loadImageFile);
-    // Frames of different sizes are centred in the largest, as join does.
-    const cols = grid?.cols ?? Math.ceil(Math.sqrt(loaded.length));
-    const { sheet, rows } = joinFrames(
-      loaded.map(f => f.image),
-      cols
-    );
-    const frames = sliceSheet(sheet, cols, rows, loaded.length);
-    return { input, kind: "frames", name: path.basename(path.resolve(input)), frames, grid: { cols, rows: grid?.rows ?? rows, frames: frames.length, fps: loaded[0].grid?.fps ?? 10 }, src: loaded[0] };
-  }
-  const src = loadImageFile(input);
-  let resolved: Grid;
-  if (grid?.frames) {
-    if (grid.cols * grid.rows < grid.frames || grid.cols > src.image.width || grid.rows > src.image.height) throw usage(`The manifest's ${grid.cols}x${grid.rows} grid does not fit ${input}`);
-    resolved = { cols: grid.cols, rows: grid.rows, frames: grid.frames, fps: src.grid?.fps ?? 10 };
-  } else {
-    resolved = resolveGrid(src, grid, gridFlag).grid;
-  }
-  // An extruded sheet's frames without their repeated border, as slice cuts them.
-  const e = src.extrude ?? 0;
-  const frames = sliceSheet(src.image, resolved.cols, resolved.rows, resolved.frames).map(img => (e ? crop(img, { x: e, y: e, w: img.width - 2 * e, h: img.height - 2 * e }) : img));
-  return { input, kind: "sheet", name: baseOf(input), frames, grid: resolved, src, sha256: sha256(input) };
-}
-
-// Per-animation values: `--size walk=1.2` (by file name), `--size 2=1.2` (by
-// position, from 1), or `--size 1.2` for every animation. Later ones win.
-function perAnimation<T>(call: ToolCall, flag: string, names: string[][], parse: (v: string) => T): Map<number, T> {
-  const out = new Map<number, T>();
-  for (const raw of call.lists.get(flag) ?? []) {
-    const eq = raw.indexOf("=");
-    const value = parse(eq < 0 ? raw : raw.slice(eq + 1));
-    if (eq < 0) {
-      names.forEach((_, i) => out.set(i, value));
-      continue;
-    }
-    const key = raw.slice(0, eq);
-    out.set(pickAnimation(key, names, flag), value);
-  }
-  return out;
-}
-
-// `names` holds each animation's file name and, once given, its label.
-function pickAnimation(key: string, names: string[][], flag: string): number {
-  const n = Number(key);
-  if (/^\d+$/.test(key)) {
-    if (n >= 1 && n <= names.length) return n - 1;
-    throw usage(`${flag} ${key}=...: there are ${names.length} animations, numbered from 1`);
-  }
-  const hits = names.flatMap((aliases, i) => (aliases.includes(key) ? [i] : []));
-  if (hits.length === 1) return hits[0];
-  if (hits.length > 1) throw usage(`${flag} ${key}=...: ${key} is animations ${hits.map(i => i + 1).join(" and ")}; pick one by its number`);
-  throw usage(`${flag} ${key}=...: no animation is called ${key}`, `Animations: ${names.map((aliases, i) => `${i + 1} ${aliases.join(" / ")}`).join(", ")}`);
-}
-
-const parseNumber = (flag: string, check: (n: number) => boolean, what: string) => (v: string) => {
-  const n = Number(v);
-  if (v.trim() === "" || !Number.isFinite(n) || !check(n)) throw usage(`${flag} takes ${what} (got "${v}")`);
-  return n;
-};
-
-function frameSizeFlag(raw: string | undefined): { width?: number; height?: number } | undefined {
-  if (raw === undefined) return undefined;
-  const m = /^(\d*)x(\d*)$/i.exec(raw.trim());
-  const [w, h] = m ? [m[1] ? Number(m[1]) : undefined, m[2] ? Number(m[2]) : undefined] : [];
-  if (!m || (w === undefined && h === undefined) || w === 0 || h === 0) throw usage(`--frame-size takes width x height, like 256x256, 256x or x256 (got "${raw}")`);
-  if ((w ?? 0) > MAX_TARGET_FRAME_PX || (h ?? 0) > MAX_TARGET_FRAME_PX) throw usage(`--frame-size goes up to ${MAX_TARGET_FRAME_PX}`);
-  return { width: w, height: h };
-}
-
-// Inputs relative to the manifest, so a pack and its sources move together;
-// absolute when they share no folder but the root (or another drive).
-function manifestPath(dir: string, input: string): string {
-  const abs = path.resolve(input);
-  const shared = (a: string, b: string) => {
-    const [x, y] = [a.split(path.sep), b.split(path.sep)];
-    let n = 0;
-    while (n < x.length && n < y.length && x[n] === y[n]) n++;
-    return x.slice(0, n).filter(Boolean).length;
-  };
-  const rel = path.relative(dir, abs);
-  return path.isAbsolute(rel) || shared(path.resolve(dir), abs) === 0 ? abs : rel.split(path.sep).join("/");
-}
-
-function readManifest(file: string): Manifest {
-  let m: Manifest;
-  try {
-    m = JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    throw new CliError(code === "ENOENT" ? `File not found: ${file}` : `Cannot read ${file}: ${(err as Error).message}`, code === "ENOENT" ? EXIT.USAGE : EXIT.BAD_INPUT);
-  }
-  const ok =
-    m &&
-    m.ludo === "toolbox sprite pack" &&
-    Array.isArray(m.animations) &&
-    m.animations.length > 0 &&
-    m.animations.every(a => a && typeof a.input === "string" && a.grid && Number.isInteger(a.grid.cols) && Number.isInteger(a.grid.rows) && Number.isInteger(a.grid.frames));
-  if (!ok) throw new CliError(`${file} is not a pack manifest written by ludo toolbox sprite pack`, EXIT.BAD_INPUT);
-  if (m.version > MANIFEST_VERSION) throw new CliError(`${file} was written by a newer ludo (manifest version ${m.version})`, EXIT.BAD_INPUT, "Update the CLI: npm i -g @ludoai/cli");
-  return m;
 }
 
 TOOLS.push({
@@ -208,40 +74,17 @@ TOOLS.push({
     const manifestFile = textFlag(call, "--manifest");
     if (manifestFile !== undefined && call.args.length) throw usage("Pass the animations or --manifest, not both");
     if (manifestFile === undefined && !call.args.length) throw usage("Usage: ludo toolbox sprite pack <sheets...> (or --manifest pack.json)");
-    const manifest = manifestFile !== undefined ? readManifest(manifestFile) : undefined;
+    const manifest = manifestFile !== undefined ? readManifest<Manifest>(manifestFile, "sprite pack", MANIFEST_VERSION, "pack") : undefined;
     const base = manifestFile !== undefined ? path.dirname(path.resolve(manifestFile)) : process.cwd();
 
     const mode = (textFlag(call, "--mode") ?? manifest?.mode ?? "sheets") as Mode;
     if (!MODES.includes(mode)) throw usage(`--mode is sheets or frames (got "${mode}")`);
     const art = (textFlag(call, "--art") ?? manifest?.art ?? "smooth") as ArtMode;
     if (art !== "smooth" && art !== "pixel") throw usage(`--art is smooth or pixel (got "${art}")`);
-    const frameSize = frameSizeFlag(textFlag(call, "--frame-size")) ?? manifest?.frame_size ?? undefined;
+    const frameSize = frameSizeFlag(textFlag(call, "--frame-size"), MAX_TARGET_FRAME_PX) ?? manifest?.frame_size ?? undefined;
 
-    // The inputs and the names to pick them by.
     const inputs = manifest ? manifest.animations.map(a => path.resolve(base, a.input)) : call.args;
-    const files = inputs.map(input => (fs.statSync(input, { throwIfNoEntry: false })?.isDirectory() ? path.basename(path.resolve(input)) : baseOf(input)));
-    // Labels first: they name animations for the other flags too.
-    const labelFlags = new Map<number, string>();
-    for (const raw of call.lists.get("--label") ?? []) {
-      const eq = raw.indexOf("=");
-      if (eq < 0) throw usage(`--label takes anim=name, like --label 1=walk (got "${raw}")`);
-      const label = raw.slice(eq + 1).trim();
-      if (!label) throw usage(`--label ${raw}: the name is empty`);
-      labelFlags.set(pickAnimation(raw.slice(0, eq), files.map((f, i) => [f, ...(manifest ? [manifest.animations[i].label] : [])]), "--label"), label);
-    }
-    const names = files.map((f, i) => [...new Set([f, labelFlags.get(i) ?? manifest?.animations[i].label ?? f])]);
-    const gridFlags = perAnimation(call, "--grid", names, v => {
-      const g = parseGrid(v);
-      if (!g || g.cols < 1 || g.rows < 1) throw usage(`--grid takes columns x rows, like 6x4 (got "${v}")`);
-      return g;
-    });
-    const animations = inputs.map((input, i) => loadAnimation(input, gridFlags.get(i) ?? manifest?.animations[i].grid, "--grid"));
-    const warnings: string[] = [];
-    if (manifest) {
-      manifest.animations.forEach((a, i) => {
-        if (a.sha256 && animations[i].sha256 && a.sha256 !== animations[i].sha256) warnings.push(`${shown(inputs[i])} changed since the manifest was written`);
-      });
-    }
+    const { animations, names, warnings } = readInputs(call, inputs, manifest?.animations);
 
     const sizes = perAnimation(call, "--size", names, parseNumber("--size", n => n > 0 && n <= 16, "a number above 0, up to 16"));
     const grounds = perAnimation(call, "--ground", names, parseNumber("--ground", Number.isInteger, "whole pixels, like -3"));
@@ -267,7 +110,7 @@ TOOLS.push({
 
     const labels = uniquifyNames(names.map(n => n[n.length - 1]));
     const packName = ctx.globals.name ?? manifest?.name ?? "Animation Pack";
-    const dir = freeName(ctx.outDir, folderName(packName));
+    const dir = freeName(ctx.outDir, folderName(packName, "animation-pack"));
     fs.mkdirSync(dir, { recursive: true });
 
     const results = animations.map((a, i) => {
