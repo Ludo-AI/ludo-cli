@@ -12,6 +12,7 @@ export interface ToolFlag {
 export interface ToolCall {
   args: string[]; // positionals after `toolbox <group> <tool>`
   flags: Map<string, string | true>; // the last value given wins
+  lists: Map<string, string[]>; // every value given, in order, for flags that may repeat
 }
 
 export interface Tool {

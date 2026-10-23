@@ -14,12 +14,15 @@ import { scaleUp } from "./pixels.js";
 import { MAX_TOOLBOX_PIXELS } from "../tty/png.js";
 import { hint, TOOLS, type ToolCall } from "./registry.js";
 
-// A sheet's grid: --grid, else its Ludo stamp (or a GIF's frames), else detected. A detection
-// that is not sure refuses (exit code 12) with its best guess.
-function sheetGrid(src: Loaded, call: ToolCall): { grid: Grid; from: "flag" | "stamp" | "gif" | "detected"; confidence?: number } {
+// A sheet's grid: --grid, else its Ludo stamp (or a GIF's frames), else detected.
+// A detection that is not sure refuses (exit code 12) with its best guess.
+function sheetGrid(src: Loaded, call: ToolCall) {
+  return resolveGrid(src, gridFlag(call));
+}
+
+export function resolveGrid(src: Loaded, flagGrid: { cols: number; rows: number } | undefined, flag = "--grid"): { grid: Grid; from: "flag" | "stamp" | "gif" | "detected"; confidence?: number } {
   const { width, height } = src.image;
-  const flagGrid = gridFlag(call);
-  let out: ReturnType<typeof sheetGrid>;
+  let out: ReturnType<typeof resolveGrid>;
   if (flagGrid) {
     out = { grid: { ...flagGrid, frames: countFrames(src.image, flagGrid.cols, flagGrid.rows), fps: src.grid?.fps ?? 10 }, from: "flag" };
   } else if (src.grid) {
@@ -32,7 +35,7 @@ function sheetGrid(src: Loaded, call: ToolCall): { grid: Grid; from: "flag" | "s
       throw new CliError(
         `Could not tell the grid of ${src.file} for sure (best guess: ${best})`,
         EXIT.BAD_INPUT,
-        `Pass it with --grid ${sure(guess.x) ? guess.x.count : "<columns>"}x${sure(guess.y) ? guess.y.count : "<rows>"}.`,
+        `Pass it with ${flag} ${sure(guess.x) ? guess.x.count : "<columns>"}x${sure(guess.y) ? guess.y.count : "<rows>"}.`,
         { guess: { cols: guess.cols, rows: guess.rows, confidence: Math.round(guess.confidence * 100) / 100 } }
       );
     }
@@ -49,11 +52,11 @@ const layoutOf = (src: Loaded): Layout => ({ trim: src.trim, extrude: src.extrud
 const savedLines = (files: string[]) => files.map(f => `Saved ${shown(f)}\n`).join("");
 
 // "walk-2.png" before "walk-10.png".
-const natural = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+export const natural = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
 // The files to join: each argument is a PNG, or a folder whose PNGs are
 // taken in natural order.
-function frameFiles(args: string[]): string[] {
+export function frameFiles(args: string[]): string[] {
   return args.flatMap(arg => {
     const stat = fs.statSync(arg, { throwIfNoEntry: false });
     if (!stat?.isDirectory()) return [arg];

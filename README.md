@@ -166,6 +166,11 @@ ludo toolbox image rotate hero.png --by 90
 # unless --once. --scale 4 enlarges small pixel art.
 ludo toolbox sprite gif knight-walk.png --fps 12 --scale 4
 
+# Several animations of one character at one size and ground line, in one frame size: the web
+# app's Export Pack. Nudge one by file name, label or position; pack.json re-runs it exactly.
+ludo toolbox sprite pack idle.png walk.png jump.png --name knight --engine texturepacker
+ludo toolbox sprite pack --manifest ludo-output/knight/pack.json --size walk=1.1 --ground jump=3
+
 # A GIF reads as a sheet of its frames, so every sprite and image tool takes one.
 ludo toolbox sprite slice dance.gif
 

@@ -3,6 +3,7 @@ import { CliError, EXIT } from "../errors.js";
 import type { Ctx } from "../generate.js";
 import { TOOL_GROUPS, TOOLS, type Tool, type ToolCall } from "./registry.js";
 import "./sprite.js";
+import "./sprite-pack.js";
 import "./image.js";
 
 export { TOOLS } from "./registry.js";
@@ -72,6 +73,7 @@ function toolHelp(tool: Tool): string {
 export function parseToolArgv(argv: string[], tool: Tool): ToolCall {
   const known = new Map(tool.flags.map(f => [f.flag, f]));
   const flags = new Map<string, string | true>();
+  const lists = new Map<string, string[]>();
   const positionals: string[] = [];
   let onlyPositionals = false;
   for (let i = 0; i < argv.length; i++) {
@@ -105,8 +107,9 @@ export function parseToolArgv(argv: string[], tool: Tool): ToolCall {
     const value = eq >= 0 ? token.slice(eq + 1) : argv[++i];
     if (value === undefined) throw new CliError(`${name} needs a value`, EXIT.USAGE);
     flags.set(name, value);
+    lists.set(name, [...(lists.get(name) ?? []), value]);
   }
-  return { args: positionals.slice(3), flags };
+  return { args: positionals.slice(3), flags, lists };
 }
 
 // `ludo toolbox ...`. parsed.words starts with "toolbox"; argv is the whole
