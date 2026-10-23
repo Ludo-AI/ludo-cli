@@ -26,11 +26,6 @@ function canonical(rgba) {
   return out;
 }
 
-// The web's ground snap counts the space below frame 1's character from its
-// last row (inclusive) to the box height (exclusive), so feet resting on
-// the box bottom get a ground offset of 1, not 0: every animation's box sits
-// 1 scaled pixel below the ground line. Kept as the web does it.
-
 // A character: a w x h block standing with its feet `lift` pixels above the
 // bottom of a W x H frame, centred at cx, in a colour that changes per frame.
 function character(W, H, { w, h, lift = 0, cx = W / 2, k = 0 }) {
@@ -65,9 +60,9 @@ test("frames are sized and placed by the web's math, feet on one ground line", (
 
   // What the web computes for the same inputs (trim box = union of content).
   const web = computePackNormalization([
-    { animCharHeight: 30, frameBounds: short.map(() => ({ width: 12, height: 30 })), groundOffset: 1 },
-    { animCharHeight: 60, frameBounds: tall.map(() => ({ width: 24, height: 62 })), groundOffset: 3 },
-    { animCharHeight: 40, frameBounds: medium.map(() => ({ width: 18, height: 49 })), groundOffset: 1 }
+    { animCharHeight: 30, frameBounds: short.map(() => ({ width: 12, height: 30 })), groundOffset: 0 },
+    { animCharHeight: 60, frameBounds: tall.map(() => ({ width: 24, height: 62 })), groundOffset: 2 },
+    { animCharHeight: 40, frameBounds: medium.map(() => ({ width: 18, height: 49 })), groundOffset: 0 }
   ]);
   assert.deepEqual([pack.frameWidth, pack.frameHeight], [web.frameSize.width, web.frameSize.height]);
   assert.equal(pack.targetHeight, 30, "the shortest character sets the height");
@@ -77,8 +72,8 @@ test("frames are sized and placed by the web's math, feet on one ground line", (
   );
   assert.deepEqual(
     pack.animations.map(a => a.groundAuto),
-    [-1, -3, -1],
-    "the tall one's first frame stands 2 px above its box's bottom (+1, see above)"
+    [0, -2, 0],
+    "the tall one's first frame stands 2 px above its box's bottom"
   );
 
   // Frame 1 of every animation: the same character height, feet on the same row.
@@ -87,12 +82,9 @@ test("frames are sized and placed by the web's math, feet on one ground line", (
     firsts.map(b => b.h),
     [30, 30, 30]
   );
-  // On the ground line, give or take the web's 1 scaled pixel and rounding:
-  // at scales 1 and 0.5 the feet land a pixel apart.
   const feet = firsts.map(b => b.y + b.h);
   const groundRow = pack.frameHeight - pack.groundLine;
-  assert.ok(Math.max(...feet) - Math.min(...feet) <= 1, `feet rows ${feet}`);
-  assert.ok(feet.every(f => Math.abs(f - groundRow) <= 1.5), `feet rows ${feet}, ground line at ${groundRow}`);
+  assert.deepEqual(feet, [groundRow, groundRow, groundRow], `ground line at ${groundRow}`);
 
   // Every frame where the web's placement puts it.
   pack.animations.forEach((a, i) => {
@@ -139,7 +131,7 @@ test("a frame size grows the frame; the sprites stay centred on the ground line"
   assert.ok(Math.abs(g.x + g.w / 2 - 50) <= 0.5);
   // A size smaller than the content never crops it.
   const small = buildPack([{ frames: short }], { art: "pixel", frameSize: { w: 4, h: 4 } });
-  assert.deepEqual([small.frameWidth, small.frameHeight], [12, 31], "30 px plus the 1 px ground offset");
+  assert.deepEqual([small.frameWidth, small.frameHeight], [12, 30], "exactly the content");
 });
 
 test("pixel art resizes by nearest neighbour; smooth art matches Pillow", () => {
@@ -274,8 +266,8 @@ test("toolbox sprite pack: sheets, engine files and a manifest that re-runs it e
     pixel.json.animations.map(a => [a.size, a.ground, a.offset_x]),
     [
       [1, 5, 0],
-      [1.2, -3, 0],
-      [1, -1, 2]
+      [1.2, -2, 0],
+      [1, 0, 2]
     ]
   );
 
@@ -358,6 +350,6 @@ test("golden output: the same pack gives the same pixels", () => {
     for (const a of buildPack(inputs, { art }).animations) for (const f of a.frames) h.update(f.rgba);
     return h.digest("hex");
   };
-  assert.equal(digest("pixel"), "344ad47be2d61ca1cf93629eb94864a7c4049ed324101173e9e6127ba37f6fc3");
-  assert.equal(digest("smooth"), "0a5ed77498889fc0c84f63d38708b13a661236ff57583f6f4ff87841dedf8b46");
+  assert.equal(digest("pixel"), "2f3d95cb91e753a61f9a882c41b70540b0a90319b06724dc1ee546661cc6c70f");
+  assert.equal(digest("smooth"), "3ce9d29636a37b41e1644abd77d3292df15f77f13034e7977b19d0065d723d2f");
 });

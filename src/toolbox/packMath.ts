@@ -1,7 +1,7 @@
 // The Export Pack math of the Ludo web app, ported as-is from
 // prometheus-web src/pages/SpriteGenerator/exportPackMath.js (commit
-// 3a1f2e92, 2026-10-19), so `ludo toolbox sprite pack` sizes and places
-// frames exactly as the web does. Its 71 tests run here unchanged
+// 91985ab3, 2026-10-23), so `ludo toolbox sprite pack` sizes and places
+// frames exactly as the web does. Its 73 tests run here unchanged
 // (test/web-math/). Only TypeScript types were added; keep the behaviour
 // identical to the web's, and fix bugs in both places.
 //
@@ -43,10 +43,14 @@ export const getActualFrameIndex = (requestedIndex: number, totalFrames: number)
   return Math.min(requestedIndex, totalFrames - 1);
 };
 
-/** Calculate ground offset (space below character) from character bounds. */
+/**
+ * Calculate ground offset (space below character) from character bounds.
+ * maxY is the character's last row, so its bottom edge is maxY + 1: feet
+ * resting on the trim box's bottom have no space below them.
+ */
 export const calculateGroundOffsetFromBounds = (charBounds: { maxY: number }, trimBounds: { cropY: number; height: number } | null | undefined) => {
   if (!trimBounds) return 0;
-  const charBottomInTrim = charBounds.maxY - trimBounds.cropY;
+  const charBottomInTrim = charBounds.maxY + 1 - trimBounds.cropY;
   const spaceBelow = trimBounds.height - charBottomInTrim;
   return Math.round(spaceBelow);
 };

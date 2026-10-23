@@ -1,5 +1,5 @@
 // Ported unchanged from prometheus-web src/pages/SpriteGenerator/exportPackMath.test.js
-// (commit 3a1f2e92); only the imports differ. Keep it in step with the web's.
+// (commit 91985ab3); only the imports differ. Keep it in step with the web's.
 import { describe, it, expect } from './vitest.mjs';
 import {
   getFrameIndexFromPercentage,
@@ -81,31 +81,36 @@ describe('calculateGroundOffsetFromBounds', () => {
     expect(calculateGroundOffsetFromBounds({ maxY: 100 }, null)).toBe(0);
   });
   it('computes positive space below character', () => {
-    // charBottomInTrim = 100 - 20 = 80; spaceBelow = 150 - 80 = 70
+    // last row 99 -> bottom edge 100; charBottomInTrim = 100 - 20 = 80;
+    // spaceBelow = 150 - 80 = 70
     expect(
-      calculateGroundOffsetFromBounds({ maxY: 100 }, { cropY: 20, height: 150 })
+      calculateGroundOffsetFromBounds({ maxY: 99 }, { cropY: 20, height: 150 })
     ).toBe(70);
   });
   it('returns 0 when character bottom equals trim bottom', () => {
+    // maxY is the last row: a 200-row box from row 0 ends on row 199
     expect(
-      calculateGroundOffsetFromBounds({ maxY: 200 }, { cropY: 0, height: 200 })
+      calculateGroundOffsetFromBounds({ maxY: 199 }, { cropY: 0, height: 200 })
     ).toBe(0);
     expect(
-      calculateGroundOffsetFromBounds({ maxY: 150 }, { cropY: 0, height: 150 })
+      calculateGroundOffsetFromBounds({ maxY: 169 }, { cropY: 20, height: 150 })
     ).toBe(0);
+  });
+  it('counts the last row as part of the character', () => {
+    // feet on row 148 of a 150-row box leave one empty row below
+    expect(
+      calculateGroundOffsetFromBounds({ maxY: 148 }, { cropY: 0, height: 150 })
+    ).toBe(1);
   });
   it('returns negative when character sits below trim bottom', () => {
     // charBottomInTrim = 160 - 0 = 160; spaceBelow = 150 - 160 = -10
     expect(
-      calculateGroundOffsetFromBounds({ maxY: 160 }, { cropY: 0, height: 150 })
+      calculateGroundOffsetFromBounds({ maxY: 159 }, { cropY: 0, height: 150 })
     ).toBe(-10);
   });
   it('rounds the result', () => {
     expect(
-      calculateGroundOffsetFromBounds(
-        { maxY: 100 },
-        { cropY: 0, height: 150.6 }
-      )
+      calculateGroundOffsetFromBounds({ maxY: 99 }, { cropY: 0, height: 150.6 })
     ).toBe(51);
   });
 });
