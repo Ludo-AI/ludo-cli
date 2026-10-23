@@ -12,6 +12,8 @@ import { CONFIDENT, guessGrid } from "../dist/toolbox/grid.js";
 import { encodePng, readPng, withText } from "../dist/tty/png.js";
 import { readGrid } from "../dist/tty/preview.js";
 import { applyFrameOps, parseFrameList, parseHolds } from "../dist/toolbox/frames.js";
+import { analyseLoop, frameDifferences } from "../dist/toolbox/loop.js";
+import { backgroundOf } from "../dist/toolbox/grid.js";
 import { parseArgv } from "../dist/args.js";
 import { EXIT } from "../dist/errors.js";
 
@@ -388,4 +390,178 @@ test("frames rebuilds the sheet in the new order, and --in-place replaces it", a
   assert.deepEqual(values(fs.readFileSync(file)), [4, 3, 2, 1]);
   assert.equal((await run(["toolbox", "sprite", "frames", file])).code, EXIT.USAGE);
   assert.match((await run(["toolbox", "sprite", "frames", file, "--drop", "1-4"])).stderr, /No frames left/);
+});
+
+// ---- ludo toolbox sprite loop ----
+
+// A body, a ball on a wide orbit and a leg swinging, at phase t of an n-frame
+// cycle. Unlike the walker above it is never the same pose twice in a cycle,
+// and it does not play the same backwards, so seams and mirrors are known.
+function orbitFrame(t, n, background) {
+  const [w, h] = [48, 64];
+  const rgba = new Uint8Array(w * h * 4);
+  const ph = (2 * Math.PI * t) / n;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const [u, v] = [x / w, y / h];
+      let c = background;
+      if (((u - 0.5) / 0.15) ** 2 + ((v - 0.55) / 0.2) ** 2 <= 1) c = [200, 60, 40];
+      if (Math.abs(u - (0.5 + 0.2 * Math.cos(ph))) < 0.06 && v > 0.75) c = [60, 60, 140];
+      if ((u - 0.5 - 0.32 * Math.cos(ph)) ** 2 + (v - 0.4 - 0.28 * Math.sin(ph)) ** 2 <= 0.14 ** 2) c = [40, 180, 80];
+      if (c) rgba.set([...c, 255], (y * w + x) * 4);
+    }
+  }
+  return { width: w, height: h, rgba };
+}
+
+const range = (a, b) => Array.from({ length: b - a }, (_, i) => a + i);
+
+function loopOf(phases, n, background) {
+  const frames = phases.map(t => orbitFrame(t, n, background));
+  return analyseLoop(frameDifferences(frames, backgroundOf(frames[0])));
+}
+
+test("loop analysis finds the seam and the best loop on sheets with known answers", () => {
+  for (const background of [undefined, [30, 120, 90]]) {
+    const at = background ? "opaque" : "clear";
+    const perfect = loopOf(range(0, 8), 8, background);
+    assert.equal(perfect.seam.verdict, "smooth", at);
+    assert.deepEqual([perfect.best.start, perfect.best.end], [1, 8], at);
+    assert.equal(perfect.mirrored, false, at);
+
+    // The last frame is the first again: the loop shows that pose twice.
+    const repeat = loopOf(range(0, 9), 8, background);
+    assert.deepEqual([repeat.seam.verdict, repeat.seam.repeats], ["repeat", 1], at);
+    assert.deepEqual([repeat.best.start, repeat.best.end], [1, 8], at);
+
+    // A glitched last frame, from the middle of the cycle.
+    const glitch = loopOf([...range(0, 8), 4], 8, background);
+    assert.equal(glitch.seam.verdict, "jump", at);
+    assert.deepEqual(glitch.jumps, [9], at);
+    assert.deepEqual([glitch.best.start, glitch.best.end], [1, 8], at);
+
+    // Three frames past the loop point: they repeat the first three.
+    const over = loopOf(range(0, 19), 16, background);
+    assert.deepEqual([over.seam.verdict, over.seam.repeats], ["repeat", 3], at);
+    assert.deepEqual([over.best.start, over.best.end], [1, 16], at);
+
+    // Half a cycle has no loop inside it.
+    const half = loopOf(range(0, 4), 8, background);
+    assert.equal(half.seam.verdict, "jump", at);
+    assert.equal(half.best, undefined, at);
+  }
+});
+
+test("a sheet that already loops is left whole unless a loop inside it is clearly better", () => {
+  // Two whole cycles: it loops, and both cycles stay.
+  const twice = loopOf(range(0, 16), 8);
+  assert.equal(twice.seam.verdict, "smooth");
+  assert.deepEqual([twice.best.start, twice.best.end], [1, 16]);
+  assert.equal(loopOf(range(0, 24), 8).seam.verdict, "smooth");
+  // Two cycles and two frames too many.
+  assert.deepEqual(loopOf(range(0, 18), 8).seam.repeats, 2);
+  // Two frames past the loop point: the seam is an ordinary-sized step, but
+  // backwards, and two poses show twice.
+  const drift = loopOf(range(0, 10), 8);
+  assert.deepEqual([drift.seam.verdict, drift.seam.repeats], ["repeat", 2]);
+  assert.deepEqual([drift.best.start, drift.best.end, drift.best.cost], [1, 8, 0]);
+  // Starting mid-cycle: whichever loop it picks must close cleanly.
+  const late = loopOf([5.3, 6.6, ...range(0, 8)], 8);
+  assert.equal(late.seam.verdict, "jump");
+  assert.ok(late.best.cost <= 0.5 && late.best.frames >= 5, JSON.stringify(late.best));
+});
+
+test("held frames are not steps, a ping-pong is mirrored, and a still sheet is static", () => {
+  const held = loopOf([0, 1, 2, 3, 3, 3, 4, 5, 6, 7], 8);
+  assert.deepEqual(held.holds, [5, 6]);
+  assert.equal(held.seam.verdict, "smooth");
+  // The held steps are 0, and the rest are measured against the moving ones.
+  assert.deepEqual(held.steps.slice(3, 5), [0, 0]);
+  assert.ok(Math.abs(held.seam.ratio - 1) < 0.2, String(held.seam.ratio));
+
+  const pingpong = loopOf([0, 1, 2, 3, 4, 3, 2, 1], 8);
+  assert.equal(pingpong.mirrored, true);
+  assert.equal(pingpong.seam.verdict, "smooth");
+
+  const still = loopOf([2, 2, 2, 2], 8);
+  assert.equal(still.seam.verdict, "static");
+  assert.deepEqual([still.holds, still.jumps], [[], []]);
+
+  // The matrix: symmetric, 0 on the diagonal, about 1 for one step.
+  const { matrix } = loopOf(range(0, 8), 8);
+  assert.equal(matrix.length, 8);
+  for (let i = 0; i < 8; i++) {
+    assert.equal(matrix[i][i], 0);
+    for (let j = 0; j < 8; j++) assert.equal(matrix[i][j], matrix[j][i]);
+  }
+  assert.ok(matrix[0][1] > 0.7 && matrix[0][1] < 1.3, String(matrix[0][1]));
+  assert.ok(matrix[0][4] > 1.5, `half a cycle apart: ${matrix[0][4]}`);
+});
+
+function strip(frames, cols = frames.length) {
+  const sheet = { width: 48 * cols, height: 64 * Math.ceil(frames.length / cols), rgba: new Uint8Array(48 * cols * 64 * Math.ceil(frames.length / cols) * 4) };
+  frames.forEach((f, i) => pasteInto(sheet, f, (i % cols) * 48, Math.floor(i / cols) * 64));
+  return sheet;
+}
+
+test("loop reports a sheet's seam, and --apply saves it trimmed to its best loop", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-loop-"));
+  const frames = range(0, 9).map(t => orbitFrame(t, 8));
+  const file = writeSheet(dir, "spin.png", strip(frames, 3), { cols: 3, rows: 3, frames: 9, fps: 12 });
+  const out = path.join(dir, "out");
+
+  const checked = await run(["toolbox", "sprite", "loop", file, "--out", out]);
+  assert.equal(checked.code, EXIT.OK, checked.stderr);
+  const report = JSON.parse(checked.stdout);
+  assert.equal(report.seam.verdict, "repeat");
+  assert.deepEqual([report.best.start, report.best.end], [1, 8]);
+  assert.equal(report.matrix.length, 9);
+  assert.equal(report.hint.command, `ludo toolbox sprite loop ${file} --apply`);
+  assert.ok(!fs.existsSync(out), "checking writes nothing");
+
+  const applied = await run(["toolbox", "sprite", "loop", file, "--apply", "--out", out]);
+  assert.equal(applied.code, EXIT.OK, applied.stderr);
+  const res = JSON.parse(applied.stdout);
+  const buf = fs.readFileSync(path.resolve(res.applied));
+  assert.deepEqual(readGrid(buf), { cols: 3, rows: 3, frames: 8, fps: 12 });
+  assert.deepEqual(Buffer.from(readPng(buf).image.rgba), canonical(strip(frames.slice(0, 8), 3).rgba));
+
+  // The trimmed sheet loops: --apply has nothing left to do.
+  const again = await run(["toolbox", "sprite", "loop", path.resolve(res.applied), "--apply", "--out", out]);
+  assert.equal(again.code, EXIT.OK, again.stderr);
+  const second = JSON.parse(again.stdout);
+  assert.equal(second.seam.verdict, "smooth");
+  assert.equal(second.applied, null);
+  assert.equal(second.hint.command.startsWith("ludo preview"), true);
+});
+
+test("loop --apply on a sheet with no loop inside exits 12, and --in-place replaces the input", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-loop-"));
+  const half = writeSheet(dir, "half.png", strip(range(0, 4).map(t => orbitFrame(t, 8))), { cols: 4, rows: 1, frames: 4, fps: 10 });
+  const refused = await run(["toolbox", "sprite", "loop", half, "--apply", "--out", path.join(dir, "out")]);
+  assert.equal(refused.code, EXIT.BAD_INPUT);
+  assert.match(refused.stderr, /No run of frames .* loops cleanly/);
+  assert.match(refused.stderr, /sprite adjust/);
+  const told = await run(["toolbox", "sprite", "loop", half]);
+  assert.equal(told.code, EXIT.OK, told.stderr);
+  const report = JSON.parse(told.stdout);
+  assert.deepEqual([report.seam.verdict, report.best], ["jump", null]);
+  assert.match(report.hint.command, /^ludo sprite adjust .* --loop$/);
+
+  const glitch = writeSheet(dir, "glitch.png", strip([...range(0, 8), 4].map(t => orbitFrame(t, 8)), 9), { cols: 9, rows: 1, frames: 9, fps: 10 });
+  assert.equal((await run(["toolbox", "sprite", "loop", glitch, "--in-place"])).code, EXIT.USAGE);
+  const inPlace = await run(["toolbox", "sprite", "loop", glitch, "--apply", "--in-place", "--cols", "4"]);
+  assert.equal(inPlace.code, EXIT.OK, inPlace.stderr);
+  assert.deepEqual(readGrid(fs.readFileSync(glitch)), { cols: 4, rows: 2, frames: 8, fps: 10 });
+  assert.match((await run(["toolbox", "sprite", "loop", glitch, "--min-frames", "9"])).stderr, /more than the sheet's 8 frames/);
+});
+
+test("a ping-pong made by sprite frames is reported as mirrored, with a smooth seam", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-loop-"));
+  const file = writeSheet(dir, "swing.png", strip(range(0, 5).map(t => orbitFrame(t, 8))), { cols: 5, rows: 1, frames: 5, fps: 10 });
+  const out = path.join(dir, "out");
+  const made = JSON.parse((await run(["toolbox", "sprite", "frames", file, "--pingpong", "--out", out])).stdout);
+  const report = JSON.parse((await run(["toolbox", "sprite", "loop", path.resolve(made.sheet)])).stdout);
+  assert.equal(report.mirrored, true);
+  assert.equal(report.seam.verdict, "smooth");
 });

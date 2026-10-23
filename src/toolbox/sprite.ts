@@ -3,10 +3,11 @@ import path from "node:path";
 import { CliError, EXIT } from "../errors.js";
 import { printJson, type Ctx } from "../generate.js";
 import { parseGrid, type Grid } from "../tty/preview.js";
-import { CONFIDENT, countFrames, guessGrid } from "./grid.js";
+import { backgroundOf, CONFIDENT, countFrames, guessGrid } from "./grid.js";
 import { baseOf, carriedChunks, freeName, loadImageFile, shown, writePng, type Loaded } from "./io.js";
 import { joinFrames, sliceSheet } from "./sheet.js";
 import { applyFrameOps, parseFrameList, parseHolds, type FrameOps } from "./frames.js";
+import { analyseLoop, frameDifferences } from "./loop.js";
 import { hint, TOOLS, type ToolCall } from "./registry.js";
 
 function positiveInt(call: ToolCall, flag: string): number | undefined {
@@ -274,6 +275,113 @@ TOOLS.push({
       process.stdout.write(`${n} frames -> ${order.length}: ${order.join(" ")}\n`);
       process.stdout.write(`${inPlace ? "Replaced" : "Saved"} ${shown(file)} (${cols}x${rows} grid)\n`);
       if (!ctx.globals.quiet) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
+    }
+    return EXIT.OK;
+  }
+});
+
+TOOLS.push({
+  group: "sprite",
+  name: "loop",
+  args: "<sheet>",
+  summary: "Check that an animation loops, and find the best loop inside it",
+  details: [
+    "Compares every frame with every other (the frame-difference matrix of Video Textures,",
+    "Schödl et al. 2000) and reads the seam from the last frame back to the first against the",
+    "animation's typical step: about one step is smooth, much more is a jump, almost none means the",
+    "last frame repeats the first (the loop stutters). When the seam is bad it finds the longest",
+    "run of frames that loops cleanly; --apply saves the sheet trimmed to it. Held frames",
+    "(--hold) do not count as steps, and a ping-pong is reported as mirrored."
+  ],
+  flags: [
+    { flag: "--apply", description: "Save the sheet trimmed to the best loop" },
+    { flag: "--min-frames", value: "n", description: "Shortest loop worth keeping (default: half the frames)" },
+    { flag: "--cols", value: "n", description: "Frames per row in the trimmed sheet (default: the sheet's)" },
+    { flag: "--grid", value: "CxR", description: "The sheet's grid, when it has no Ludo stamp and detection is unsure" },
+    { flag: "--in-place", description: "With --apply, replace the input sheet instead of saving a new one" }
+  ],
+  async run(ctx: Ctx, call: ToolCall) {
+    if (call.args.length !== 1) throw new CliError("Usage: ludo toolbox sprite loop <sheet> [--apply]", EXIT.USAGE);
+    const src = loadImageFile(call.args[0]);
+    const { grid, from } = sheetGrid(src, call);
+    const n = grid.frames;
+    if (n < 2) throw new CliError(`${src.file} has a single frame; there is nothing to loop`, EXIT.BAD_INPUT);
+    const minFrames = positiveInt(call, "--min-frames");
+    if (minFrames !== undefined && minFrames > n) throw new CliError(`--min-frames ${minFrames} is more than the sheet's ${n} frames`, EXIT.USAGE);
+    const apply = call.flags.has("--apply");
+    const inPlace = call.flags.has("--in-place");
+    if (inPlace && !apply) throw new CliError("--in-place only goes with --apply", EXIT.USAGE);
+
+    const cells = sliceSheet(src.image, grid.cols, grid.rows, n);
+    const report = analyseLoop(frameDifferences(cells, backgroundOf(src.image)), minFrames);
+    const { best, seam } = report;
+    const trims = !!best && best.frames < n;
+
+    if (apply && !best && seam.verdict !== "static") {
+      throw new CliError(
+        `No run of frames in ${src.file} loops cleanly, so nothing was trimmed`,
+        EXIT.BAD_INPUT,
+        "If Ludo made it, Ludo can re-cut the loop from its source video, free: ludo sprite adjust --spritesheet-url <its spritesheet_url> --loop",
+        { seam, steps: report.steps }
+      );
+    }
+    let saved: string | undefined;
+    if (apply && trims) {
+      if (inPlace && !/\.png$/i.test(src.file)) throw new CliError("--in-place only replaces PNG files", EXIT.USAGE);
+      const cols = Math.min(positiveInt(call, "--cols") ?? grid.cols, best.frames);
+      const { sheet, rows } = joinFrames(cells.slice(best.start - 1, best.end), cols);
+      saved = inPlace ? src.file : freeName(ctx.outDir, ctx.globals.name || baseOf(src.file), ".png");
+      writePng(saved, sheet, carriedChunks(src, { cols, rows, frames: best.frames, fps: grid.fps }));
+    }
+
+    const sheetArg = shown(src.file);
+    const next =
+      seam.verdict === "static"
+        ? undefined
+        : !best
+          ? hint("If Ludo made it, Ludo can re-cut the loop from its source video, free", "ludo sprite adjust --spritesheet-url <its spritesheet_url> --loop")
+          : trims && !apply
+            ? hint("Trim it to that loop", `ludo toolbox sprite loop ${sheetArg} --apply`)
+            : hint("Preview it playing", `ludo preview ${shown(saved ?? src.file)}`);
+
+    if (ctx.jsonOut) {
+      printJson(
+        {
+          sheet: sheetArg,
+          grid: { cols: grid.cols, rows: grid.rows, frames: n, frame_width: cells[0].width, frame_height: cells[0].height, fps: grid.fps },
+          grid_from: from,
+          seam,
+          steps: report.steps,
+          holds: report.holds,
+          jumps: report.jumps,
+          mirrored: report.mirrored,
+          best: best ?? null,
+          ...(apply ? { applied: saved ? shown(saved) : null } : {}),
+          // n x n numbers stop being useful to anyone well before 64 frames.
+          ...(n <= 64 ? { matrix: report.matrix } : {}),
+          ...(ctx.globals.quiet || !next ? {} : { hint: next })
+        },
+        false
+      );
+    } else {
+      const out = (line: string) => process.stdout.write(line + "\n");
+      out(`${n} frames (${grid.cols}x${grid.rows} grid${from === "stamp" ? ", from its Ludo stamp" : from === "flag" ? "" : ", detected"})`);
+      const seamText = `${n} -> 1 is ${seam.ratio}x a typical step`;
+      if (seam.verdict === "static") out("No frame moves: there is nothing to loop.");
+      else if (seam.verdict === "smooth") out(`Loops smoothly: the seam ${seamText}.`);
+      else if (seam.verdict === "repeat") {
+        out(seam.repeats === 1 ? "The last frame repeats the first, so the loop shows it twice." : `The last ${seam.repeats} frames repeat the first ${seam.repeats}, so the loop shows them twice.`);
+      }
+      else out(`Jumps at the seam: ${seamText}.`);
+      if (report.mirrored) out("It plays forward then back (a ping-pong).");
+      if (report.holds.length) out(`Held frames: ${report.holds.join(", ")}.`);
+      if (report.jumps.length) out(`Big steps (over twice the typical one) into frames ${report.jumps.join(", ")}.`);
+      if (seam.verdict !== "static" && seam.verdict !== "smooth") {
+        out(best ? `Best loop: frames ${best.start}-${best.end} (${best.frames} frames, seam ${best.seam}x a step).` : "No run of frames inside it loops cleanly.");
+      }
+      if (seam.verdict !== "static") out(`Steps: ${report.steps.slice(0, -1).join(" ")} | seam ${seam.ratio}`);
+      if (apply) out(saved ? `${inPlace ? "Replaced" : "Saved"} ${shown(saved)} (frames ${best!.start}-${best!.end})` : "Nothing written.");
+      if (!ctx.globals.quiet && next) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
     }
     return EXIT.OK;
   }

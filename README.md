@@ -141,6 +141,10 @@ ludo toolbox sprite join ludo-output/knight-walk/ --cols 4 --fps 12
 
 # Edit the frames of a sheet: drop frame 7, hold frame 4 for three frames, play as a ping-pong
 ludo toolbox sprite frames knight-walk.png --drop 7 --hold 4x3 --pingpong
+
+# Check that it loops: the seam from the last frame back to the first, against a typical step.
+# When it jumps or repeats, it finds the best loop inside; --apply saves the sheet trimmed to it.
+ludo toolbox sprite loop knight-walk.png --apply
 ```
 
 Files are saved under `./ludo-output` (or `--out <dir>`) and never overwrite anything.
