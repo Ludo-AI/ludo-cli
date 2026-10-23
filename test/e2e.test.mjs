@@ -646,6 +646,20 @@ test("--engine godot writes a SpriteFrames resource next to the sheet and lists 
   assert.match(text, /"speed": 8\.0/);
 });
 
+test("--engine texturepacker writes a JSON atlas next to the sheet and lists it", async () => {
+  const { code, stdout, stderr, cwd } = await run(["sprite", "animate", "--initial-image", "https://example.com/k.png", "--motion-prompt", "walk", "--engine", "texturepacker", "--json"]);
+  assert.equal(code, 0, stderr);
+  const files = JSON.parse(stdout).files;
+  const atlas = files.find(f => f.path.endsWith(".json"));
+  assert.ok(atlas, "the atlas is listed in files");
+  const sheet = files.find(f => f.path.endsWith(".png"));
+  const json = JSON.parse(fs.readFileSync(path.join(cwd, atlas.path), "utf8"));
+  assert.equal(json.meta.image, path.basename(sheet.path));
+  assert.deepEqual(Object.keys(json.frames), ["0", "1", "2", "3"]);
+  assert.equal(json.frames["0"].duration, 125);
+  assert.deepEqual(json.meta.frameTags[0], { name: path.basename(sheet.path, ".png"), from: 0, to: 3, direction: "forward" });
+});
+
 test("skill install writes the bundled skill, updates its own copy and protects others", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-"));
   const env = { CLAUDE_CONFIG_DIR: path.join(cwd, "claude") };

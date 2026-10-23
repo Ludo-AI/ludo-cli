@@ -4,8 +4,8 @@ import { CliError, EXIT } from "../errors.js";
 import { printJson, type Ctx } from "../generate.js";
 import type { Grid } from "../tty/preview.js";
 import { backgroundOf, CONFIDENT, countFrames, guessGrid } from "./grid.js";
-import { baseOf, carriedChunks, freeName, loadImageFile, shown, writePng, type Loaded } from "./io.js";
-import { joinFrames, sliceSheet } from "./sheet.js";
+import { baseOf, carriedChunks, engineFiles, freeName, loadImageFile, shown, writePng, type Layout, type Loaded } from "./io.js";
+import { crop, joinFrames, sliceSheet } from "./sheet.js";
 import { applyFrameOps, parseFrameList, parseHolds, type FrameOps } from "./frames.js";
 import { analyseLoop, frameDifferences } from "./loop.js";
 import { gridFlag, positiveInt, positiveNumber } from "./flags.js";
@@ -40,6 +40,10 @@ function sheetGrid(src: Loaded, call: ToolCall): { grid: Grid; from: "flag" | "s
   }
   return out;
 }
+
+const layoutOf = (src: Loaded): Layout => ({ trim: src.trim, extrude: src.extrude });
+
+const savedLines = (files: string[]) => files.map(f => `Saved ${shown(f)}\n`).join("");
 
 // "walk-2.png" before "walk-10.png".
 const natural = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
@@ -87,11 +91,14 @@ TOOLS.push({
     if (wanted !== undefined && wanted > cells) throw new CliError(`--frames ${wanted} is more than the ${cells} cells of a ${grid.cols}x${grid.rows} grid`, EXIT.USAGE);
     const frames = Math.min(wanted ?? grid.frames, cells);
 
-    const images = sliceSheet(src.image, grid.cols, grid.rows, frames);
+    // An extruded sheet's frames come out without the repeated border, and
+    // each keeps the sheet's trim record, so joining them back restores both.
+    const e = src.extrude ?? 0;
+    const images = sliceSheet(src.image, grid.cols, grid.rows, frames).map(img => (e ? crop(img, { x: e, y: e, w: img.width - 2 * e, h: img.height - 2 * e }) : img));
     const base = ctx.globals.name || baseOf(src.file);
     const dir = freeName(ctx.outDir, base);
     const digits = Math.max(2, String(frames).length);
-    const chunks = carriedChunks(src);
+    const chunks = carriedChunks(src, undefined, { trim: src.trim });
     const files = images.map((img, i) => {
       const file = path.join(dir, `${base}-${String(i + 1).padStart(digits, "0")}.png`);
       writePng(file, img, chunks);
@@ -149,8 +156,13 @@ TOOLS.push({
     );
     const grid: Grid = { cols, rows, frames: frames.length, fps };
     const file = freeName(ctx.outDir, ctx.globals.name || commonBase(files), ".png");
-    writePng(file, sheet, carriedChunks(frames[0], grid));
     const resized = frames.some(f => f.image.width !== cellW || f.image.height !== cellH);
+    // Frames that all say the same about themselves (cut from one trimmed or
+    // extruded sheet) pass it on to the new sheet.
+    const shared = (pick: (f: Loaded) => unknown) => frames.every(f => JSON.stringify(pick(f)) === JSON.stringify(pick(frames[0])));
+    const layout: Layout = resized ? {} : { trim: shared(f => f.trim) ? frames[0].trim : undefined, extrude: shared(f => f.extrude) ? frames[0].extrude : undefined };
+    writePng(file, sheet, carriedChunks(frames[0], grid, layout));
+    const engine = engineFiles(ctx, file, sheet, grid, layout);
 
     const next = hint("Preview it playing", `ludo preview ${shown(file)}`);
     if (ctx.jsonOut) {
@@ -159,13 +171,14 @@ TOOLS.push({
           sheet: shown(file),
           grid: { cols, rows, frames: frames.length, frame_width: cellW, frame_height: cellH, fps },
           centred: resized,
+          ...(engine.length ? { engine_files: engine.map(shown) } : {}),
           ...(ctx.globals.quiet ? {} : { hint: next })
         },
         false
       );
     } else {
       process.stdout.write(`${frames.length} frames of ${cellW}x${cellH} in a ${cols}x${rows} grid${resized ? " (smaller frames centred)" : ""}\n`);
-      process.stdout.write(`Saved ${shown(file)}\n`);
+      process.stdout.write(savedLines([file, ...engine]));
       if (!ctx.globals.quiet) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
     }
     return EXIT.OK;
@@ -235,7 +248,8 @@ TOOLS.push({
     const inPlace = call.flags.has("--in-place");
     if (inPlace && !/\.png$/i.test(src.file)) throw new CliError("--in-place only replaces PNG files", EXIT.USAGE);
     const file = inPlace ? src.file : freeName(ctx.outDir, ctx.globals.name || baseOf(src.file), ".png");
-    writePng(file, sheet, carriedChunks(src, out));
+    writePng(file, sheet, carriedChunks(src, out, layoutOf(src)));
+    const engine = engineFiles(ctx, file, sheet, out, layoutOf(src));
 
     const next = hint("Preview it playing", `ludo preview ${shown(file)}`);
     if (ctx.jsonOut) {
@@ -244,13 +258,14 @@ TOOLS.push({
           sheet: shown(file),
           grid: { cols, rows, frames: order.length, frame_width: cellW, frame_height: cellH, fps },
           order,
+          ...(engine.length ? { engine_files: engine.map(shown) } : {}),
           ...(ctx.globals.quiet ? {} : { hint: next })
         },
         false
       );
     } else {
       process.stdout.write(`${n} frames -> ${order.length}: ${order.join(" ")}\n`);
-      process.stdout.write(`${inPlace ? "Replaced" : "Saved"} ${shown(file)} (${cols}x${rows} grid)\n`);
+      process.stdout.write(`${inPlace ? "Replaced" : "Saved"} ${shown(file)} (${cols}x${rows} grid)\n${savedLines(engine)}`);
       if (!ctx.globals.quiet) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
     }
     return EXIT.OK;
@@ -303,12 +318,15 @@ TOOLS.push({
       );
     }
     let saved: string | undefined;
+    let engine: string[] = [];
     if (apply && trims) {
       if (inPlace && !/\.png$/i.test(src.file)) throw new CliError("--in-place only replaces PNG files", EXIT.USAGE);
       const cols = Math.min(positiveInt(call, "--cols") ?? grid.cols, best.frames);
       const { sheet, rows } = joinFrames(cells.slice(best.start - 1, best.end), cols);
       saved = inPlace ? src.file : freeName(ctx.outDir, ctx.globals.name || baseOf(src.file), ".png");
-      writePng(saved, sheet, carriedChunks(src, { cols, rows, frames: best.frames, fps: grid.fps }));
+      const outGrid: Grid = { cols, rows, frames: best.frames, fps: grid.fps };
+      writePng(saved, sheet, carriedChunks(src, outGrid, layoutOf(src)));
+      engine = engineFiles(ctx, saved, sheet, outGrid, layoutOf(src));
     }
 
     const sheetArg = shown(src.file);
@@ -334,6 +352,7 @@ TOOLS.push({
           mirrored: report.mirrored,
           best: best ?? null,
           ...(apply ? { applied: saved ? shown(saved) : null } : {}),
+          ...(engine.length ? { engine_files: engine.map(shown) } : {}),
           // n x n numbers stop being useful to anyone well before 64 frames.
           ...(n <= 64 ? { matrix: report.matrix } : {}),
           ...(ctx.globals.quiet || !next ? {} : { hint: next })
@@ -358,7 +377,61 @@ TOOLS.push({
       }
       if (seam.verdict !== "static") out(`Steps: ${report.steps.slice(0, -1).join(" ")} | seam ${seam.ratio}`);
       if (apply) out(saved ? `${inPlace ? "Replaced" : "Saved"} ${shown(saved)} (frames ${best!.start}-${best!.end})` : "Nothing written.");
+      if (engine.length) process.stdout.write(savedLines(engine));
       if (!ctx.globals.quiet && next) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
+    }
+    return EXIT.OK;
+  }
+});
+
+TOOLS.push({
+  group: "sprite",
+  name: "export",
+  args: "<sheet>",
+  summary: "Write engine files for a spritesheet: a TexturePacker JSON atlas or Godot SpriteFrames",
+  details: [
+    "The file goes next to the sheet, which it refers to by name: keep the two side by side.",
+    "  --engine texturepacker  a JSON atlas (TexturePacker's JSON Hash) for PixiJS (Assets.load,",
+    "                          sheet.animations) and Phaser (load.atlas, anims.createFromAseprite)",
+    "  --engine godot          a Godot 4 SpriteFrames .tres for an AnimatedSprite2D",
+    "Frames are keyed 0, 1, 2... in playing order. A sheet trimmed or extruded by `ludo toolbox image`",
+    "exports each frame's original size and offset, and keeps the repeated border out of the frames.",
+    "Any toolbox tool that writes a sheet also takes --engine."
+  ],
+  flags: [
+    { flag: "--animation", value: "name", description: "The animation's name (default: the file's name; \"default\" for Godot)" },
+    { flag: "--fps", value: "n", description: "Frame rate (default: the sheet's, else 10)" },
+    { flag: "--grid", value: "CxR", description: "The sheet's grid, when it has no Ludo stamp and detection is unsure" }
+  ],
+  async run(ctx: Ctx, call: ToolCall) {
+    if (call.args.length !== 1) throw new CliError("Usage: ludo toolbox sprite export <sheet> --engine texturepacker|godot", EXIT.USAGE);
+    if (!ctx.globals.engine) throw new CliError("Pass --engine texturepacker or --engine godot", EXIT.USAGE);
+    const src = loadImageFile(call.args[0]);
+    if (!/\.png$/i.test(src.file)) throw new CliError("Engine files point at a PNG: convert the sheet to PNG first", EXIT.USAGE);
+    const { grid, from } = sheetGrid(src, call);
+    const fps = positiveNumber(call, "--fps") ?? grid.fps;
+    const raw = call.flags.get("--animation");
+    if (raw === true || (typeof raw === "string" && !raw.trim())) throw new CliError("--animation needs a name", EXIT.USAGE);
+    const out = { ...grid, fps };
+    const files = engineFiles(ctx, src.file, src.image, out, layoutOf(src), typeof raw === "string" ? raw.trim() : undefined);
+
+    const next = hint("Animate another move for the same character with Ludo", `ludo sprite animate --initial-image <a frame> --motion-prompt "<what it does>" --engine ${ctx.globals.engine}`);
+    if (ctx.jsonOut) {
+      printJson(
+        {
+          sheet: shown(src.file),
+          grid: { cols: grid.cols, rows: grid.rows, frames: grid.frames, fps },
+          grid_from: from,
+          ...(src.trim ? { trimmed: true } : {}),
+          ...(src.extrude ? { extrude: src.extrude } : {}),
+          engine_files: files.map(shown),
+          ...(ctx.globals.quiet ? {} : { hint: next })
+        },
+        false
+      );
+    } else {
+      process.stdout.write(`${grid.frames} frames (${grid.cols}x${grid.rows} grid) at ${fps} fps\n${savedLines(files)}`);
+      if (!ctx.globals.quiet) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
     }
     return EXIT.OK;
   }

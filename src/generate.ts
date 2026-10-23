@@ -16,7 +16,7 @@ import { estimatePrice, formatCredits, type Price } from "./pricing.js";
 import { defaultsFor, projectPath, type Project } from "./project.js";
 import { AUDIO_EXT, copyText, IMAGE_EXT, openFile, playAudio } from "./tty/actions.js";
 import { creditsBar, nextStep, spinner } from "./tty/flair.js";
-import { writeGodotSpriteFrames } from "./tty/godot.js";
+import { ENGINE_FILE, writeEngineFile } from "./tty/engines.js";
 import { convertToPng, loadImage } from "./tty/image.js";
 import { isInlineFile } from "./inline.js";
 import { exitNow } from "./shutdown.js";
@@ -401,17 +401,18 @@ function handOff(ctx: Ctx, files: { path: string }[], sheet?: string) {
 }
 
 async function engineExport(ctx: Ctx, sheet: string | undefined, grid: ReturnType<typeof gridFromResult>): Promise<{ url: string; path: string }[]> {
+  const engine = ctx.globals.engine!;
   if (!sheet || !grid) {
-    ctx.log("--engine godot: this result has no spritesheet, so there is nothing to export.");
+    ctx.log(`--engine ${engine}: this result has no spritesheet, so there is nothing to export.`);
     return [];
   }
   try {
     const img = loadImage(sheet);
     if (!img) throw new Error("could not read the spritesheet");
-    const tres = writeGodotSpriteFrames(sheet, img.width, img.height, { cols: grid.cols, rows: grid.rows, frames: grid.frames, fps: grid.fps });
-    return [{ url: "(godot SpriteFrames)", path: tres }];
+    const file = writeEngineFile(engine, sheet, img.width, img.height, { cols: grid.cols, rows: grid.rows, frames: grid.frames, fps: grid.fps });
+    return [{ url: `(${ENGINE_FILE[engine]})`, path: file }];
   } catch (err) {
-    ctx.log(`--engine godot: ${(err as Error).message}`);
+    ctx.log(`--engine ${engine}: ${(err as Error).message}`);
     return [];
   }
 }

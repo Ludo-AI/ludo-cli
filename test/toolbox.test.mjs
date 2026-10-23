@@ -16,6 +16,7 @@ import { analyseLoop, frameDifferences } from "../dist/toolbox/loop.js";
 import { backgroundOf } from "../dist/toolbox/grid.js";
 import { contentBox, emptiness, extrude, flip, pad, rotate, scaleDown, scaleUp } from "../dist/toolbox/pixels.js";
 import { crop } from "../dist/toolbox/sheet.js";
+import { textureAtlas } from "../dist/tty/texturepacker.js";
 import { parseArgv } from "../dist/args.js";
 import { EXIT } from "../dist/errors.js";
 
@@ -782,4 +783,99 @@ test("pixel edits match ImageMagick's", t => {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---- Engine exports ----
+
+test("a TexturePacker atlas has frames keyed in playing order, animations and frameTags", () => {
+  const atlas = textureAtlas("hero.png", 64, 32, { cols: 2, rows: 2, frames: 3, fps: 12 }, "hero");
+  assert.deepEqual(Object.keys(atlas.frames), ["0", "1", "2"]);
+  assert.deepEqual(atlas.frames["2"], {
+    frame: { x: 0, y: 16, w: 32, h: 16 },
+    rotated: false,
+    trimmed: false,
+    spriteSourceSize: { x: 0, y: 0, w: 32, h: 16 },
+    sourceSize: { w: 32, h: 16 },
+    duration: 83
+  });
+  assert.deepEqual(atlas.animations, { hero: ["0", "1", "2"] });
+  assert.deepEqual(atlas.meta.frameTags, [{ name: "hero", from: 0, to: 2, direction: "forward" }]);
+  assert.deepEqual([atlas.meta.image, atlas.meta.size, atlas.meta.scale], ["hero.png", { w: 64, h: 32 }, "1"]);
+  // A sheet whose size does not divide: frames are cut as everywhere else in
+  // the CLI, floor(W / cols) wide at round(col * W / cols).
+  const odd = textureAtlas("odd.png", 100, 10, { cols: 3, rows: 1, frames: 3, fps: 10 }, "odd");
+  assert.deepEqual(Object.values(odd.frames).map(f => [f.frame.x, f.frame.w]), [[0, 33], [33, 33], [67, 33]]);
+  // Trimmed and extruded: the frame rect skips the border, the rest says where it sat.
+  const packed = textureAtlas("p.png", 48, 28, { cols: 3, rows: 2, frames: 5, fps: 8 }, "p", { trim: { x: 3, y: 2, w: 12, h: 10, source_w: 20, source_h: 16 }, extrude: 2 });
+  assert.deepEqual(packed.frames["4"], {
+    frame: { x: 18, y: 16, w: 12, h: 10 },
+    rotated: false,
+    trimmed: true,
+    spriteSourceSize: { x: 3, y: 2, w: 12, h: 10 },
+    sourceSize: { w: 20, h: 16 },
+    duration: 125
+  });
+  assert.throws(() => textureAtlas("x.png", 8, 8, { cols: 2, rows: 1, frames: 3, fps: 10 }, "x"), /do not fit/);
+  assert.throws(() => textureAtlas("x.png", 8, 8, { cols: 2, rows: 1, frames: 2, fps: 10 }, "x", { extrude: 2 }), /leaves nothing/);
+});
+
+test("sprite export writes the engine file next to the sheet, and other sheet tools take --engine", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-export-"));
+  const file = writeSheet(dir, "run.png", makeSheet({ cols: 3, rows: 2, frames: 5 }), { cols: 3, rows: 2, frames: 5, fps: 12 });
+  assert.match((await run(["toolbox", "sprite", "export", file])).stderr, /Pass --engine texturepacker or --engine godot/);
+
+  const tp = await run(["toolbox", "sprite", "export", file, "--engine", "texturepacker"]);
+  assert.equal(tp.code, EXIT.OK, tp.stderr);
+  const atlasFile = path.resolve(JSON.parse(tp.stdout).engine_files[0]);
+  assert.equal(atlasFile, path.join(dir, "run.json"));
+  const atlas = JSON.parse(fs.readFileSync(atlasFile, "utf8"));
+  assert.deepEqual([atlas.meta.image, Object.keys(atlas.frames).length, atlas.frames["0"].duration], ["run.png", 5, 83]);
+
+  // Never overwrites, takes a name and a frame rate.
+  const again = JSON.parse((await run(["toolbox", "sprite", "export", file, "--engine", "texturepacker", "--animation", "dash", "--fps", "20"])).stdout);
+  const second = JSON.parse(fs.readFileSync(path.resolve(again.engine_files[0]), "utf8"));
+  assert.match(again.engine_files[0], /run-2\.json$/);
+  assert.deepEqual([Object.keys(second.animations), second.frames["0"].duration], [["dash"], 50]);
+
+  const godot = JSON.parse((await run(["toolbox", "sprite", "export", file, "--engine", "godot"])).stdout);
+  const tres = fs.readFileSync(path.resolve(godot.engine_files[0]), "utf8");
+  assert.match(tres, /path="run\.png"/);
+  assert.equal((tres.match(/type="AtlasTexture"/g) || []).length, 5);
+  assert.match(tres, /"speed": 12\.0/);
+
+  const out = path.join(dir, "out");
+  const framed = JSON.parse((await run(["toolbox", "sprite", "frames", file, "--reverse", "--engine", "texturepacker", "--out", out])).stdout);
+  assert.equal(path.dirname(path.resolve(framed.engine_files[0])), path.dirname(path.resolve(framed.sheet)), "the atlas sits next to its sheet");
+  const flipped = JSON.parse((await run(["toolbox", "image", "flip", file, "--engine", "godot", "--out", out])).stdout);
+  assert.match(flipped.engine_files[0], /\.tres$/);
+  // A single image (no grid) is not a sheet: nothing to export.
+  const single = writeSheet(dir, "one.png", noise(8, 8));
+  assert.equal(JSON.parse((await run(["toolbox", "image", "flip", single, "--engine", "godot", "--out", out])).stdout).engine_files, undefined);
+});
+
+test("trim and extrude records survive slicing, frame edits and joining, and other edits refuse an extruded file", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-records-"));
+  const out = path.join(dir, "out");
+  const file = writeSheet(dir, "hop.png", makeSheet({ cols: 3, rows: 1, margin: 0.2 }), { cols: 3, rows: 1, frames: 3, fps: 10 });
+  const trimmed = JSON.parse((await run(["toolbox", "image", "trim", file, "--out", out])).stdout);
+  const extruded = JSON.parse((await run(["toolbox", "image", "extrude", path.resolve(trimmed.image), "--by", "3", "--out", out])).stdout);
+  assert.deepEqual(extruded.trim, trimmed.trim, "extrude keeps the trim record");
+  assert.equal(extruded.extruded, 3);
+
+  const refused = await run(["toolbox", "image", "scale", path.resolve(extruded.image), "--by", "2"]);
+  assert.equal(refused.code, EXIT.BAD_INPUT);
+  assert.match(refused.stderr, /is extruded/);
+
+  // Frame edits keep both: the cells do not change.
+  const reversed = JSON.parse((await run(["toolbox", "sprite", "frames", path.resolve(extruded.image), "--reverse", "--engine", "texturepacker", "--out", out])).stdout);
+  const atlas = JSON.parse(fs.readFileSync(path.resolve(reversed.engine_files[0]), "utf8"));
+  assert.equal(atlas.frames["0"].trimmed, true);
+  assert.deepEqual(atlas.frames["0"].frame, { x: 3, y: 3, w: trimmed.trim.width, h: trimmed.trim.height });
+
+  // Slicing drops the repeated border; joining the frames brings the trim record back.
+  const sliced = JSON.parse((await run(["toolbox", "sprite", "slice", path.resolve(extruded.image), "--out", out])).stdout);
+  assert.deepEqual([sliced.grid.frame_width, sliced.grid.frame_height], [trimmed.grid.frame_width, trimmed.grid.frame_height]);
+  const joined = JSON.parse((await run(["toolbox", "sprite", "join", path.resolve(sliced.dir), "--cols", "3", "--out", out])).stdout);
+  const restored = JSON.parse((await run(["toolbox", "image", "pad", path.resolve(joined.sheet), "--restore", "--out", out])).stdout);
+  assert.deepEqual(Buffer.from(readImage(restored.image).rgba), canonical(makeSheet({ cols: 3, rows: 1, margin: 0.2 }).rgba));
 });

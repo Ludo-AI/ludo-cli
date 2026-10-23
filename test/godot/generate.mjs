@@ -141,7 +141,21 @@ const cases = [];
   }
 }
 
-// 5. A grid that does not divide the sheet must throw.
+// 5. A trimmed and extruded sheet (ludo toolbox image trim, then extrude --by
+//    2): regions keep the repeated border out, and a margin puts each frame
+//    back at its untrimmed size and offset.
+{
+  const grid = { cols: 3, rows: 2, frames: 5, fps: 8 };
+  const sheet = path.join(out, "res", "packed.png");
+  const { width, height } = writeSheet(sheet, grid, 16, 14);
+  const trim = { x: 3, y: 2, w: 12, h: 10, source_w: 20, source_h: 16 };
+  const tres = writeGodotSpriteFrames(sheet, width, height, grid, "jump", { trim, extrude: 2 });
+  const c = expected("trimmed + extruded (margin, inset regions)", tres, "res://out/res/packed.png", grid, 16, 14, "jump");
+  c.frames = c.frames.map((f, i) => ({ ...f, region: [(i % 3) * 16 + 2, Math.floor(i / 3) * 14 + 2, 12, 10], margin: [3, 2, 8, 6] }));
+  cases.push(c);
+}
+
+// 6. A grid that does not divide the sheet must throw.
 try {
   spriteFramesTres("x.png", 100, 64, { cols: 3, rows: 2, frames: 6, fps: 10 });
   throw new Error("non-divisible grid did not throw");

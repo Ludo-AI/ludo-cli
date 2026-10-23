@@ -39,3 +39,20 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: node --test test/png.test.mjs test/toolbox.test.mjs
+
+  # TexturePacker JSON atlases loaded in real Phaser 3, Phaser 4 and PixiJS 8
+  # (dev dependencies) in headless Chromium.
+  engines:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright-core install --with-deps chromium
+      - run: npm run build
+      - run: node --test test/engines.test.mjs
+        env:
+          LUDO_REQUIRE_ENGINES: "1"

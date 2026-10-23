@@ -63,6 +63,12 @@ func check_case(c: Dictionary) -> void:
 		var want := Rect2(r[0], r[1], r[2], r[3])
 		if at.region != want:
 			fail(name, "frame %d region %s != %s" % [i, at.region, want])
+		var m: Array = f.get("margin", [0, 0, 0, 0])
+		var want_margin := Rect2(m[0], m[1], m[2], m[3])
+		if at.margin != want_margin:
+			fail(name, "frame %d margin %s != %s" % [i, at.margin, want_margin])
+		if f.has("margin") and at.get_size() != Vector2(m[2] + r[2], m[3] + r[3]):
+			fail(name, "frame %d size %s is not the untrimmed size" % [i, at.get_size()])
 		if not is_equal_approx(sf.get_frame_duration(anim, i), 1.0):
 			fail(name, "frame %d duration %s != 1.0" % [i, sf.get_frame_duration(anim, i)])
 		if at.atlas == null:

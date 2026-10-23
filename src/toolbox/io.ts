@@ -5,7 +5,9 @@ import { CliError, EXIT } from "../errors.js";
 import { encodePng, readPng, readText, textChunk, PngError, type Image, type PngInfo, type RawChunk } from "../tty/png.js";
 import { convertToPng } from "../tty/image.js";
 import { readGrid, GRID_KEY, type Grid } from "../tty/preview.js";
-import { parseTrim, TRIM_KEY, type Trim } from "./pixels.js";
+import { EXTRUDE_KEY, parseExtrude, parseTrim, TRIM_KEY, type Trim } from "./pixels.js";
+import { ENGINE_FILE, writeEngineFile } from "../tty/engines.js";
+import type { Ctx } from "../generate.js";
 
 // Reading and writing the toolbox's files. The image work stays in pure
 // functions; this is the only place that touches the disk.
@@ -16,6 +18,13 @@ export interface Loaded {
   info: PngInfo;
   grid?: Grid; // the ludo:grid stamp, when the sheet has one
   trim?: Trim; // the ludo:trim stamp: where a trimmed image (or each frame) sat
+  extrude?: number; // the ludo:extrude stamp: repeated border around each frame
+}
+
+// What a sheet says about its frames beyond the grid.
+export interface Layout {
+  trim?: Trim;
+  extrude?: number;
 }
 
 const KEEP = new Set(["gAMA", "cHRM", "sRGB", "iCCP", "pHYs"]);
@@ -49,7 +58,8 @@ export function loadImageFile(file: string): Loaded {
   }
   try {
     const { image, info } = readPng(buf);
-    return { file, image, info, grid: readGrid(buf), trim: parseTrim(readText(buf)[TRIM_KEY]) };
+    const text = readText(buf);
+    return { file, image, info, grid: readGrid(buf), trim: parseTrim(text[TRIM_KEY]), extrude: parseExtrude(text[EXTRUDE_KEY]) };
   } catch (err) {
     if (!(err instanceof PngError)) throw err;
     const hint =
@@ -59,12 +69,26 @@ export function loadImageFile(file: string): Loaded {
 }
 
 // The source's colour space and pixel size, for files made from it; its text
-// (including any old grid or trim stamp) does not carry over.
-export function carriedChunks(src: Loaded, grid?: Grid, trim?: Trim): RawChunk[] {
+// (including any old grid, trim or extrude stamp) does not carry over unless
+// passed again.
+export function carriedChunks(src: Loaded, grid?: Grid, layout: Layout = {}): RawChunk[] {
   const chunks = src.info.chunks.filter(c => KEEP.has(c.type));
   if (grid) chunks.push(textChunk(GRID_KEY, JSON.stringify(grid)));
-  if (trim) chunks.push(textChunk(TRIM_KEY, JSON.stringify(trim)));
+  if (layout.trim) chunks.push(textChunk(TRIM_KEY, JSON.stringify(layout.trim)));
+  if (layout.extrude) chunks.push(textChunk(EXTRUDE_KEY, String(layout.extrude)));
   return chunks;
+}
+
+// The --engine file for a sheet just written, next to it. Empty without
+// --engine (or a project's "engine").
+export function engineFiles(ctx: Ctx, sheet: string, image: { width: number; height: number }, grid: Grid, layout: Layout = {}, animation?: string): string[] {
+  const engine = ctx.globals.engine;
+  if (!engine) return [];
+  try {
+    return [writeEngineFile(engine, sheet, image.width, image.height, grid, layout, animation)];
+  } catch (err) {
+    throw new CliError(`Could not write the ${ENGINE_FILE[engine]} for ${shown(sheet)}: ${(err as Error).message}`, EXIT.BAD_INPUT);
+  }
 }
 
 export function writePng(file: string, image: Image, chunks: RawChunk[] = []) {

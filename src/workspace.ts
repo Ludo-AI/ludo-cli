@@ -85,8 +85,10 @@ export async function init(ctx: Ctx, parsed: Parsed): Promise<number> {
     note(configPath, "kept (pass --force to overwrite)");
   } else {
     const config: Record<string, unknown> = { out: "assets/ludo", defaults: {} };
-    // A Godot project gets SpriteFrames next to every spritesheet.
+    // A Godot project gets SpriteFrames next to every spritesheet; a Phaser or
+    // PixiJS one, a TexturePacker JSON atlas.
     if (fs.existsSync(path.join(root, "project.godot"))) config.engine = "godot";
+    else if (usesAtlasEngine(root)) config.engine = "texturepacker";
     note(configPath, writeIfChanged(configPath, JSON.stringify(config, null, 2) + "\n"));
   }
 
@@ -262,4 +264,15 @@ export function loadBatch(ctx: Ctx, parsed: Parsed, file: string, commands: Comm
     return base ? { ...prep, name: base } : prep;
   });
   return { preps, limit };
+}
+
+// Phaser or PixiJS among the package.json dependencies.
+function usesAtlasEngine(root: string): boolean {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    return Object.keys(deps).some(d => d === "phaser" || d === "pixi.js" || d.startsWith("@pixi/"));
+  } catch {
+    return false;
+  }
 }

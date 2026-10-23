@@ -19,6 +19,15 @@ export interface Trim {
 
 export const TRIM_KEY = "ludo:trim";
 
+// How many pixels of repeated border (extrude) surround every frame, so
+// exports can keep it out of the frame rects.
+export const EXTRUDE_KEY = "ludo:extrude";
+
+export function parseExtrude(text: string | undefined): number | undefined {
+  const n = Number(text);
+  return text !== undefined && Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
 export function parseTrim(text: string | undefined): Trim | undefined {
   try {
     const t = JSON.parse(text || "null");

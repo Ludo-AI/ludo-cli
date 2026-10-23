@@ -77,6 +77,11 @@ ludo docs search --query "which animation model should I use for pixel art?"
 - WebP results are also saved as PNG, side by side (engines and most tools want PNG).
 - `--engine godot` also writes a Godot 4 `SpriteFrames` resource (`.tres`) next to a spritesheet:
   drop it on an `AnimatedSprite2D`. Inside a Godot project it uses a `res://` path.
+- `--engine texturepacker` writes a TexturePacker JSON atlas (`.json`) next to a spritesheet, with
+  the animation named after the file. PixiJS: `const sheet = await Assets.load("knight-walk.json")`,
+  then `new AnimatedSprite(sheet.animations["knight-walk"])`. Phaser:
+  `this.load.aseprite("knight", "knight-walk.png", "knight-walk.json")`, then
+  `this.anims.createFromAseprite("knight")` (`load.atlas` gives the frames alone).
 
 ### In the terminal
 
@@ -155,6 +160,11 @@ ludo toolbox image extrude tiles.png --by 2 --grid 8x8
 ludo toolbox image scale hero.png --by 4            # nearest neighbour; --by 1/4 scales down
 ludo toolbox image flip knight-walk.png             # face the other way; --vertical for upside down
 ludo toolbox image rotate hero.png --by 90
+
+# Engine files for a sheet you already have. Any toolbox tool that writes a sheet takes --engine
+# too, and a trimmed or extruded sheet exports each frame's original size and offset.
+ludo toolbox sprite export knight-walk.png --engine texturepacker
+ludo toolbox sprite export knight-walk.png --engine godot
 ```
 
 Files are saved under `./ludo-output` (or `--out <dir>`) and never overwrite anything.
@@ -179,7 +189,8 @@ project uses Claude Code). Every command run anywhere below that folder uses it:
 ```
 
 - `out`: where generated files are saved (instead of `./ludo-output`).
-- `engine`: as `--engine` on every command.
+- `engine`: as `--engine` on every command (`godot` or `texturepacker`). `ludo init` picks `godot`
+  in a Godot project and `texturepacker` in one that depends on Phaser or PixiJS.
 - `max_credits`: an optional spending budget (below). Not set by `ludo init`: without it there is no limit.
 - `style_image`: used by operations that take a `style_image` (`image generate-with-style`).
 - `defaults`: API fields per command, by `"group command"` or API id.

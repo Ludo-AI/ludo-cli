@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { Command, Field } from "./commands.js";
 import { CliError, EXIT, specMismatch } from "./errors.js";
+import { ENGINES, type Engine } from "./tty/engines.js";
 
 // Flags every command understands. `value: true` means it takes an argument.
 // They win over an API field of the same name (none today takes "name";
@@ -19,7 +20,10 @@ export const GLOBAL_FLAGS: Record<string, { value: boolean; description: string 
   "--open": { value: false, description: "Open the result in its default app when done" },
   "--play": { value: false, description: "Play generated audio when done" },
   "--copy": { value: false, description: "Copy the saved file paths to the clipboard when done" },
-  "--engine": { value: true, description: "Also write engine files next to results: godot (a SpriteFrames .tres for spritesheets, Godot 4)" },
+  "--engine": {
+    value: true,
+    description: "Also write engine files next to spritesheets: godot (a Godot 4 SpriteFrames .tres) or texturepacker (a TexturePacker JSON atlas for PixiJS and Phaser)"
+  },
   "--name": { value: true, description: "Name the saved files: --name sfx_pump saves sfx_pump.mp3 (never overwrites; -v1..-vN with --n)" },
   "--n": { value: true, description: "Make N variations of the same request and pick the best (runs N jobs, or one when the API takes n)" },
   "--max-credits": { value: true, description: "Refuse to run if this would cost more than this many credits (all variations together)" },
@@ -43,7 +47,7 @@ export interface Globals {
   open: boolean;
   play: boolean;
   copy: boolean;
-  engine?: string;
+  engine?: Engine;
   name?: string;
   n?: number;
   maxCredits?: number;
@@ -124,8 +128,8 @@ export function parseArgv(argv: string[]): Parsed {
         case "--copy": globals.copy = true; break;
         case "--engine": {
           const engine = takeValue().toLowerCase();
-          if (engine !== "godot") throw new CliError(`--engine supports: godot (got "${engine}")`, EXIT.USAGE);
-          globals.engine = engine;
+          if (!(ENGINES as readonly string[]).includes(engine)) throw new CliError(`--engine supports: ${ENGINES.join(", ")} (got "${engine}")`, EXIT.USAGE);
+          globals.engine = engine as Engine;
           break;
         }
         case "--help": globals.help = true; break;

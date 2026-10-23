@@ -3,7 +3,7 @@ import { printJson, type Ctx } from "../generate.js";
 import { MAX_TOOLBOX_PIXELS, type Image } from "../tty/png.js";
 import type { Grid } from "../tty/preview.js";
 import { countFrames } from "./grid.js";
-import { baseOf, carriedChunks, freeName, loadImageFile, shown, writePng, type Loaded } from "./io.js";
+import { baseOf, carriedChunks, engineFiles, freeName, loadImageFile, shown, writePng, type Loaded } from "./io.js";
 import { crop, joinFrames, sliceSheet } from "./sheet.js";
 import { gridFlag, positiveInt, textFlag } from "./flags.js";
 import {
@@ -33,6 +33,7 @@ import { hint, TOOLS, type ToolCall, type ToolFlag } from "./registry.js";
 interface Edit {
   frames: Image[];
   trim?: Trim; // the trim record the result carries, if any
+  extrude?: number; // the repeated border it carries, if any
   facts?: Record<string, unknown>; // extra JSON fields
   says: string; // the line people read
 }
@@ -52,9 +53,14 @@ function gridOf(src: Loaded, call: ToolCall): Grid | undefined {
   return grid.cols * grid.rows > 1 ? grid : undefined;
 }
 
-async function runEdit(ctx: Ctx, call: ToolCall, usage: string, edit: (frames: Image[], src: Loaded) => Edit): Promise<number> {
+async function runEdit(ctx: Ctx, call: ToolCall, usage: string, edit: (frames: Image[], src: Loaded) => Edit, extruding = false): Promise<number> {
   if (call.args.length !== 1) throw new CliError(`Usage: ${usage}`, EXIT.USAGE);
   const src = loadImageFile(call.args[0]);
+  // The border extrude repeats is not part of the frames: any other edit
+  // would treat it as if it were.
+  if (src.extrude && !extruding) {
+    throw new CliError(`${src.file} is extruded (by ${src.extrude}), so this would edit its repeated border too`, EXIT.BAD_INPUT, "Extrude last: edit the file from before the extrude, then extrude it again.");
+  }
   const grid = gridOf(src, call);
   const frames = grid ? sliceSheet(src.image, grid.cols, grid.rows, grid.frames) : [src.image];
   const done = edit(frames, src);
@@ -70,7 +76,8 @@ async function runEdit(ctx: Ctx, call: ToolCall, usage: string, edit: (frames: I
   const inPlace = call.flags.has("--in-place");
   if (inPlace && !/\.png$/i.test(src.file)) throw new CliError("--in-place only replaces PNG files", EXIT.USAGE);
   const file = inPlace ? src.file : freeName(ctx.outDir, ctx.globals.name || baseOf(src.file), ".png");
-  writePng(file, out, carriedChunks(src, outGrid, done.trim));
+  writePng(file, out, carriedChunks(src, outGrid, { trim: done.trim, extrude: done.extrude }));
+  const engine = outGrid ? engineFiles(ctx, file, out, outGrid, { trim: done.trim, extrude: done.extrude }) : [];
 
   const next = grid
     ? hint("Preview it playing", `ludo preview ${shown(file)}`)
@@ -83,6 +90,7 @@ async function runEdit(ctx: Ctx, call: ToolCall, usage: string, edit: (frames: I
         height: out.height,
         ...(outGrid ? { grid: { cols: outGrid.cols, rows: outGrid.rows, frames: outGrid.frames, frame_width: fw, frame_height: fh, fps: outGrid.fps } } : {}),
         ...done.facts,
+        ...(engine.length ? { engine_files: engine.map(shown) } : {}),
         ...(ctx.globals.quiet ? {} : { hint: next })
       },
       false
@@ -90,6 +98,7 @@ async function runEdit(ctx: Ctx, call: ToolCall, usage: string, edit: (frames: I
   } else {
     process.stdout.write(`${done.says}${grid ? ` (each of ${done.frames.length} frames)` : ""}\n`);
     process.stdout.write(`${inPlace ? "Replaced" : "Saved"} ${shown(file)} (${out.width}x${out.height}${outGrid ? `, ${outGrid.cols}x${outGrid.rows} grid of ${fw}x${fh}` : ""})\n`);
+    for (const f of engine) process.stdout.write(`Saved ${shown(f)}\n`);
     if (!ctx.globals.quiet) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
   }
   return EXIT.OK;
@@ -226,17 +235,31 @@ TOOLS.push({
   summary: "Repeat the edge pixels outward, so frames or tiles do not bleed",
   details: [
     "TexturePacker's extrude: a frame or tile grows by the amount on every side, filled with copies",
-    "of its own edge pixels, so filtering and rounding at its edge never sample a neighbour. Do it",
-    "last: the result has no trim record."
+    "of its own edge pixels, so filtering and rounding at its edge never sample a neighbour. The",
+    "result remembers the border, so --engine exports keep it out of each frame; do it last, as the",
+    "other image tools refuse an extruded file."
   ],
   flags: [{ flag: "--by", value: "px", description: "Pixels to add on every side, 1-64 (default 1)" }, ...SHARED],
   async run(ctx, call) {
     const n = positiveInt(call, "--by") ?? 1;
     if (n > 64) throw usageError("--by is at most 64");
-    return runEdit(ctx, call, "ludo toolbox image extrude <image> [--by 1]", frames => {
-      const out = frames.map(f => extrude(f, n));
-      return { frames: out, facts: { extruded: n }, says: `Extruded ${frames[0].width}x${frames[0].height} by ${n} to ${out[0].width}x${out[0].height}` };
-    });
+    return runEdit(
+      ctx,
+      call,
+      "ludo toolbox image extrude <image> [--by 1]",
+      (frames, src) => {
+        const out = frames.map(f => extrude(f, n));
+        const total = (src.extrude ?? 0) + n;
+        return {
+          frames: out,
+          trim: src.trim,
+          extrude: total,
+          facts: { extruded: total, ...trimJson(src.trim) },
+          says: `Extruded ${frames[0].width}x${frames[0].height} by ${n} to ${out[0].width}x${out[0].height}`
+        };
+      },
+      true
+    );
   }
 });
 
