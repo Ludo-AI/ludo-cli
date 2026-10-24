@@ -20,10 +20,12 @@ import {
   trimPadded,
   trimRotated,
   trimScaled,
+  trimScaledBy,
   type Sides,
   type Trim
 } from "./pixels.js";
 import { hint, TOOLS, type ToolCall, type ToolFlag } from "./registry.js";
+import { resizeNearest, resizePillow } from "./resample.js";
 
 // Every image tool runs the same way: one image, or every frame of a sheet
 // whose grid is known (its Ludo stamp, or --grid) with the same numbers, then
@@ -254,34 +256,71 @@ TOOLS.push({
   }
 });
 
+const FILTERS = ["nearest", "bilinear", "bicubic", "lanczos"] as const;
+
+// --by: N or 1/N (whole factors, pixel-perfect), or any factor from 1/16 to
+// 16 as a decimal (1.5) or a fraction (2/3).
+function parseFactor(raw: string | undefined): { up: number; down: number; f: number } | undefined {
+  const m = raw === undefined ? null : /^\s*(\d+(?:\.\d+)?|\.\d+)\s*(?:\/\s*(\d+(?:\.\d+)?)\s*)?$/.exec(raw);
+  if (!m) return undefined;
+  const [a, b] = [Number(m[1]), m[2] === undefined ? 1 : Number(m[2])];
+  const f = a / b;
+  if (!(f >= 1 / 16 && f <= 16) || f === 1) return undefined;
+  if (Number.isInteger(f)) return { up: f, down: 1, f };
+  if (a === 1 && Number.isInteger(b)) return { up: 1, down: b, f };
+  return { up: 0, down: 0, f };
+}
+
 TOOLS.push({
   group: "image",
   name: "scale",
   args: "<image>",
-  summary: "Scale pixel art up or down by a whole factor, nearest neighbour",
+  summary: "Scale up or down: pixel-perfect by whole factors, or by any factor",
   details: [
-    "Every pixel becomes a block of N x N (--by N), or every block of N x N becomes the pixel at its",
-    "centre (--by 1/N, as ImageMagick's -sample), so scaling up and back down gives the very same",
-    "pixels. Pixels left over when the size does not divide by N are dropped (the JSON says how many)."
+    "By a whole factor every pixel becomes a block of N x N (--by N), or every block of N x N becomes",
+    "the pixel at its centre (--by 1/N, as ImageMagick's -sample), so scaling up and back down gives the",
+    "very same pixels. Pixels left over when the size does not divide by N are dropped (the JSON says",
+    "how many). Any other factor (--by 1.5, --by 2/3) sizes the result to the rounded size, each pixel",
+    "taking the source pixel under its centre; --filter smooths instead, for art that is not pixel art.",
+    "Filters are Pillow's and give its very pixels."
   ],
-  flags: [{ flag: "--by", value: "N|1/N", description: "2 to 16 to scale up, 1/2 to 1/16 to scale down" }, ...SHARED],
+  flags: [
+    { flag: "--by", value: "N|1/N|F", description: "2 to 16 or 1/2 to 1/16 pixel-perfect, or any factor from 1/16 to 16 (1.5, 0.75, 2/3)" },
+    { flag: "--filter", value: "name", description: "nearest (default), bilinear, bicubic or lanczos" },
+    ...SHARED
+  ],
   async run(ctx, call) {
     const raw = textFlag(call, "--by");
-    const m = raw === undefined ? null : /^(?:(\d+)|1\s*\/\s*(\d+))$/.exec(raw.trim());
-    const up = m?.[1] ? Number(m[1]) : 1;
-    const down = m?.[2] ? Number(m[2]) : 1;
-    if (!m || up * down < 2 || up > 16 || down > 16) throw usageError(`--by takes 2 to 16, or 1/2 to 1/16 (got "${raw ?? ""}")`);
+    const factor = parseFactor(raw);
+    if (!factor) throw usageError(`--by takes a factor from 1/16 to 16 other than 1: 2, 1/2, 1.5 or 2/3 (got "${raw ?? ""}")`);
+    const filterRaw = (textFlag(call, "--filter") ?? (call.flags.has("--filter") ? "" : "nearest")).toLowerCase();
+    if (!(FILTERS as readonly string[]).includes(filterRaw)) throw usageError(`--filter takes ${FILTERS.join(", ")} (got "${filterRaw}")`);
+    const filter = filterRaw as (typeof FILTERS)[number];
+    const { up, down, f } = factor;
+    const whole = filter === "nearest" && (up > 1 || down > 1);
+    const label = whole ? (up > 1 ? String(up) : `1/${down}`) : raw!.replace(/\s+/g, "");
     return runEdit(ctx, call, "ludo toolbox image scale <image> --by 2", (frames, src) => {
       const { width, height } = frames[0];
-      if (width < down || height < down) throw usageError(`A ${width}x${height} ${frames.length > 1 ? "frame" : "image"} is too small to scale by 1/${down}`);
-      const out = frames.map(f => (up > 1 ? scaleUp(f, up) : scaleDown(f, down)));
-      const trim = trimScaled(src.trim, up, down);
-      const dropped = { right: width % down, bottom: height % down };
+      if (whole) {
+        if (width < down || height < down) throw usageError(`A ${width}x${height} ${frames.length > 1 ? "frame" : "image"} is too small to scale by 1/${down}`);
+        const out = frames.map(fr => (up > 1 ? scaleUp(fr, up) : scaleDown(fr, down)));
+        const trim = trimScaled(src.trim, up, down);
+        const dropped = { right: width % down, bottom: height % down };
+        return {
+          frames: out,
+          trim,
+          facts: { scale: up > 1 ? up : `1/${down}`, ...(dropped.right || dropped.bottom ? { dropped } : {}), ...trimJson(trim) },
+          says: `Scaled ${width}x${height} by ${label} to ${out[0].width}x${out[0].height}`
+        };
+      }
+      const [w, h] = [Math.max(1, Math.round(width * f)), Math.max(1, Math.round(height * f))];
+      const out = frames.map(fr => (filter === "nearest" ? resizeNearest(fr, w, h) : resizePillow(fr, w, h, filter)));
+      const trim = trimScaledBy(src.trim, f, w, h);
       return {
         frames: out,
         trim,
-        facts: { scale: up > 1 ? up : `1/${down}`, ...(dropped.right || dropped.bottom ? { dropped } : {}), ...trimJson(trim) },
-        says: `Scaled ${width}x${height} by ${up > 1 ? up : `1/${down}`} to ${out[0].width}x${out[0].height}`
+        facts: { scale: f, filter, ...trimJson(trim) },
+        says: `Scaled ${width}x${height} by ${label} to ${w}x${h}${filter === "nearest" ? "" : ` (${filter})`}`
       };
     });
   }

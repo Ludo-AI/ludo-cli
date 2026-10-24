@@ -732,7 +732,10 @@ test("image tools refuse bad flags and empty images clearly", async () => {
     [["pad", file, "--to", "4x4"], /smaller than the 8x8 image/],
     [["pad", file, "--by", "2", "--anchor", "top"], /--anchor only goes with --to/],
     [["pad", file, "--by", "2", "--color", "red"], /hex colour/],
-    [["scale", file, "--by", "1.5"], /--by takes 2 to 16/],
+    [["scale", file, "--by", "1"], /--by takes a factor from 1\/16 to 16/],
+    [["scale", file, "--by", "17"], /--by takes a factor/],
+    [["scale", file, "--by", "1/20"], /--by takes a factor/],
+    [["scale", file, "--by", "1.5", "--filter", "box"], /--filter takes nearest, bilinear/],
     [["scale", file, "--by", "1/16"], /too small to scale/],
     [["rotate", file, "--by", "45"], /--by takes 90, 180, 270/],
     [["trim", file, "--threshold", "300"], /--threshold must be/]
@@ -783,6 +786,60 @@ test("pixel edits match ImageMagick's", t => {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("scaling by any factor is Pillow's resize, to the byte", async t => {
+  const pillow = (() => {
+    try {
+      execFileSync("python3", ["-I", "-c", "import PIL"], { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  if (!pillow) return t.skip("Pillow is not installed");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-scale-pil-"));
+  try {
+    const file = writeSheet(dir, "in.png", noise(9, 7, 0, 5));
+    const PIL = { nearest: "NEAREST", bilinear: "BILINEAR", bicubic: "BICUBIC", lanczos: "LANCZOS" };
+    const cases = [
+      ["1.5", "nearest"],
+      ["2/3", "nearest"],
+      ["0.75", "bilinear"],
+      ["1.5", "bicubic"],
+      ["2/3", "lanczos"],
+      ["2", "lanczos"],
+      ["1/2", "bicubic"],
+      ["3.25", "lanczos"]
+    ];
+    for (const [by, filter] of cases) {
+      const out = path.join(dir, `out-${by.replace("/", "_")}-${filter}`);
+      const r = await run(["toolbox", "image", "scale", file, "--by", by, "--filter", filter, "--out", out, "--json"]);
+      assert.equal(r.code, 0, r.stderr);
+      const ours = readPng(fs.readFileSync(path.resolve(out, path.basename(JSON.parse(r.stdout).image)))).image;
+      const [a, b = 1] = by.split("/").map(Number);
+      assert.deepEqual([ours.width, ours.height], [Math.round((9 * a) / b), Math.round((7 * a) / b)], by);
+      const script = `import sys\nfrom PIL import Image\nim = Image.open(sys.argv[1]).convert("RGBA").resize((${ours.width}, ${ours.height}), Image.Resampling.${PIL[filter]})\nsys.stdout.buffer.write(im.tobytes())`;
+      const theirs = execFileSync("python3", ["-I", "-c", script, file]);
+      assert.deepEqual(canonical(ours.rgba), canonical(theirs), `--by ${by} --filter ${filter}`);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a fractional scale keeps a trimmed sheet's record in step", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-scale-trim-"));
+  // Two 12x10 frames whose content is a 4x4 block at (6, 4).
+  const img = { width: 24, height: 10, rgba: new Uint8Array(24 * 10 * 4) };
+  for (const ox of [0, 12]) for (let y = 4; y < 8; y++) for (let x = 6; x < 10; x++) img.rgba.set([200, 40, 40, 255], ((y * 24) + ox + x) * 4);
+  const file = writeSheet(dir, "s.png", img, { cols: 2, rows: 1, frames: 2, fps: 8 });
+  const trimmed = JSON.parse((await run(["toolbox", "image", "trim", file, "--out", dir, "--json"])).stdout);
+  const r = await run(["toolbox", "image", "scale", path.resolve(dir, path.basename(trimmed.image)), "--by", "1.5", "--out", dir, "--json"]);
+  const out = JSON.parse(r.stdout);
+  assert.deepEqual(out.trim, { x: 9, y: 6, width: 6, height: 6, source_width: 18, source_height: 15 });
+  assert.equal(out.scale, 1.5);
+  assert.equal(out.filter, "nearest");
 });
 
 // ---- Engine exports ----

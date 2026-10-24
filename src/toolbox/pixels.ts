@@ -202,6 +202,16 @@ export function trimScaled(t: Trim | undefined, up: number, down: number): Trim 
   return { x, y, w, h, source_w, source_h };
 }
 
+// By a factor that is not whole, the frame comes out at its own rounded size
+// (w, h): the untrimmed size and offset scale and round alike, kept inside
+// that size.
+export function trimScaledBy(t: Trim | undefined, f: number, w: number, h: number): Trim | undefined {
+  if (!t) return undefined;
+  const [source_w, source_h] = [Math.round(t.source_w * f), Math.round(t.source_h * f)];
+  if (source_w < w || source_h < h) return undefined;
+  return { x: Math.min(Math.round(t.x * f), source_w - w), y: Math.min(Math.round(t.y * f), source_h - h), w, h, source_w, source_h };
+}
+
 export function trimFlipped(t: Trim | undefined, axis: "horizontal" | "vertical"): Trim | undefined {
   if (!t) return undefined;
   return axis === "horizontal" ? { ...t, x: t.source_w - t.x - t.w } : { ...t, y: t.source_h - t.y - t.h };
