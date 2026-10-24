@@ -38,7 +38,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: node --test test/png.test.mjs test/gif.test.mjs test/pack.test.mjs test/sequence.test.mjs test/align.test.mjs test/web-math/exportPackMath.test.mjs test/web-math/exportSequenceMath.test.mjs test/toolbox.test.mjs test/unity.test.mjs test/unfake.test.mjs test/tiles.test.mjs
+      - run: node --test test/png.test.mjs test/gif.test.mjs test/pack.test.mjs test/sequence.test.mjs test/align.test.mjs test/web-math/exportPackMath.test.mjs test/web-math/exportSequenceMath.test.mjs test/toolbox.test.mjs test/unity.test.mjs test/unfake.test.mjs test/tiles.test.mjs test/model.test.mjs test/video.test.mjs
 
   # TexturePacker JSON atlases loaded in real Phaser 3, Phaser 4 and PixiJS 8
   # (dev dependencies) in headless Chromium.

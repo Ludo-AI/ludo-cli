@@ -56,6 +56,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.20.4",
+    "gltf-validator": "2.0.0-dev.3.10",
     "phaser": "4.2.1",
     "phaser3": "npm:phaser@3.90.0",
     "pixi.js": "8.22.0",
