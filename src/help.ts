@@ -212,7 +212,7 @@ ${TOOLS.map(t => `- \`ludo toolbox ${t.group} ${t.name} ${t.args}\`: ${t.summary
 - Generations block until done, then save every result file to \`./ludo-output\` (\`--out <dir>\` to change).
   Name them with \`--name <base>\` (\`--name sfx_pump\` -> \`sfx_pump.mp3\`) rather than renaming files afterwards;
   an existing file is never overwritten (the new one gets \`-2\`).
-- Game engines: \`--engine godot\` also writes a Godot 4 SpriteFrames \`.tres\` next to a spritesheet, \`--engine texturepacker\` a TexturePacker JSON atlas for PixiJS and Phaser (listed in \`files\`). In Phaser load it with \`this.load.aseprite(key, png, json)\` so \`this.anims.createFromAseprite(key)\` builds the animation. \`ludo toolbox sprite export <sheet> --engine ...\` does it for a sheet you already have.
+- Game engines: \`--engine godot\` also writes a Godot 4 SpriteFrames \`.tres\` next to a spritesheet, \`--engine texturepacker\` a TexturePacker JSON atlas for PixiJS and Phaser, \`--engine unity\` the sheet's \`.png.meta\` (sliced into sprites) and an \`.anim\` clip (listed in \`files\`; in a Unity project, save under \`Assets/\`). In Phaser load it with \`this.load.aseprite(key, png, json)\` so \`this.anims.createFromAseprite(key)\` builds the animation. \`ludo toolbox sprite export <sheet> --engine ...\` does it for a sheet you already have.
 - Directional Sprites (a character seen from up to 8 directions that line up): make a rigged model
   (\`ludo model create --image hero.png --rig\`), pick a style (\`ludo sprite directional-styles\`), check the look
   with \`ludo sprite directional-preview\` (free; saves the frames as images to look at; one preview at a time per

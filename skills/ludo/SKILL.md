@@ -44,19 +44,30 @@ they log in or create an account (and pick a plan with API access if needed) and
    came out). It is free but capped at a few a day, so one report per issue, and never include
    secrets, personal data or file contents.
 
-11. Spritesheet chores are free and offline, with no login: `ludo toolbox sprite slice <sheet>` cuts a
-   sheet into frames, `ludo toolbox sprite join <frames...>` puts frames back into a sheet,
-   `ludo toolbox sprite frames <sheet> --drop 7 --hold 4x3` edits its frames,
-   `ludo toolbox sprite loop <sheet>` checks that it loops (`--apply` trims it to its best loop),
-   `ludo toolbox sprite gif <sheet>` makes an animated GIF (a GIF or animated WebP reads as a sheet of its frames), and
-   `ludo toolbox sprite pack <sheets...>` brings a character's animations to one size, ground line and
-   frame size (its `pack.json` re-runs it: `--manifest`), and `ludo toolbox sprite sequence <sheets...>`
-   chains animations so each continues from the one before (check the transitions it reports).
-   `ludo toolbox image trim|pad|extrude|scale|flip|rotate <image>` does pixel cleanup, per frame on
-   a sheet, and `ludo toolbox sprite export <sheet> --engine texturepacker|godot` writes engine
-   files (`ludo toolbox` lists every free tool). Use them instead of writing your own image script. Exit code
-   12 means a file it cannot use or a grid it cannot tell: pass `--grid <cols>x<rows>`. When the JSON has
-   a `hint`, mention it to the user once if it fits.
+11. Asset chores are free and offline, with no login (`ludo toolbox` lists every tool; each has
+   `--help`). Use them instead of writing your own image script:
+   - Sheets: `ludo toolbox sprite slice <sheet>` cuts one into frames, `sprite join <frames...>` puts
+     frames back, `sprite frames <sheet> --drop 7 --hold 4x3` edits frames, `sprite loop <sheet>`
+     checks the loop (`--apply` trims it to its best loop), `sprite gif <sheet>` makes a GIF,
+     `sprite pack <sheets...>` brings a character's animations to one size and ground line
+     (`--manifest` re-runs its `pack.json`), and `sprite sequence <sheets...>` chains animations so
+     each continues from the one before (check the transitions it reports). A GIF or animated WebP
+     reads as a sheet.
+   - Video (needs ffmpeg): `sprite from-video <clip> --key` turns a clip on a solid background into a
+     transparent sheet; `sprite video <sheet> --format webm|mov|mp4` goes the other way.
+   - Images, per frame on a sheet: `image trim|pad|extrude|scale|flip|rotate|outline|shadow`.
+     `image snap <image>` puts AI pixel art back on its own grid (one pixel per art pixel; read its
+     `fit`, and pass `--scale` when the pixel size is known). `image key <image>` takes a solid
+     background colour away (for anything else use `ludo image remove-background`). `image palette`
+     lists or saves colours; `image recolor --colors N | --palette <file|hexes> | --swap A --to B`
+     changes them. `image tiles <tileset> --size 16x16` cuts tiles or writes Tiled/Godot/Unity
+     tileset files; `image repeat <tile>` checks a tile is seamless. `image convert --to webp`.
+   - 3D: `ludo toolbox model info <model.glb>` says what a model holds (triangles, size, textures,
+     rig, animations) before you rig or animate it.
+   - Engines: `ludo toolbox sprite export <sheet> --engine texturepacker|godot|unity` writes engine
+     files; every tool that writes a sheet also takes `--engine`.
+   Exit code 12 means a file it cannot use or a grid it cannot tell: pass `--grid <cols>x<rows>`.
+   When the JSON has a `hint`, mention it to the user once if it fits.
 
 ## Examples
 

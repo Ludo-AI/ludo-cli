@@ -82,6 +82,10 @@ ludo docs search --query "which animation model should I use for pixel art?"
   then `new AnimatedSprite(sheet.animations["knight-walk"])`. Phaser:
   `this.load.aseprite("knight", "knight-walk.png", "knight-walk.json")`, then
   `this.anims.createFromAseprite("knight")` (`load.atlas` gives the frames alone).
+- `--engine unity` writes the sheet's `.png.meta`, which imports it sliced into one sprite per
+  frame, and an `.anim` clip that plays them on a `SpriteRenderer`. Export into your project's
+  `Assets/` folder (or copy the PNG, `.meta` and `.anim` there together). A `.meta` already there
+  keeps its guid, so scenes and prefabs that use the sprites still find them.
 
 ### In the terminal
 
@@ -151,15 +155,41 @@ ludo toolbox sprite frames knight-walk.png --drop 7 --hold 4x3 --pingpong
 # When it jumps or repeats, it finds the best loop inside; --apply saves the sheet trimmed to it.
 ludo toolbox sprite loop knight-walk.png --apply
 
-# Pixel cleanup. On a sheet (its Ludo stamp, or --grid) every frame gets the same edit, so the
+# Image edits. On a sheet (its Ludo stamp, or --grid) every frame gets the same edit, so the
 # frames stay aligned.
 ludo toolbox image trim knight-walk.png             # cut the empty border, one box for all frames
 ludo toolbox image pad trimmed.png --restore        # put back what trim cut
 ludo toolbox image pad hero.png --to 128x128 --anchor bottom
 ludo toolbox image extrude tiles.png --by 2 --grid 8x8
 ludo toolbox image scale hero.png --by 4            # nearest neighbour; --by 1/4 scales down
+ludo toolbox image scale hero.png --by 1.5 --filter lanczos   # any factor; Pillow's filters
 ludo toolbox image flip knight-walk.png             # face the other way; --vertical for upside down
 ludo toolbox image rotate hero.png --by 90
+ludo toolbox image outline hero.png --color "#1a1c2c" # 1 px, no corners; --shape square, --width 2
+ludo toolbox image shadow hero.png --offset 2,2 --opacity 40
+ludo toolbox image convert hero.png --to webp       # lossless WebP
+
+# AI pixel art back on its own grid: finds the art pixel's size (an exact upscale comes back
+# losslessly; soft, resampled or hand-drawn grids go through unfake.js's detectors) and gives
+# each cell one colour. The JSON's `fit` says how much of the image the result explains.
+ludo toolbox image snap knight.png                  # 768x768 at 3x -> 256x256
+ludo toolbox image snap knight.png --colors 32 --keep-size
+
+# Take a solid background away (a colour key): the colour around the art, not the same colour
+# inside it (--everywhere takes that too). For painted backgrounds: ludo image remove-background.
+ludo toolbox image key sprite-on-white.png --fuzz 10
+
+# Palettes: list and save one (.hex, .gpl, .pal, .txt, .png), reduce to N colours, map onto a
+# Lospec palette or another sprite's colours, or swap colours (a red enemy becomes a blue one).
+ludo toolbox image palette hero.png --save hero.gpl
+ludo toolbox image recolor knight-walk.png --colors 16
+ludo toolbox image recolor knight-walk.png --palette pico-8.hex
+ludo toolbox image recolor slime.png --swap "#3fa34d,#2a6e33" --to "#3b6fd1,#24478a"
+
+# Tilesets: one PNG per tile, or the files Tiled (--tiled), Godot and Unity read. repeat lays a
+# tile out 3x3 and says whether its edges meet without a seam.
+ludo toolbox image tiles terrain.png --size 16x16 --spacing 1 --tiled --engine godot
+ludo toolbox image repeat grass.png
 
 # An animated GIF for sharing: one palette for every frame (the sheet's own colours when it has
 # 256 or fewer), 1-bit transparency (--alpha-threshold, --matte for soft edges), loops forever
@@ -180,10 +210,19 @@ ludo toolbox sprite sequence idle.png jump.png --mode separate --engine godot
 # A GIF or animated WebP reads as a sheet of its frames, so every sprite and image tool takes one.
 ludo toolbox sprite slice dance.gif
 
+# Video (needs ffmpeg): a clip to a sheet (--key takes a solid background away from every frame),
+# and a sheet to WebM or MOV with transparency, or MP4.
+ludo toolbox sprite from-video knight-walk.mp4 --fps 12 --key
+ludo toolbox sprite video knight-walk.png --format webm --loops 3
+
+# What is in a 3D model: meshes, triangles, size, textures, skeleton and animations.
+ludo toolbox model info knight.glb
+
 # Engine files for a sheet you already have. Any toolbox tool that writes a sheet takes --engine
 # too, and a trimmed or extruded sheet exports each frame's original size and offset.
 ludo toolbox sprite export knight-walk.png --engine texturepacker
 ludo toolbox sprite export knight-walk.png --engine godot
+ludo toolbox sprite export knight-walk.png --engine unity
 ```
 
 Files are saved under `./ludo-output` (or `--out <dir>`) and never overwrite anything.
@@ -208,8 +247,9 @@ project uses Claude Code). Every command run anywhere below that folder uses it:
 ```
 
 - `out`: where generated files are saved (instead of `./ludo-output`).
-- `engine`: as `--engine` on every command (`godot` or `texturepacker`). `ludo init` picks `godot`
-  in a Godot project and `texturepacker` in one that depends on Phaser or PixiJS.
+- `engine`: as `--engine` on every command (`godot`, `texturepacker` or `unity`). `ludo init` picks
+  `godot` in a Godot project, `unity` in a Unity project (and saves under `Assets/Ludo`), and
+  `texturepacker` in one that depends on Phaser or PixiJS.
 - `max_credits`: an optional spending budget (below). Not set by `ludo init`: without it there is no limit.
 - `style_image`: used by operations that take a `style_image` (`image generate-with-style`).
 - `defaults`: API fields per command, by `"group command"` or API id.
