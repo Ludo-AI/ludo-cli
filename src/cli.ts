@@ -277,15 +277,15 @@ let commandLabel: string | undefined;
 // The spec the current run was built from, for the stale-spec retry below.
 let specInUse: { apiUrl: string; source: string } | undefined;
 
-// A cached spec can be up to an hour behind the API. When a command, flag or
-// value is rejected locally and that spec came from the cache, refetch it and,
+// A cached or embedded spec can be behind the API. When a command, flag or
+// value is rejected locally and that spec did not just come from the server, refetch it and,
 // if the server has a newer one, run the command again against it. These
 // errors are all raised before anything is uploaded or submitted.
 async function run(argv: string[]): Promise<number> {
   try {
     return await main(argv);
   } catch (err) {
-    if (!(err instanceof CliError && err.specMismatch && specInUse?.source === "cache")) throw err;
+    if (!(err instanceof CliError && err.specMismatch && (specInUse?.source === "cache" || specInUse?.source === "embedded"))) throw err;
     const fresh = await loadSpec(specInUse.apiUrl, { forceRefresh: true });
     if (fresh.source !== "server") throw err;
     return main(argv);
@@ -322,7 +322,7 @@ async function main(argv: string[]): Promise<number> {
     return EXIT.OK;
   }
 
-  const loaded = await loadSpec(apiUrl);
+  const loaded = await loadSpec(apiUrl, { noWait: !first || first === "help" || globals.help });
   specInUse = { apiUrl, source: loaded.source };
   const { spec } = loaded;
   const commands = buildCommands(spec);

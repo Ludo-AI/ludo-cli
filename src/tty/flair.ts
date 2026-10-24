@@ -98,22 +98,39 @@ export function creditsBar(available: number, planCredits: number, width = 20): 
   return "▰".repeat(filled) + "▱".repeat(width - filled);
 }
 
-// Ludo's logo, drawn small with half blocks: a rounded "L" mark in the brand
-// gradient. Six rows, only on a bare `ludo` at a terminal.
+// Ludo's logo, the dog's head and its diamonds, traced from the brand mark in
+// half blocks and filled with the brand gradient (purple bottom left to blue
+// top right). Thirteen rows, only on a bare `ludo` at a terminal.
+const DOG = [
+  "             ▄",
+  "           ▄███▄",
+  "       █   ▀██▀     ▄▄",
+  "                    ██▀",
+  "         ▄▄███▄▄",
+  " ▄▄    ████████▀▀█▄▄▄▄▄█▄",
+  "███▀  ██████ ██▄▄████████",
+  " ▀    ▀█████ ███████████",
+  "    ▄█▄ ▀███  █████████",
+  "   ▄████▄ ▀ ▄███▀▀▀▀▀",
+  "  ███████████▀",
+  "   ▀████████▀",
+  "      ▀▀████"
+];
+
 export function logo(v: Visuals): string {
-  const rows = ["██      ", "██      ", "██      ", "██      ", "████████", "████████"];
-  const from = [124, 58, 237];
-  const to = [236, 72, 153];
-  return rows
-    .map((row, y) =>
-      [...row]
-        .map((ch, x) => {
-          if (ch === " ") return " ";
-          const t = (x + y) / (row.length + rows.length);
-          const c = from.map((f, i) => Math.round(f + (to[i] - f) * t));
-          return v.truecolor ? `\x1b[38;2;${c[0]};${c[1]};${c[2]}m█` : `\x1b[38;5;135m█`;
-        })
-        .join("") + "\x1b[0m"
-    )
-    .join("\n");
+  const from = [138, 20, 236];
+  const to = [69, 175, 248];
+  const width = Math.max(...DOG.map(row => row.length));
+  return DOG.map((row, y) =>
+    [...row]
+      .map((ch, x) => {
+        if (ch === " ") return " ";
+        const t = (x / (width - 1) + 1 - y / (DOG.length - 1)) / 2;
+        const c = from.map((f, i) => Math.round(f + (to[i] - f) * t));
+        if (v.truecolor) return `\x1b[38;2;${c[0]};${c[1]};${c[2]}m${ch}`;
+        const [r, g, b] = c.map(n => Math.round((n / 255) * 5));
+        return `\x1b[38;5;${16 + 36 * r + 6 * g + b}m${ch}`;
+      })
+      .join("") + "\x1b[0m"
+  ).join("\n");
 }

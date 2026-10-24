@@ -29,6 +29,7 @@ let flakyPolls = 0;
 let flakyUploads = 0;
 let flakyJobGets = 0;
 let rateLimitedUploads = false;
+let slowSpecMs = 0;
 const ACCOUNT = {
   credits: { available: 1840.5, plan_credits: 2000, used: 460, extra: 300.5, resets_at: 1790000000, team_pool: false, paused: false, grace_until: null },
   plan: { name: "Pro", api_access: true },
@@ -50,6 +51,7 @@ before(async () => {
     seen.push({ method: req.method, path: url.pathname, headers: req.headers, raw });
 
     if (req.method === "GET" && url.pathname === "/api-documentation/openapi.json") {
+      if (slowSpecMs) await new Promise(r => setTimeout(r, slowSpecMs));
       if (req.headers["if-none-match"] === '"v2"') {
         res.writeHead(304);
         return res.end();
@@ -322,8 +324,9 @@ test("agent-help lists every group", async () => {
   for (const g of ["image", "sprite", "video", "model", "audio", "jobs", "docs"]) assert.match(stdout, new RegExp(`- ${g}:`));
 });
 
-// Seeds a fresh cache holding a spec from before removeBackground existed.
-function staleCache(etag) {
+// Seeds a cache holding a spec from before removeBackground existed, fetched
+// at fetchedAt (just now by default).
+function staleCache(etag, fetchedAt = Date.now()) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-"));
   const dir = path.join(cwd, ".cache");
   fs.mkdirSync(dir);
@@ -331,7 +334,7 @@ function staleCache(etag) {
   const old = JSON.parse(fs.readFileSync(SPEC, "utf8"));
   delete old.paths["/assets/image/remove-background"];
   fs.writeFileSync(path.join(dir, `openapi-${key}.json`), JSON.stringify(old));
-  fs.writeFileSync(path.join(dir, `openapi-${key}.meta.json`), JSON.stringify({ etag, fetched_at: Date.now() }));
+  fs.writeFileSync(path.join(dir, `openapi-${key}.meta.json`), JSON.stringify({ etag, fetched_at: fetchedAt }));
   return cwd;
 }
 
@@ -353,6 +356,54 @@ test("no retry when the server says the cached spec is current", async () => {
   assert.match(stderr, /Unknown command: ludo image remove-background/);
   assert.equal(specFetches(from).length, 1);
   assert.ok(!seen.slice(from).some(s => s.path.startsWith("/api/assets/")));
+});
+
+test("an hour-old cached spec is used at once and refreshed in the background", async () => {
+  const from = seen.length;
+  const cwd = staleCache('"v2"', Date.now() - 2 * 60 * 60 * 1000);
+  const metaFile = fs.readdirSync(path.join(cwd, ".cache")).find(f => f.endsWith(".meta.json"));
+  const meta = () => JSON.parse(fs.readFileSync(path.join(cwd, ".cache", metaFile), "utf8"));
+  slowSpecMs = 3000;
+  try {
+    const started = Date.now();
+    const { code, stderr } = await run(["agent-help"], { LUDO_SPEC: "" }, cwd);
+    assert.equal(code, 0, stderr);
+    assert.ok(Date.now() - started < 2500, "did not wait for the slow server");
+    assert.ok(meta().checked_at, "the background refresh was claimed");
+    // The detached `ludo spec refresh` asks with the ETag, and gets its 304.
+    for (let i = 0; i < 100 && !(meta().fetched_at > started); i++) await new Promise(r => setTimeout(r, 50));
+    assert.ok(meta().fetched_at > started, "the background refresh stored the server's answer");
+    const [fetch] = specFetches(from);
+    assert.equal(fetch.headers["if-none-match"], '"v2"');
+    assert.doesNotMatch(fetch.headers["cache-control"] || "", /no-cache/);
+  } finally {
+    slowSpecMs = 0;
+  }
+});
+
+test("a refresh that did not get through is not retried on every run", async () => {
+  const from = seen.length;
+  const cwd = staleCache('"v2"', Date.now() - 2 * 60 * 60 * 1000);
+  const metaFile = fs.readdirSync(path.join(cwd, ".cache")).find(f => f.endsWith(".meta.json"));
+  const metaPath = path.join(cwd, ".cache", metaFile);
+  fs.writeFileSync(metaPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(metaPath, "utf8")), checked_at: Date.now() }));
+  const { code, stderr } = await run(["agent-help"], { LUDO_SPEC: "" }, cwd);
+  assert.equal(code, 0, stderr);
+  await new Promise(r => setTimeout(r, 300));
+  assert.equal(specFetches(from).length, 0);
+});
+
+test("help on a first run does not wait for the server", async () => {
+  slowSpecMs = 3000;
+  try {
+    const started = Date.now();
+    const { code, stdout } = await run([], { LUDO_SPEC: "" });
+    assert.equal(code, 2);
+    assert.match(stdout, /Groups:/);
+    assert.ok(Date.now() - started < 2500, "did not wait for the slow server");
+  } finally {
+    slowSpecMs = 0;
+  }
 });
 
 test("a crash in the CLI sends a scrubbed report to Sentry", async () => {
