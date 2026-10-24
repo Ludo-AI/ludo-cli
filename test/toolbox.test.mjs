@@ -1088,6 +1088,26 @@ test("outline and shadow go under the art and grow the canvas only where they wo
   assert.equal(zero.code, EXIT.USAGE);
 });
 
+test("image convert: to lossless WebP and back gives the same pixels; the WebP says what it drops", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-convert-"));
+  const img = noise(30, 20, 2, 41);
+  const file = writeSheet(dir, "s.png", img, { cols: 3, rows: 2, frames: 6, fps: 8 });
+  const webp = await run(["toolbox", "image", "convert", file, "--to", "webp", "--out", dir, "--json"]);
+  assert.equal(webp.code, EXIT.OK, webp.stderr);
+  const w = JSON.parse(webp.stdout);
+  assert.match(w.dropped, /grid/);
+  const back = JSON.parse((await run(["toolbox", "image", "convert", path.resolve(dir, path.basename(w.saved)), "--out", dir, "--name", "back", "--json"])).stdout);
+  const out = readPng(fs.readFileSync(path.resolve(dir, path.basename(back.saved)))).image;
+  assert.ok(canonical(out.rgba).equals(canonical(img.rgba)));
+  try {
+    execFileSync("dwebp", ["-version"], { stdio: "ignore" });
+  } catch {
+    return;
+  }
+  const raw = execFileSync("dwebp", [path.resolve(dir, path.basename(w.saved)), "-pam", "-o", "-"]);
+  assert.ok(canonical(raw.subarray(raw.length - img.rgba.length)).equals(canonical(img.rgba)), "dwebp reads the same pixels");
+});
+
 function joinTwo(img) {
   const out = { width: img.width * 2, height: img.height, rgba: new Uint8Array(img.width * 2 * img.height * 4) };
   for (let y = 0; y < img.height; y++) {

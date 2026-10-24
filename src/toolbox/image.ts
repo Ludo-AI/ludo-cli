@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { CliError, EXIT } from "../errors.js";
 import { printJson, type Ctx } from "../generate.js";
@@ -32,6 +33,7 @@ import { PaletteMap, quantizeFrames } from "./quantize.js";
 import { coloursOf, hexOf, loadPalette, PALETTE_EXTENSIONS, PaletteError, savePalette } from "./palette.js";
 import { applyKey, borderColour, keyMask } from "./key.js";
 import { dropShadow, margins, outline, type Shape } from "./effects.js";
+import { encodeWebp } from "../tty/webp-encode.js";
 
 // Every image tool runs the same way: one image, or every frame of a sheet
 // whose grid is known (its Ludo stamp, or --grid) with the same numbers, then
@@ -607,6 +609,40 @@ TOOLS.push({
         says: `Shadow at ${dx},${dy} in ${hex(base)} at ${opacity}%${anyRoom(room) ? `, the canvas grown to ${grown[0].width}x${grown[0].height} to fit it` : ""}`
       };
     });
+  }
+});
+
+TOOLS.push({
+  group: "image",
+  name: "convert",
+  args: "<image>",
+  summary: "Save an image as PNG or lossless WebP",
+  details: [
+    "Reads PNG, GIF, WebP (still or animated; an animation comes out as a sheet) and, through a converter",
+    "the system has, JPEG and others. --to webp is lossless: the same pixels, usually smaller than PNG.",
+    "WebP keeps no Ludo grid stamp, so a sheet's grid has to be given again (--grid) when it is read back."
+  ],
+  flags: [{ flag: "--to", value: "format", description: "png or webp (default png)" }],
+  async run(ctx, call) {
+    if (call.args.length !== 1) throw usageError("Usage: ludo toolbox image convert <image> --to webp");
+    const to = (textFlag(call, "--to") ?? "png").toLowerCase().replace(/^\./, "");
+    if (to !== "png" && to !== "webp") throw usageError(`--to takes png or webp (got "${to}")`);
+    const src = loadImageFile(call.args[0]);
+    const file = freeName(ctx.outDir, ctx.globals.name || baseOf(src.file), `.${to}`);
+    if (to === "png") writePng(file, src.image, carriedChunks(src, src.grid, { trim: src.trim, extrude: src.extrude }));
+    else {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, encodeWebp(src.image));
+    }
+    const bytes = fs.statSync(file).size;
+    const lost = to === "webp" && (src.grid || src.trim || src.extrude) ? "its grid, trim and extrude stamps (WebP keeps none)" : undefined;
+    if (ctx.jsonOut) {
+      printJson({ image: shown(src.file), saved: shown(file), format: to, width: src.image.width, height: src.image.height, bytes, ...(src.grid ? { grid: src.grid } : {}), ...(lost ? { dropped: lost } : {}) }, false);
+    } else {
+      process.stdout.write(`Saved ${shown(file)} (${src.image.width}x${src.image.height}, ${Math.max(1, Math.round(bytes / 1024))} KB)\n`);
+      if (lost) process.stderr.write(`Note: the WebP drops ${lost}; pass --grid ${src.grid ? `${src.grid.cols}x${src.grid.rows}` : "CxR"} when you use it as a sheet.\n`);
+    }
+    return EXIT.OK;
   }
 });
 
