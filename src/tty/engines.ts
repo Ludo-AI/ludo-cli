@@ -5,6 +5,7 @@
 import { writeGodotSpriteFrames } from "./godot.js";
 import { writeTextureAtlas, type FrameLayout } from "./texturepacker.js";
 import { writeUnityFiles } from "./unity.js";
+import { noteFact } from "../telemetry.js";
 
 export const ENGINES = ["godot", "texturepacker", "unity"] as const;
 export type Engine = (typeof ENGINES)[number];
@@ -29,6 +30,7 @@ export interface SheetInfo {
  * hold several, and for Unity). Throws a plain Error with a readable message.
  */
 export function writeEngineFile(engine: Engine, sheetPath: string, width: number, height: number, grid: SheetInfo, layout: FrameLayout = {}, animation?: string): string[] {
+  noteFact("engine", engine);
   if (engine === "godot") return [writeGodotSpriteFrames(sheetPath, width, height, grid, animation, layout)];
   if (engine === "unity") return writeUnityFiles(sheetPath, width, height, grid, animation, layout);
   const name = animation || sheetPath.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "") || "default";

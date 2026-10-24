@@ -1,4 +1,5 @@
 import type { Ctx } from "../generate.js";
+import { hintId, noteFact } from "../telemetry.js";
 
 // The toolbox's tools register themselves here (a module per group), so the
 // dispatcher and the tools do not import each other.
@@ -39,4 +40,8 @@ export interface Hint {
   command: string;
 }
 
-export const hint = (text: string, command: string): Hint => ({ text, command });
+export const hint = (text: string, command: string): Hint => {
+  const id = hintId(command);
+  if (id) noteFact("hint", id);
+  return { text, command };
+};

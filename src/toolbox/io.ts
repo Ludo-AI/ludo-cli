@@ -11,6 +11,7 @@ import { readGrid, GRID_KEY, type Grid } from "../tty/preview.js";
 import { EXTRUDE_KEY, parseExtrude, parseTrim, TRIM_KEY, type Trim } from "./pixels.js";
 import { ENGINE_FILE, writeEngineFile } from "../tty/engines.js";
 import type { Ctx } from "../generate.js";
+import { noteInput } from "../telemetry.js";
 
 // Reading and writing the toolbox's files. The image work stays in pure
 // functions; this is the only place that touches the disk.
@@ -43,10 +44,14 @@ export function loadImageFile(file: string): Loaded {
     if (code === "EISDIR") throw new CliError(`${file} is a folder, not an image`, EXIT.USAGE);
     throw err;
   }
-  if (isGif(buf)) return loadGif(file, buf);
+  if (isGif(buf)) {
+    noteInput("gif", false);
+    return loadGif(file, buf);
+  }
+  const converted = !buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
   // WebP, JPEG and the rest go through a converter the system already has,
   // as previews do.
-  if (!buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) && !/\.png$/i.test(file)) {
+  if (converted && !/\.png$/i.test(file)) {
     const tmp = path.join(os.tmpdir(), `ludo-toolbox-${process.pid}-${Date.now()}.png`);
     try {
       if (!convertToPng(file, tmp)) {
@@ -64,7 +69,9 @@ export function loadImageFile(file: string): Loaded {
   try {
     const { image, info } = readPng(buf);
     const text = readText(buf);
-    return { file, image, info, grid: readGrid(buf), trim: parseTrim(text[TRIM_KEY]), extrude: parseExtrude(text[EXTRUDE_KEY]) };
+    const grid = readGrid(buf);
+    noteInput(converted ? path.extname(file).slice(1) || "other" : "png", !!grid);
+    return { file, image, info, grid, trim: parseTrim(text[TRIM_KEY]), extrude: parseExtrude(text[EXTRUDE_KEY]) };
   } catch (err) {
     if (!(err instanceof PngError)) throw err;
     const hint =

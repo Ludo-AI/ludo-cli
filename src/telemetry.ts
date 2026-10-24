@@ -15,8 +15,22 @@ import { findProjectFile } from "./project.js";
 // login so `ludo logout` keeps it) and the API key when there is one, so usage
 // can be tied to an account. Opt out with LUDO_TELEMETRY=0 or DO_NOT_TRACK=1,
 // the same switches as crash reports.
+//
+// Events wait in a queue file in the config dir and go out together, at most
+// every FLUSH_EVERY_MS: a script running ludo on hundreds of files sends a
+// few requests instead of one per file (which the server's rate limit would
+// drop), and most runs then make no request at all. An event the server did
+// not get goes back in the queue; ones over a week old are dropped, as the
+// server would no longer date them.
 
 const SEND_TIMEOUT_MS = 1000;
+const FLUSH_EVERY_MS = 10_000;
+const FLUSH_AT = 20; // queued events that send at once
+const BATCH = 20; // events per request (the server's maxItems)
+const MAX_QUEUED = 400;
+const MAX_AGE_S = 7 * 24 * 3600;
+const QUEUE = "telemetry-queue.jsonl";
+const SENT = "telemetry-sent"; // its mtime: the last send
 
 // Only the `ludo` command sends anything: cli.ts calls armTelemetry() at
 // startup. Code that merely imports these files (package scanners call every
@@ -70,6 +84,27 @@ export function noteJob(id: unknown, credits?: unknown) {
   }
 }
 
+// Facts a command learns while it runs, beyond its flags: what the toolbox
+// read (counts and formats, never names), which engine files it wrote, which
+// "Next:" line it showed.
+const facts: Record<string, string | number | boolean> = {};
+export function noteFact(key: "engine" | "grid_from" | "hint", value: string): void;
+export function noteFact(key: "frames", value: number): void;
+export function noteFact(key: string, value: string | number | boolean) {
+  facts[key] = value;
+}
+
+// One input file read: its format, and whether Ludo made it (its grid stamp).
+export function noteInput(format: string, ludoSheet: boolean) {
+  facts.inputs = Number(facts.inputs ?? 0) + 1;
+  if (facts.input_format === undefined) facts.input_format = format.toLowerCase().slice(0, 16);
+  facts.ludo_sheet = facts.ludo_sheet === true || ludoSheet;
+}
+
+// The command a "Next:" hint suggests, as the words after `ludo`: "sprite
+// animate", "preview".
+export const hintId = (command: string) => /^ludo((?: [a-z][a-z0-9-]*){1,3})/.exec(command)?.[1].trim();
+
 // Flag names from argv, never their values: "--prompt=knight" and
 // "--prompt knight" both become "--prompt".
 export function flagNames(argv: string[]): string[] {
@@ -104,6 +139,7 @@ export function buildEvent(command: string, exitCode: number, durationMs: number
     node: process.versions.node
   };
   if (Number.isInteger(nValue) && nValue > 0) props.n = nValue;
+  for (const [k, v] of Object.entries(facts)) if (!(k === "hint" && props.quiet)) props[k] = v;
   const agent = agentName();
   if (agent) props.agent = agent.slice(0, 64);
   if (jobs.length) {
@@ -122,28 +158,125 @@ function safe<T>(fn: () => T): T | undefined {
   }
 }
 
-// Sends the command's event. Never throws, never changes the exit code, and
-// gives up after a second.
+interface Queued {
+  command: string;
+  at: number;
+  props: Record<string, unknown>;
+}
+
+function readQueue(file: string): Queued[] {
+  let text = "";
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return [];
+  }
+  const oldest = Math.floor(Date.now() / 1000) - MAX_AGE_S;
+  const out: Queued[] = [];
+  for (const line of text.split("\n")) {
+    try {
+      const e = JSON.parse(line);
+      if (e && typeof e.command === "string" && Number.isInteger(e.at) && e.at > oldest) out.push(e);
+    } catch {
+      // A torn or empty line.
+    }
+  }
+  return out.slice(-MAX_QUEUED);
+}
+
+function appendQueue(dir: string, events: Queued[]) {
+  if (!events.length) return;
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // One write per call, under 4 KB per event: lines from processes running
+  // side by side do not interleave.
+  fs.appendFileSync(path.join(dir, QUEUE), events.map(e => JSON.stringify(e) + "\n").join(""), { mode: 0o600 });
+}
+
+// Takes the queue for this process to send: renamed first, so two processes
+// never send the same events. Also picks up what a process that died while
+// sending left behind.
+function takeQueue(dir: string): Queued[] {
+  const mine = path.join(dir, `${QUEUE}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.sending`);
+  const out: Queued[] = [];
+  try {
+    fs.renameSync(path.join(dir, QUEUE), mine);
+    out.push(...readQueue(mine));
+    fs.rmSync(mine, { force: true });
+  } catch {
+    // Another process took it, or there is none.
+  }
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.startsWith(`${QUEUE}.`) || !name.endsWith(".sending")) continue;
+      const file = path.join(dir, name);
+      if (Date.now() - fs.statSync(file).mtimeMs < 60_000) continue;
+      out.push(...readQueue(file));
+      fs.rmSync(file, { force: true });
+    }
+  } catch {
+    // Nothing left behind.
+  }
+  return out.slice(-MAX_QUEUED);
+}
+
+function sentAgo(dir: string): number {
+  try {
+    return Date.now() - fs.statSync(path.join(dir, SENT)).mtimeMs;
+  } catch {
+    return Infinity;
+  }
+}
+
+// Queues the command's event and sends the queue when it is due. Never
+// throws, never changes the exit code, and gives up after a second.
 export async function sendTelemetry(command: string | undefined, exitCode: number, startedAt: number, argv: string[]): Promise<void> {
   if (!armed || !telemetryEnabled()) return;
   try {
     const id = installId();
     if (!id) return;
     const event = buildEvent(command || "unknown", exitCode, Date.now() - startedAt, argv);
+    const dir = configDir();
+    let events: Queued[];
+    try {
+      appendQueue(dir, [event]);
+      // A login sends at once: it is what ties this install's earlier
+      // events to the account.
+      const due = command === "login" || sentAgo(dir) >= FLUSH_EVERY_MS || readQueue(path.join(dir, QUEUE)).length >= FLUSH_AT;
+      if (!due) return;
+      events = takeQueue(dir);
+      fs.writeFileSync(path.join(dir, SENT), "");
+    } catch {
+      events = [event]; // No queue here: send this one alone.
+    }
+    if (!events.length) return;
     const key = safe(() => resolveApiKey(argvValue(argv, "--api-key")));
     const apiUrl = safe(() => resolveApiUrl(argvValue(argv, "--api-url"))) || "https://api.ludo.ai";
-    await fetch(`${apiUrl}/api/cli/events`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": `ludo-cli/${VERSION}`,
-        "x-ludo-tool": "cli",
-        "x-ludo-cli-version": VERSION,
-        ...(key ? { Authorization: `ApiKey ${key}` } : {})
-      },
-      body: JSON.stringify({ install_id: id, events: [event] }),
-      signal: AbortSignal.timeout(SEND_TIMEOUT_MS)
-    });
+    const batches: Queued[][] = [];
+    for (let i = 0; i < events.length; i += BATCH) batches.push(events.slice(i, i + BATCH));
+    const failed = await Promise.all(
+      batches.map(async batch => {
+        try {
+          const res = await fetch(`${apiUrl}/api/cli/events`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "User-Agent": `ludo-cli/${VERSION}`,
+              "x-ludo-tool": "cli",
+              "x-ludo-cli-version": VERSION,
+              ...(key ? { Authorization: `ApiKey ${key}` } : {})
+            },
+            body: JSON.stringify({ install_id: id, events: batch }),
+            signal: AbortSignal.timeout(SEND_TIMEOUT_MS)
+          });
+          // A request the server turned down as malformed would be turned
+          // down again; anything else is tried again later.
+          return res.ok || (res.status >= 400 && res.status < 500 && res.status !== 429) ? [] : batch;
+        } catch {
+          return batch;
+        }
+      })
+    );
+    safe(() => appendQueue(dir, failed.flat()));
   } catch {
     // Telemetry is best-effort.
   }

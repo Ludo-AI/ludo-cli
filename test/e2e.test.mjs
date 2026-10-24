@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -733,12 +734,53 @@ test("each command sends one usage event: facts and flag names, never values", a
   assert.equal(sent.headers.authorization, "ApiKey test-key");
   assert.doesNotMatch(sent.raw.toString(), /secret|knight|sprite/);
 
-  // The install id is kept, so a second command reports the same install.
+  // A second command soon after waits in the queue...
   const from2 = seen.length;
   await run(["account"], { LUDO_TELEMETRY: "1" }, cwd);
-  const again = JSON.parse(telemetryEvents(from2)[0].raw);
+  assert.equal(telemetryEvents(from2).length, 0);
+  assert.match(fs.readFileSync(path.join(cwd, ".config", "telemetry-queue.jsonl"), "utf8"), /"command":"account show"/);
+  // ...and goes with the next one once the last send is old enough, from the
+  // same install.
+  const stamp = path.join(cwd, ".config", "telemetry-sent");
+  fs.utimesSync(stamp, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+  const from3 = seen.length;
+  await run(["version"], { LUDO_TELEMETRY: "1" }, cwd);
+  const sends = telemetryEvents(from3);
+  assert.equal(sends.length, 1);
+  const again = JSON.parse(sends[0].raw);
   assert.equal(again.install_id, body.install_id);
-  assert.equal(again.events[0].command, "account show");
+  assert.deepEqual(again.events.map(e => e.command), ["account show", "version"]);
+  assert.ok(!fs.existsSync(path.join(cwd, ".config", "telemetry-queue.jsonl")));
+});
+
+test("a burst of commands sends a few requests, and nothing is lost", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-burst-"));
+  const from = seen.length;
+  for (let i = 0; i < 25; i++) await run(["version"], { LUDO_TELEMETRY: "1" }, cwd);
+  const sends = telemetryEvents(from).map(s => JSON.parse(s.raw).events.length);
+  // The first sends at once; the next 20 queue and go together.
+  assert.deepEqual(sends, [1, 20]);
+  const left = fs.readFileSync(path.join(cwd, ".config", "telemetry-queue.jsonl"), "utf8").trim().split("\n");
+  assert.equal(left.length, 4);
+});
+
+test("events the server did not take wait for the next send", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-retry-"));
+  // Nothing listens there.
+  const closed = await new Promise(resolve => {
+    const s = net.createServer().listen(0, "127.0.0.1", () => {
+      const port = s.address().port;
+      s.close(() => resolve(`http://127.0.0.1:${port}`));
+    });
+  });
+  await run(["version"], { LUDO_TELEMETRY: "1", LUDO_API_URL: closed }, cwd);
+  const queued = fs.readFileSync(path.join(cwd, ".config", "telemetry-queue.jsonl"), "utf8").trim().split("\n");
+  assert.equal(queued.length, 1);
+  fs.utimesSync(path.join(cwd, ".config", "telemetry-sent"), new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+  const from = seen.length;
+  await run(["version"], { LUDO_TELEMETRY: "1" }, cwd);
+  const [sent] = telemetryEvents(from);
+  assert.equal(JSON.parse(sent.raw).events.length, 2);
 });
 
 test("usage events honour LUDO_TELEMETRY=0 and DO_NOT_TRACK", async () => {

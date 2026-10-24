@@ -111,6 +111,25 @@ test("toolbox runs are counted as toolbox in usage telemetry", async () => {
   assert.equal(events.slice(from)[0]?.command, "toolbox");
 });
 
+test("a toolbox event says what it read and what it suggested, never names or values", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-facts-"));
+  const sheet = writeSheet(dir, "secret-hero.png", noise(32, 16), { cols: 2, rows: 1, frames: 2, fps: 8 });
+  const from = events.length;
+  const r = await run(["toolbox", "sprite", "export", sheet, "--engine", "unity"], { LUDO_TELEMETRY: "", DO_NOT_TRACK: "", LUDO_API_URL: `http://127.0.0.1:${collector.address().port}` });
+  assert.equal(r.code, EXIT.OK, r.stderr);
+  const [event] = events.slice(from);
+  assert.equal(event.command, "toolbox sprite export");
+  assert.deepEqual(
+    { inputs: event.props.inputs, input_format: event.props.input_format, ludo_sheet: event.props.ludo_sheet, grid_from: event.props.grid_from, frames: event.props.frames, engine: event.props.engine, hint: event.props.hint },
+    { inputs: 1, input_format: "png", ludo_sheet: true, grid_from: "stamp", frames: 2, engine: "unity", hint: "sprite animate" }
+  );
+  assert.doesNotMatch(JSON.stringify(event), /secret|hero/);
+  // --quiet shows no hint, so none is reported.
+  const quiet = events.length;
+  await run(["toolbox", "sprite", "export", sheet, "--engine", "godot", "--quiet"], { LUDO_TELEMETRY: "", DO_NOT_TRACK: "", LUDO_API_URL: `http://127.0.0.1:${collector.address().port}` });
+  assert.equal(events[quiet].props.hint, undefined);
+});
+
 test("tool flags keep the positionals in order and reject what the tool does not know", () => {
   const tool = {
     group: "sprite",

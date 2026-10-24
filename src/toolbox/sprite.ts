@@ -5,6 +5,7 @@ import { printJson, type Ctx } from "../generate.js";
 import type { Grid } from "../tty/preview.js";
 import { backgroundOf, CONFIDENT, countFrames, guessGrid } from "./grid.js";
 import { baseOf, carriedChunks, engineFiles, freeName, loadImageFile, shown, writePng, type Layout, type Loaded } from "./io.js";
+import { noteFact } from "../telemetry.js";
 import { crop, joinFrames, sliceSheet } from "./sheet.js";
 import { applyFrameOps, parseFrameList, parseHolds, type FrameOps } from "./frames.js";
 import { analyseLoop, frameDifferences } from "./loop.js";
@@ -32,6 +33,7 @@ export function resolveGrid(src: Loaded, flagGrid: { cols: number; rows: number 
     if (guess.confidence < CONFIDENT) {
       const sure = (a: typeof guess.x) => a.confidence >= CONFIDENT;
       const best = `${sure(guess.x) ? guess.x.count : "?"} columns x ${sure(guess.y) ? guess.y.count : "?"} rows`;
+      noteFact("grid_from", "unsure");
       throw new CliError(
         `Could not tell the grid of ${src.file} for sure (best guess: ${best})`,
         EXIT.BAD_INPUT,
@@ -41,6 +43,8 @@ export function resolveGrid(src: Loaded, flagGrid: { cols: number; rows: number 
     }
     out = { grid: { cols: guess.cols, rows: guess.rows, frames: guess.frames, fps: 10 }, from: "detected", confidence: Math.round(guess.confidence * 100) / 100 };
   }
+  noteFact("grid_from", out.from);
+  noteFact("frames", out.grid.frames);
   if (out.grid.cols > width || out.grid.rows > height) {
     throw new CliError(`A ${out.grid.cols}x${out.grid.rows} grid does not fit a ${width}x${height} image`, EXIT.USAGE);
   }
