@@ -1,7 +1,7 @@
 // The Export Sequence math of the Ludo web app, ported as-is from
 // prometheus-web src/pages/SpriteGenerator/exportSequenceMath.js (commit
-// 91985ab3, 2026-10-23), so `ludo toolbox sprite sequence` chains, crops and
-// lays out frames exactly as the web does. Its 36 tests run here unchanged
+// 7a6a45be, 2026-10-24), so `ludo toolbox sprite sequence` chains, crops and
+// lays out frames exactly as the web does. Its 43 tests run here unchanged
 // (test/web-math/). Only TypeScript types were added; keep the behaviour
 // identical to the web's, and fix bugs in both places.
 
@@ -194,5 +194,50 @@ export const cropBounds = (boundsList: { minX: number; minY: number; maxX: numbe
     maxY: cMaxY,
     cropW: cMaxX - cMinX + 1,
     cropH: cMaxY - cMinY + 1
+  };
+};
+
+export interface Footing {
+  bottom: number;
+  centerX: number;
+}
+
+/**
+ * Where a frame stands: the bottom edge of its solid pixels (alpha above 200,
+ * the aligner's own threshold) and their horizontal centre of mass, read from
+ * RGBA pixel data laid out as ImageData.data. null when nothing is solid.
+ */
+export const frameFooting = (data: ArrayLike<number>, width: number, height: number): Footing | null => {
+  let bottom = -1,
+    sumX = 0,
+    count = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (data[(y * width + x) * 4 + 3] > 200) {
+        bottom = y;
+        sumX += x;
+        count++;
+      }
+    }
+  }
+  if (!count) return null;
+  // Pixel centres: column x is at x + 0.5; the bottom edge is row + 1.
+  return { bottom: bottom + 1, centerX: sumX / count + 0.5 };
+};
+
+/**
+ * Puts the next animation's feet on the previous one's ground line. Keeps
+ * the aligner's scale and, when it matched (confidence above 0), its
+ * horizontal offset; when it fell back (confidence 0), lines up the centres
+ * of mass instead. footA is A's last frame as drawn, footB B's raw first
+ * frame (both from frameFooting); either null keeps the alignment as it is.
+ */
+export const footedAlignment = <T extends { dx: number; dy: number; scale: number; confidence?: number }>(alignment: T, footA: Footing | null, footB: Footing | null): T => {
+  if (!footA || !footB) return alignment;
+  const { dx, scale, confidence } = alignment;
+  return {
+    ...alignment,
+    dx: (confidence ?? 0) > 0 ? dx : Math.round(footA.centerX - footB.centerX * scale),
+    dy: Math.round(footA.bottom - footB.bottom * scale),
   };
 };

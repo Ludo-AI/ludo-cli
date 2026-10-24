@@ -147,7 +147,7 @@ TOOLS.push({
       warnings.push(
         t.method === "ground"
           ? `${labels[i]} -> ${labels[i + 1]}: the frames did not match, so their feet and centres were lined up instead; check it, or set it in the manifest`
-          : `${labels[i]} -> ${labels[i + 1]}: the frames did not match and their feet could not be lined up either (too far apart or too different in size), so it was left where it is; set it in the manifest`
+          : `${labels[i]} -> ${labels[i + 1]}: the frames did not match and their sizes could not be compared either, so it was drawn at the previous frame's size with its feet and centre lined up; check its size, or set it in the manifest`
       );
     });
     if (mode !== "separate" && new Set(fps).size > 1) warnings.push(`The animations have different frame rates (${fps.join(", ")}); the ${mode === "single" ? "sheet" : "sequence"} uses ${fps[0]}`);

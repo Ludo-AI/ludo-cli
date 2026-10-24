@@ -145,10 +145,12 @@ test("the sequence is chained, cropped and laid out by the web's math", () => {
   assert.deepEqual([seq.layout.frameW, seq.layout.frameH], [crop.cropW, crop.cropH]);
 
   // The transitions don't jump: the last frame of one and the first of the
-  // next are the same picture in about the same place and size.
+  // next are the same picture in about the same place and size, with the
+  // feet on one line.
   for (const [p, q, name] of [[seq.frames[0][3], seq.frames[1][0], "walk -> jump"], [seq.frames[1][4], seq.frames[2][0], "jump -> small"]]) {
     const [a, b] = [contentBox(p), contentBox(q)];
-    assert.ok(Math.abs(a.x - b.x) <= 1 && Math.abs(a.y - b.y) <= 1 && Math.abs(a.h - b.h) <= 2, `${name}: ${JSON.stringify([a, b])}`);
+    assert.ok(Math.abs(a.y + a.h - (b.y + b.h)) <= 1, `${name}: feet ${a.y + a.h} vs ${b.y + b.h}`);
+    assert.ok(Math.abs(a.x - b.x) <= 1 && Math.abs(a.h - b.h) <= 2, `${name}: ${JSON.stringify([a, b])}`);
   }
   // Every frame keeps its own motion: the walk moves 5 px a frame.
   assert.deepEqual(
@@ -212,8 +214,8 @@ test("golden output: the same sequence gives the same pixels", () => {
     for (const f of seq.frames.flat()) h.update(f.rgba);
     return h.digest("hex");
   };
-  assert.equal(digest("pixel"), "8087689db888b256ba410887d886105c71f48df4c48b2d2642cc5969f2b10a1b");
-  assert.equal(digest("smooth"), "f1e5f159e74749d913ddd5daa746c8cbd802292ec9e2480782fb87d46e87a596");
+  assert.equal(digest("pixel"), "11b5787c0156fcb09f6f03db6b548e3d401818886f55ba953bfd17210e74a2ca");
+  assert.equal(digest("smooth"), "5e7fffe88c1956aa6ff9eb0c4ab6de0e0971e4fdc5cbabe5499ceac2e42656f4");
 });
 
 // ---- The command ----

@@ -24,6 +24,7 @@ export function expect(actual) {
     const fmt = v => JSON.stringify(v);
     return {
       toBe: e => check(Object.is(actual, e), `expected ${fmt(actual)} to be ${fmt(e)}`),
+      toBeNull: () => check(actual === null, `expected ${fmt(actual)} to be null`),
       toEqual: e => {
         let ok = true;
         try {

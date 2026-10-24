@@ -3,7 +3,7 @@ import { alignSprites, groundAlignment } from "./align.js";
 import type { ArtMode } from "./pack.js";
 import { resizeNearest, resizeSmooth } from "./resample.js";
 import { blit } from "./sheet.js";
-import { cropBounds, nextSequenceSlot, paddedFrameLayout, sequenceCanvasBounds, type Placement, type Slot } from "./sequenceMath.js";
+import { cropBounds, footedAlignment, frameFooting, nextSequenceSlot, paddedFrameLayout, sequenceCanvasBounds, type Placement, type Slot } from "./sequenceMath.js";
 
 // An animation sequence: several animations played one after the other
 // (idle, jump, land), each placed so its first frame continues from the
@@ -12,7 +12,9 @@ import { cropBounds, nextSequenceSlot, paddedFrameLayout, sequenceCanvasBounds, 
 // buffers, step for step:
 //  - animation 1 sits at (0, 0) at its own size; each next one is placed by
 //    aligning the previous one's last frame, at the size it was drawn, with
-//    its own first frame (align.ts, where the web calls the ML service);
+//    its own first frame (align.ts, where the web calls the ML service),
+//    then the next animation's feet are put on the previous one's ground
+//    line (sequenceMath's footedAlignment, as the web does after it);
 //  - every frame is drawn at its animation's place on a canvas holding them
 //    all, then all are cropped to the box around every frame's content;
 //  - that box is laid out in the output frame by paddedFrameLayout (size,
@@ -67,7 +69,8 @@ function contentBox(img: Image) {
 
 export function align(a: Image, b: Image, mode: AlignMode): Transition {
   if (mode === "none") return { dx: 0, dy: 0, scale: 1, confidence: Number.NaN, method: "none" };
-  return mode === "ground" ? groundAlignment(a, b) : alignSprites(a, b);
+  if (mode === "ground") return groundAlignment(a, b);
+  return footedAlignment(alignSprites(a, b), frameFooting(a.rgba, a.width, a.height), frameFooting(b.rgba, b.width, b.height));
 }
 
 export function buildSequence(animations: Image[][], opts: SequenceOptions): Sequence {

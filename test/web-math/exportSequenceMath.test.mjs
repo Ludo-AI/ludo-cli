@@ -1,5 +1,5 @@
 // Ported unchanged from prometheus-web src/pages/SpriteGenerator/exportSequenceMath.test.js
-// (commit 91985ab3); only the imports differ. Keep it in step with the web's.
+// (commit 7a6a45be); only the imports differ. Keep it in step with the web's.
 import { describe, it, expect } from './vitest.mjs';
 import {
   sanitizeName,
@@ -12,6 +12,8 @@ import {
   paddedFrameLayout,
   MAX_SEQUENCE_FRAME_PX,
   MIN_SEQUENCE_SIZE_PX,
+  frameFooting,
+  footedAlignment,
 } from '../../dist/toolbox/sequenceMath.js';
 
 describe('sanitizeName', () => {
@@ -327,5 +329,70 @@ describe('paddedFrameLayout', () => {
           expect(l.offsetX + l.drawW).toBeLessThanOrEqual(l.frameW);
           expect(l.offsetY + l.drawH).toBeLessThanOrEqual(l.frameH);
         }
+  });
+});
+
+// A w x h RGBA frame with solid pixels (alpha 255) in [x0, x1) x [y0, y1).
+const block = (w, h, x0, y0, x1, y1, alpha = 255) => {
+  const data = new Uint8ClampedArray(w * h * 4);
+  for (let y = y0; y < y1; y++)
+    for (let x = x0; x < x1; x++) data[(y * w + x) * 4 + 3] = alpha;
+  return data;
+};
+
+describe('frameFooting', () => {
+  it('finds the bottom edge and the horizontal centre of mass', () => {
+    // Columns 10..19, rows 5..29: the bottom edge is 30, the centre 15.
+    expect(frameFooting(block(40, 40, 10, 5, 20, 30), 40, 40)).toEqual({
+      bottom: 30,
+      centerX: 15,
+    });
+  });
+  it('ignores pixels at alpha 200 or below (soft edges, shadows)', () => {
+    const data = block(40, 40, 10, 5, 20, 30);
+    const shadow = block(40, 40, 0, 30, 40, 36, 200);
+    for (let i = 3; i < data.length; i += 4)
+      data[i] = Math.max(data[i], shadow[i]);
+    expect(frameFooting(data, 40, 40).bottom).toBe(30);
+  });
+  it('is null for an empty frame', () => {
+    expect(frameFooting(new Uint8ClampedArray(16 * 16 * 4), 16, 16)).toBeNull();
+  });
+});
+
+describe('footedAlignment', () => {
+  const footA = { bottom: 100, centerX: 50 };
+  const footB = { bottom: 80, centerX: 30 };
+  it("a match keeps its scale and dx, and puts B's feet on A's", () => {
+    const r = footedAlignment(
+      { dx: 7, dy: -3, scale: 1.25, confidence: 0.9 },
+      footA,
+      footB
+    );
+    expect(r).toEqual({ dx: 7, dy: 0, scale: 1.25, confidence: 0.9 });
+    // B's bottom edge lands on A's: dy + 80 * 1.25 = 100.
+    expect(r.dy + footB.bottom * r.scale).toBe(footA.bottom);
+  });
+  it('a fallback (confidence 0) also lines up the centres', () => {
+    const r = footedAlignment(
+      { dx: 0, dy: 0, scale: 0.5, confidence: 0 },
+      footA,
+      footB
+    );
+    expect(r).toEqual({ dx: 35, dy: 60, scale: 0.5, confidence: 0 });
+  });
+  it('rounds to whole pixels', () => {
+    const r = footedAlignment(
+      { dx: 0, dy: 0, scale: 1.1, confidence: 0 },
+      { bottom: 99, centerX: 40.5 },
+      { bottom: 70, centerX: 20.25 }
+    );
+    expect(r.dy).toBe(Math.round(99 - 77));
+    expect(r.dx).toBe(Math.round(40.5 - 22.275));
+  });
+  it('without footing on either side the alignment is kept', () => {
+    const a = { dx: 4, dy: 5, scale: 1, confidence: 0.8 };
+    expect(footedAlignment(a, null, footB)).toBe(a);
+    expect(footedAlignment(a, footA, null)).toBe(a);
   });
 });
