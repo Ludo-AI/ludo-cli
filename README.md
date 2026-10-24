@@ -177,7 +177,7 @@ ludo toolbox sprite pack --manifest ludo-output/knight/pack.json --size walk=1.1
 ludo toolbox sprite sequence idle.png jump.png land.png --name knight-jump --frame-size 256x256
 ludo toolbox sprite sequence idle.png jump.png --mode separate --engine godot
 
-# A GIF reads as a sheet of its frames, so every sprite and image tool takes one.
+# A GIF or animated WebP reads as a sheet of its frames, so every sprite and image tool takes one.
 ludo toolbox sprite slice dance.gif
 
 # Engine files for a sheet you already have. Any toolbox tool that writes a sheet takes --engine

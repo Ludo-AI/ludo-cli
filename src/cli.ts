@@ -172,7 +172,7 @@ async function preview(ctx: Ctx, parsed: Parsed, words: string[]): Promise<numbe
     throw new CliError(
       `Could not preview ${file}`,
       EXIT.USAGE,
-      process.platform === "darwin" ? "Previews read PNG, WebP and JPEG images." : "Previews read PNG; for WebP or JPEG install dwebp (libwebp), ImageMagick or ffmpeg."
+      process.platform === "darwin" ? "Previews read PNG, WebP and JPEG images." : "Previews read PNG and WebP; for JPEG install ImageMagick or ffmpeg."
     );
   }
   return EXIT.OK;

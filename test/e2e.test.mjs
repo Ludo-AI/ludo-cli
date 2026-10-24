@@ -7,7 +7,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { encodePng } from "../dist/tty/png.js";
+import { encodePng, readPng } from "../dist/tty/png.js";
+import { readWebp } from "../dist/tty/webp.js";
 import { readGrid } from "../dist/tty/preview.js";
 
 // Drives the built CLI against a fake Ludo API: upload, submit, long-poll and
@@ -75,7 +76,7 @@ before(async () => {
     }
     if (req.method === "GET" && url.pathname === "/files/sheet.webp") {
       res.writeHead(200);
-      return res.end(fs.readFileSync(new URL("./fixtures/sheet.webp", import.meta.url)));
+      return res.end(fs.readFileSync(new URL("./corpus/webp/made-sheet-lossless.webp", import.meta.url)));
     }
     if (req.method === "GET" && url.pathname === "/files/sheet.png") {
       res.writeHead(200);
@@ -694,16 +695,9 @@ test("skill install into a config folder that can't be created is a plain error"
   assert.match(r.stderr, /CLAUDE_CONFIG_DIR/);
 });
 
-// A converter is on every macOS machine (sips); on Linux it needs dwebp,
-// ImageMagick or ffmpeg, which CI images normally carry.
-const { convertToPng } = await import("../dist/tty/image.js");
-const canConvertWebp = (() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-conv-"));
-  return convertToPng(new URL("./fixtures/sheet.webp", import.meta.url).pathname, path.join(dir, "probe.png"));
-})();
-
-test("a WebP spritesheet gets a PNG copy that carries the grid and feeds the Godot export", { skip: !canConvertWebp && "no WebP converter here" }, async () => {
-  const { code, stdout, stderr, cwd } = await run(["sprite", "animate", "--initial-image", "https://example.com/k.png", "--motion-prompt", "webp", "--engine", "godot", "--json"]);
+// WebP is decoded in-process: no converter on PATH is needed (or used).
+test("a WebP spritesheet gets a PNG copy that carries the grid and feeds the Godot export", async () => {
+  const { code, stdout, stderr, cwd } = await run(["sprite", "animate", "--initial-image", "https://example.com/k.png", "--motion-prompt", "webp", "--engine", "godot", "--json"], { PATH: "" });
   assert.equal(code, 0, stderr);
   const files = JSON.parse(stdout).files.map(f => f.path);
   const webp = files.find(p => p.endsWith(".webp"));
@@ -711,6 +705,11 @@ test("a WebP spritesheet gets a PNG copy that carries the grid and feeds the God
   assert.ok(webp && png, `both copies are listed: ${files.join(", ")}`);
   assert.equal(png, webp.replace(/\.webp$/, ".png"), "the PNG sits next to the WebP");
   assert.deepEqual(readGrid(fs.readFileSync(path.join(cwd, png))), { cols: 2, rows: 2, frames: 4, fps: 8 });
+  const copy = readPng(fs.readFileSync(path.join(cwd, png))).image;
+  // (RGB under fully transparent pixels is written as 0.)
+  const want = Buffer.from(readWebp(fs.readFileSync(path.join(cwd, webp))).rgba);
+  for (let i = 0; i < want.length; i += 4) if (want[i + 3] === 0) want.fill(0, i, i + 3);
+  assert.deepEqual(Buffer.from(copy.rgba), want, "the PNG holds the WebP's pixels");
   const tres = files.find(p => p.endsWith(".tres"));
   assert.ok(tres, "the Godot export was written");
   assert.match(fs.readFileSync(path.join(cwd, tres), "utf8"), new RegExp(`path="${path.basename(png).replace(".", "\\.")}"`));

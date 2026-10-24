@@ -7,6 +7,7 @@ import { decodeGif, GifError, isGif } from "../tty/gif.js";
 import { joinFrames } from "./sheet.js";
 import { gifFps } from "./gif.js";
 import { convertToPng } from "../tty/image.js";
+import { decodeWebp, isWebp, WebpError } from "../tty/webp.js";
 import { readGrid, GRID_KEY, type Grid } from "../tty/preview.js";
 import { EXTRUDE_KEY, parseExtrude, parseTrim, TRIM_KEY, type Trim } from "./pixels.js";
 import { ENGINE_FILE, writeEngineFile } from "../tty/engines.js";
@@ -23,7 +24,7 @@ export interface Loaded {
   grid?: Grid; // the ludo:grid stamp, when the sheet has one
   trim?: Trim; // the ludo:trim stamp: where a trimmed image (or each frame) sat
   extrude?: number; // the ludo:extrude stamp: repeated border around each frame
-  gif?: true; // read from an animated GIF: its frames laid out as a sheet, `grid` from its timing
+  animation?: "gif" | "webp"; // read from an animated GIF or WebP: its frames laid out as a sheet, `grid` from its timing
 }
 
 // What a sheet says about its frames beyond the grid.
@@ -48,17 +49,21 @@ export function loadImageFile(file: string): Loaded {
     noteInput("gif", false);
     return loadGif(file, buf);
   }
+  if (isWebp(buf)) {
+    noteInput("webp", false);
+    return loadWebp(file, buf);
+  }
   const converted = !buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-  // WebP, JPEG and the rest go through a converter the system already has,
-  // as previews do.
+  // JPEG and the rest go through a converter the system already has, as
+  // previews do.
   if (converted && !/\.png$/i.test(file)) {
     const tmp = path.join(os.tmpdir(), `ludo-toolbox-${process.pid}-${Date.now()}.png`);
     try {
       if (!convertToPng(file, tmp)) {
         throw new CliError(
-          `Cannot read ${file}: the toolbox reads PNG, and found no converter for other formats`,
+          `Cannot read ${file}: the toolbox reads PNG, GIF and WebP, and found no converter for other formats`,
           EXIT.BAD_INPUT,
-          process.platform === "darwin" ? "Convert it to PNG first." : "Convert it to PNG first, or install dwebp (libwebp), ImageMagick or ffmpeg."
+          process.platform === "darwin" ? "Convert it to PNG first." : "Convert it to PNG first, or install ImageMagick or ffmpeg."
         );
       }
       buf = fs.readFileSync(tmp);
@@ -91,12 +96,52 @@ function loadGif(file: string, buf: Buffer): Loaded {
     if (!(err instanceof GifError)) throw err;
     throw new CliError(`Cannot read ${file}: ${err.message}`, EXIT.BAD_INPUT, err.code === "TOO_LARGE" ? "Split it into shorter GIFs first." : undefined);
   }
-  const info: PngInfo = { sourceDepth: 8, colorType: 6, interlaced: false, animated: false, chunks: [] };
-  const n = gif.frames.length;
-  if (n === 1) return { file, image: gif.frames[0], info, gif: true };
+  return asSheet(file, gif.frames, "gif", gifFps(gif.delays));
+}
+
+// An animated WebP reads like a GIF; a still one is a plain image. The
+// grid's fps comes from its durations (webpFps).
+function loadWebp(file: string, buf: Buffer): Loaded {
+  let webp;
+  try {
+    webp = decodeWebp(buf, { maxPixels: MAX_TOOLBOX_PIXELS });
+  } catch (err) {
+    if (!(err instanceof WebpError)) throw err;
+    const hint = err.code === "TOO_LARGE" ? (webpIsAnimated(buf) ? "Split it into shorter animations first." : "Split it into smaller images first.") : undefined;
+    throw new CliError(`Cannot read ${file}: ${err.message}`, EXIT.BAD_INPUT, hint);
+  }
+  if (!webp.animated) return { file, image: webp.frames[0], info: noInfo() };
+  return asSheet(file, webp.frames, "webp", webpFps(webp.durations));
+}
+
+// The animation flag of a VP8X header.
+const webpIsAnimated = (buf: Buffer) => buf.toString("latin1", 12, 16) === "VP8X" && (buf[20] & 2) !== 0;
+
+const noInfo = (): PngInfo => ({ sourceDepth: 8, colorType: 6, interlaced: false, animated: false, chunks: [] });
+
+// Frames side by side in a near-square grid, as `sprite join` lays them out.
+function asSheet(file: string, frames: Image[], animation: "gif" | "webp", fps: number): Loaded {
+  const n = frames.length;
+  if (n === 1) return { file, image: frames[0], info: noInfo(), animation };
   const cols = Math.ceil(Math.sqrt(n));
-  const { sheet, rows } = joinFrames(gif.frames, cols);
-  return { file, image: sheet, info, gif: true, grid: { cols, rows, frames: n, fps: gifFps(gif.delays) } };
+  const { sheet, rows } = joinFrames(frames, cols);
+  return { file, image: sheet, info: noInfo(), animation, grid: { cols, rows, frames: n, fps } };
+}
+
+// The frame rate of WebP frame durations (milliseconds). Durations of 10 ms
+// or less count as 100 ms, the rule gifFps applies to GIF delays of 0-1 cs
+// (browsers' rule for GIF, taken for WebP too). A whole fps whose frame
+// length every duration is within 1 ms of (however the encoder rounded it)
+// wins, the one nearest the average if several do; otherwise the average,
+// to 2 decimals.
+export function webpFps(durations: number[]): number {
+  const played = durations.map(d => (d <= 10 ? 100 : d));
+  const average = 1000 / (played.reduce((a, b) => a + b, 0) / played.length);
+  let best = 0;
+  for (let fps = 1; fps <= 120; fps++) {
+    if (played.every(d => Math.abs(d - 1000 / fps) < 1) && (!best || Math.abs(fps - average) < Math.abs(best - average))) best = fps;
+  }
+  return best || Math.round(average * 100) / 100;
 }
 
 // The source's colour space and pixel size, for files made from it; its text
