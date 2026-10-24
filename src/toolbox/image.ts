@@ -28,6 +28,7 @@ import { hint, TOOLS, type ToolCall, type ToolFlag } from "./registry.js";
 import { resizeNearest, resizePillow } from "./resample.js";
 import { unfake, type ReduceMethod } from "./unfake.js";
 import { quantizeFrames } from "./quantize.js";
+import { applyKey, borderColour, keyMask } from "./key.js";
 
 // Every image tool runs the same way: one image, or every frame of a sheet
 // whose grid is known (its Ludo stamp, or --grid) with the same numbers, then
@@ -327,6 +328,56 @@ TOOLS.push({
     });
   }
 });
+
+TOOLS.push({
+  group: "image",
+  name: "key",
+  args: "<image>",
+  summary: "Make a solid background colour transparent (a colour key)",
+  details: [
+    "Takes away the background colour around the art: the pixels within --fuzz of it that connect to",
+    "the image's edges, so the same colour inside the sprite (eyes, highlights) stays. --everywhere takes",
+    "every pixel of that colour instead. The colour is the most common one on the border unless given.",
+    "--fuzz is ImageMagick's (-fuzz 10% -transparent <colour> takes the same pixels as --everywhere).",
+    "On a sheet every frame is keyed on its own edges. For painted or photographed backgrounds, use",
+    "ludo image remove-background."
+  ],
+  flags: [
+    { flag: "--color", value: "hex", description: "The background colour (default: the most common colour on the border)" },
+    { flag: "--fuzz", value: "percent", description: "How far from it still counts, 0 to 100 (default 10)" },
+    { flag: "--everywhere", description: "Take that colour everywhere, not only where it touches the edges" },
+    ...SHARED
+  ],
+  async run(ctx, call) {
+    const rawFuzz = textFlag(call, "--fuzz");
+    const fuzz = rawFuzz === undefined ? 10 : Number(rawFuzz.replace(/%$/, ""));
+    if (!(fuzz >= 0 && fuzz <= 100)) throw usageError(`--fuzz takes a percentage from 0 to 100 (got "${rawFuzz}")`);
+    const given = textFlag(call, "--color");
+    const everywhere = call.flags.has("--everywhere");
+    return runEdit(ctx, call, "ludo toolbox image key <image> [--color #ffffff]", (frames, src) => {
+      const key = given ? hexColour(given, "--color") : borderColour(src.image);
+      if (!key) {
+        throw new CliError(`${src.file} has no solid colour around its edges to take away`, EXIT.BAD_INPUT, "Name the colour with --color, or use ludo image remove-background.");
+      }
+      let taken = 0;
+      const out = frames.map(f => {
+        const mask = keyMask(f, key, fuzz / 100, !everywhere);
+        for (const m of mask) taken += m;
+        return applyKey(f, mask);
+      });
+      if (!taken) throw new CliError(`No pixel of ${src.file} is within ${fuzz}% of ${hex(key)}${everywhere ? "" : " at its edges"}`, EXIT.BAD_INPUT, "Raise --fuzz, or name the colour with --color.");
+      const total = frames.reduce((n, f) => n + f.width * f.height, 0);
+      return {
+        frames: out,
+        trim: src.trim,
+        facts: { color: hex(key), fuzz, everywhere, pixels_taken: taken, share_taken: Math.round((taken / total) * 1000) / 1000, ...trimJson(src.trim) },
+        says: `Took away ${hex(key)} (fuzz ${fuzz}%${everywhere ? ", everywhere" : ""}): ${taken} pixels, ${Math.round((taken / total) * 100)}% of the image`
+      };
+    });
+  }
+});
+
+const hex = (c: number[]) => `#${c.slice(0, 3).map(v => v.toString(16).padStart(2, "0")).join("")}${c[3] === 255 ? "" : c[3].toString(16).padStart(2, "0")}`;
 
 const METHODS = ["dominant", "median", "mode", "mean", "nearest"] as const;
 

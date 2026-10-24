@@ -17,6 +17,7 @@ import { backgroundOf } from "../dist/toolbox/grid.js";
 import { contentBox, emptiness, extrude, flip, pad, rotate, scaleDown, scaleUp } from "../dist/toolbox/pixels.js";
 import { crop } from "../dist/toolbox/sheet.js";
 import { textureAtlas } from "../dist/tty/texturepacker.js";
+import { keyMask } from "../dist/toolbox/key.js";
 import { parseArgv } from "../dist/args.js";
 import { EXIT } from "../dist/errors.js";
 
@@ -860,6 +861,99 @@ test("a fractional scale keeps a trimmed sheet's record in step", async () => {
   assert.equal(out.scale, 1.5);
   assert.equal(out.filter, "nearest");
 });
+
+test("image key takes what ImageMagick takes: -transparent everywhere, floodfill from the edges", t => {
+  const im = ["magick", ...(process.platform === "win32" ? [] : ["convert"])].find(cmd => {
+    try {
+      execFileSync(cmd, ["-version"], { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  if (!im) return t.skip("ImageMagick is not installed");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-key-im-"));
+  const rnd = (seed => () => ((seed = (seed * 16807) % 2147483647) / 2147483647))(3);
+  let cases = 0;
+  try {
+    for (let n = 0; n < 12; n++) {
+      const [w, h] = [16 + ((rnd() * 24) | 0), 16 + ((rnd() * 24) | 0)];
+      const key = [(rnd() * 256) | 0, (rnd() * 256) | 0, (rnd() * 256) | 0, 255];
+      const img = { width: w, height: h, rgba: new Uint8Array(w * h * 4) };
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          // A frame of the key colour (so every border match connects to the
+          // corner ImageMagick floods from), then colours near it and far.
+          const frame = x === 0 || y === 0 || x === w - 1 || y === h - 1;
+          const spread = 70 * rnd();
+          const near = key.map((v, k) => (k === 3 ? (rnd() < 0.2 ? (rnd() * 256) | 0 : 255) : Math.max(0, Math.min(255, Math.round(v + (rnd() - 0.5) * spread)))));
+          img.rgba.set(frame ? key : rnd() < 0.6 ? near : [(rnd() * 256) | 0, (rnd() * 256) | 0, (rnd() * 256) | 0, rnd() < 0.1 ? 0 : 255], (y * w + x) * 4);
+        }
+      }
+      const file = path.join(dir, `k${n}.png`);
+      fs.writeFileSync(file, encodePng(img));
+      const hexKey = "#" + key.slice(0, 3).map(v => v.toString(16).padStart(2, "0")).join("");
+      for (const pct of [0, 3, 10, 25]) {
+        const magick = (...ops) => execFileSync(im, [file, "-alpha", "set", "-fuzz", ...ops, "-depth", "8", "RGBA:-"]);
+        // ImageMagick's floodfill gives the seed a fuzz of its own, so it
+        // takes at F what --fuzz takes at F·√2.
+        for (const [edges, theirs, ours] of [
+          [false, magick(`${pct}%`, "-transparent", hexKey), keyMask(img, key, pct / 100, false)],
+          [true, magick(`${pct / Math.SQRT2}%`, "-fill", "none", "-draw", "color 0,0 floodfill"), keyMask(img, key, pct / 100, true)]
+        ]) {
+          for (let p = 0; p < w * h; p++) {
+            if (!img.rgba[p * 4 + 3]) continue;
+            assert.equal(!!ours[p], theirs[p * 4 + 3] === 0, `case ${n}, ${pct}%, ${edges ? "edges" : "everywhere"}, pixel ${p}`);
+          }
+          cases++;
+        }
+      }
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  assert.equal(cases, 96);
+});
+
+test("image key keeps the background colour inside the sprite unless --everywhere; a sheet is keyed frame by frame", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-key-"));
+  // A red sprite with a white eye, on white.
+  const img = { width: 20, height: 20, rgba: new Uint8Array(20 * 20 * 4).fill(255) };
+  for (let y = 5; y < 15; y++) for (let x = 5; x < 15; x++) img.rgba.set([200, 30, 30, 255], (y * 20 + x) * 4);
+  for (let y = 8; y < 10; y++) for (let x = 8; x < 10; x++) img.rgba.set([250, 252, 255, 255], (y * 20 + x) * 4);
+  const file = writeSheet(dir, "sprite.png", img);
+  const edges = await run(["toolbox", "image", "key", file, "--out", dir, "--json"]);
+  assert.equal(edges.code, EXIT.OK, edges.stderr);
+  const e = JSON.parse(edges.stdout);
+  assert.deepEqual([e.color, e.fuzz, e.everywhere, e.pixels_taken], ["#ffffff", 10, false, 400 - 100]);
+  const kept = readPng(fs.readFileSync(path.resolve(dir, path.basename(e.image)))).image;
+  assert.equal(kept.rgba[(8 * 20 + 8) * 4 + 3], 255, "the eye stays");
+  assert.equal(kept.rgba[3], 0, "the corner goes");
+  const all = JSON.parse((await run(["toolbox", "image", "key", file, "--everywhere", "--out", dir, "--json"])).stdout);
+  assert.equal(all.pixels_taken, 400 - 100 + 4);
+
+  const sheet = writeSheet(dir, "sheet.png", joinTwo(img), { cols: 2, rows: 1, frames: 2, fps: 8 });
+  const keyed = JSON.parse((await run(["toolbox", "image", "key", sheet, "--out", dir, "--json"])).stdout);
+  assert.equal(keyed.pixels_taken, 2 * 300);
+  assert.deepEqual(keyed.grid, { cols: 2, rows: 1, frames: 2, frame_width: 20, frame_height: 20, fps: 8 });
+
+  const busy = writeSheet(dir, "busy.png", noise(20, 20));
+  const refused = await run(["toolbox", "image", "key", busy]);
+  assert.equal(refused.code, EXIT.BAD_INPUT);
+  assert.match(refused.stderr, /no solid colour around its edges/);
+  const far = await run(["toolbox", "image", "key", file, "--color", "#00ff00"]);
+  assert.equal(far.code, EXIT.BAD_INPUT);
+  assert.match(far.stderr, /No pixel .* is within 10% of #00ff00 at its edges/);
+});
+
+function joinTwo(img) {
+  const out = { width: img.width * 2, height: img.height, rgba: new Uint8Array(img.width * 2 * img.height * 4) };
+  for (let y = 0; y < img.height; y++) {
+    out.rgba.set(img.rgba.subarray(y * img.width * 4, (y + 1) * img.width * 4), y * out.width * 4);
+    out.rgba.set(img.rgba.subarray(y * img.width * 4, (y + 1) * img.width * 4), (y * out.width + img.width) * 4);
+  }
+  return out;
+}
 
 // ---- Engine exports ----
 
