@@ -7,6 +7,7 @@ import "./sprite-pack.js";
 import "./sprite-sequence.js";
 import "./sprite-video.js";
 import "./image.js";
+import "./tiles.js";
 
 export { TOOLS } from "./registry.js";
 

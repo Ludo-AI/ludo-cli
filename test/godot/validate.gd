@@ -20,8 +20,14 @@ func _initialize() -> void:
 		return
 	for c in cases:
 		check_case(c)
+	var tilesets = JSON.parse_string(FileAccess.get_file_as_string("res://out/tilesets.json"))
+	if typeof(tilesets) != TYPE_ARRAY or tilesets.is_empty():
+		fail("tilesets", "could not read res://out/tilesets.json")
+	else:
+		for t in tilesets:
+			check_tileset(t)
 	if failures == 0:
-		print("ALL %d CASES PASSED" % cases.size())
+		print("ALL %d CASES PASSED" % (cases.size() + tilesets.size()))
 	quit(1 if failures > 0 else 0)
 
 
@@ -100,3 +106,51 @@ func check_case(c: Dictionary) -> void:
 func _far(a: Color, b: Color) -> bool:
 	var tol := 2.0 / 255.0
 	return absf(a.r - b.r) > tol or absf(a.g - b.g) > tol or absf(a.b - b.b) > tol or absf(a.a - b.a) > tol
+
+
+# A TileSet from src/toolbox/tiles.ts: one atlas source with the tiles listed,
+# each region where it should be, showing its tile's colour.
+func check_tileset(t: Dictionary) -> void:
+	var name: String = "tileset " + t.name
+	var failures_before := failures
+	var res = ResourceLoader.load(t.tres, "", ResourceLoader.CACHE_MODE_IGNORE)
+	if not (res is TileSet):
+		fail(name, "%s did not load as a TileSet" % t.tres)
+		return
+	var ts: TileSet = res
+	if ts.tile_size != Vector2i(t.tile[0], t.tile[1]):
+		fail(name, "tile_size %s" % ts.tile_size)
+	if ts.get_source_count() != 1:
+		fail(name, "%d sources" % ts.get_source_count())
+		return
+	var src = ts.get_source(ts.get_source_id(0))
+	if not (src is TileSetAtlasSource):
+		fail(name, "source is not a TileSetAtlasSource")
+		return
+	var atlas: TileSetAtlasSource = src
+	if atlas.texture_region_size != Vector2i(t.tile[0], t.tile[1]):
+		fail(name, "texture_region_size %s" % atlas.texture_region_size)
+	if atlas.separation != Vector2i(t.spacing, t.spacing):
+		fail(name, "separation %s" % atlas.separation)
+	if atlas.margins != Vector2i(t.margin, t.margin):
+		fail(name, "margins %s" % atlas.margins)
+	var want: Array = t.tiles
+	if atlas.get_tiles_count() != want.size():
+		fail(name, "%d tiles, want %d" % [atlas.get_tiles_count(), want.size()])
+	var image := atlas.texture.get_image()
+	if image.is_compressed():
+		image.decompress()
+	for w in want:
+		var coords := Vector2i(w.coords[0], w.coords[1])
+		if not atlas.has_tile(coords):
+			fail(name, "no tile at %s" % coords)
+			continue
+		var region := atlas.get_tile_texture_region(coords)
+		if region != Rect2i(w.region[0], w.region[1], w.region[2], w.region[3]):
+			fail(name, "tile %s region %s" % [coords, region])
+			continue
+		var got := image.get_pixelv(region.position + region.size / 2)
+		if _far(got, Color(w.color[0], w.color[1], w.color[2], w.color[3])):
+			fail(name, "tile %s colour %s" % [coords, got])
+	if failures == failures_before:
+		print("ok [%s] %d tiles" % [name, want.size()])

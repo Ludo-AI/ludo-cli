@@ -86,15 +86,25 @@ const maxTextureSize = (w: number, h: number) => {
 };
 
 /** Pure: the `.png.meta` text for the sheet `sheet` (its name without the extension). */
-export function unityTextureMeta(sheet: string, guid: string, sheetWidth: number, sheetHeight: number, grid: AtlasGrid, layout: FrameLayout = {}, earlier?: UnityIds): string {
+export function unityTextureMeta(
+  sheet: string,
+  guid: string,
+  sheetWidth: number,
+  sheetHeight: number,
+  grid: AtlasGrid,
+  layout: FrameLayout = {},
+  earlier?: UnityIds,
+  rects?: { x: number; y: number; w: number; h: number }[] // explicit sprite rects (a tileset's), top-left origin
+): string {
   check(sheetWidth, sheetHeight, grid, layout);
   const e = layout.extrude ?? 0;
-  const t = layout.trim;
-  const ids = spriteFileIds(sheet, grid.frames, earlier);
+  const t = rects ? undefined : layout.trim;
+  const cells = rects ?? frameRects(sheetWidth, sheetHeight, grid.cols, grid.rows, grid.frames).map(r => ({ x: r.x + e, y: r.y + e, w: r.w - 2 * e, h: r.h - 2 * e }));
+  const ids = spriteFileIds(sheet, cells.length, earlier);
   const names = ids.map((_, i) => spriteName(sheet, i));
   const max = maxTextureSize(sheetWidth, sheetHeight);
-  const sprites = frameRects(sheetWidth, sheetHeight, grid.cols, grid.rows, grid.frames).map((r, i) => {
-    const [w, h] = [r.w - 2 * e, r.h - 2 * e];
+  const sprites = cells.map((r, i) => {
+    const { w, h } = r;
     const trimmed = t && t.w === w && t.h === h && (t.w !== t.source_w || t.h !== t.source_h);
     // The untrimmed frame's centre, in the trimmed rect's own units (y up).
     const pivot = trimmed ? { x: (t.source_w / 2 - t.x) / w, y: (t.source_h / 2 - (t.source_h - t.y - h)) / h } : { x: 0.5, y: 0.5 };
@@ -103,8 +113,8 @@ export function unityTextureMeta(sheet: string, guid: string, sheetWidth: number
       `      name: ${yamlText(names[i])}`,
       `      rect:`,
       `        serializedVersion: 2`,
-      `        x: ${r.x + e}`,
-      `        y: ${sheetHeight - (r.y + e + h)}`,
+      `        x: ${r.x}`,
+      `        y: ${sheetHeight - (r.y + h)}`,
       `        width: ${w}`,
       `        height: ${h}`,
       `      alignment: ${trimmed ? 9 : 0}`,
@@ -357,4 +367,23 @@ export function writeUnityFiles(sheetPath: string, sheetWidth: number, sheetHeig
       throw new Error(`Could not write Unity AnimationClip ${target}: ${err?.code || err?.message || err}`);
     }
   }
+}
+
+/**
+ * Writes `<tileset>.png.meta` slicing it into the given tiles (a Tile
+ * Palette takes them), replacing one there but keeping its guid and file
+ * IDs, and returns its path.
+ */
+export function writeUnityTileset(sheetPath: string, sheetWidth: number, sheetHeight: number, rects: { x: number; y: number; w: number; h: number }[]): string {
+  const base = path.basename(sheetPath, path.extname(sheetPath));
+  const metaPath = path.resolve(sheetPath) + ".meta";
+  let earlier: UnityIds | undefined;
+  try {
+    earlier = readUnityMeta(fs.readFileSync(metaPath, "utf8"));
+  } catch (err: any) {
+    if (err?.code !== "ENOENT") throw new Error(`Could not read ${metaPath}: ${err?.code || err?.message || err}`);
+  }
+  const guid = earlier?.guid ?? randomBytes(16).toString("hex");
+  fs.writeFileSync(metaPath, unityTextureMeta(base, guid, sheetWidth, sheetHeight, { cols: 1, rows: 1, frames: 1, fps: 1 }, {}, earlier, rects));
+  return metaPath;
 }

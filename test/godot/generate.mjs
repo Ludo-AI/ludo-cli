@@ -165,3 +165,30 @@ try {
 
 fs.writeFileSync(path.join(out, "cases.json"), JSON.stringify(cases, null, 2));
 console.log(`generated ${cases.length} cases; non-divisible grid throws as expected`);
+
+// TileSets (src/toolbox/tiles.ts godotTileSet): tiles of distinct colours,
+// some left empty, with and without spacing and margin.
+const { godotTileSet, tileLayout, tileRects } = await import("../../dist/toolbox/tiles.js");
+const { encodePng } = await import("../../dist/tty/png.js");
+const tilesets = [];
+for (const [name, tw, th, spacing, margin, cols, rows] of [["plain", 16, 16, 0, 0, 4, 3], ["spaced", 12, 10, 2, 3, 5, 2]]) {
+  const width = margin * 2 + cols * (tw + spacing) - spacing;
+  const height = margin * 2 + rows * (th + spacing) - spacing;
+  const img = { width, height, rgba: new Uint8Array(width * height * 4) };
+  const layout = tileLayout(width, height, tw, th, spacing, margin);
+  const kept = [];
+  for (const t of tileRects(layout)) {
+    if ((t.col + t.row) % 3 === 2) continue; // left empty
+    const color = [(t.col * 50) % 256, (t.row * 90 + 40) % 256, 200, 255];
+    for (let y = t.y; y < t.y + t.h; y++) for (let x = t.x; x < t.x + t.w; x++) img.rgba.set(color, (y * width + x) * 4);
+    kept.push({ ...t, color: color.map(v => v / 255) });
+  }
+  const png = path.join(out, "tiles", `${name}.png`);
+  fs.mkdirSync(path.dirname(png), { recursive: true });
+  fs.writeFileSync(png, encodePng(img));
+  const tres = path.join(out, "tiles", `${name}.tres`);
+  fs.writeFileSync(tres, godotTileSet(`res://out/tiles/${name}.png`, layout, kept));
+  tilesets.push({ name, tres: `res://out/tiles/${name}.tres`, tile: [tw, th], spacing, margin, tiles: kept.map(t => ({ coords: [t.col, t.row], region: [t.x, t.y, t.w, t.h], color: t.color })) });
+}
+fs.writeFileSync(path.join(out, "tilesets.json"), JSON.stringify(tilesets, null, 2));
+console.log(`generated ${tilesets.length} tilesets`);
