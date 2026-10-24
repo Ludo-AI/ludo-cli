@@ -36,36 +36,29 @@ export function fuzzyMatch(fuzz: number): (px: Uint8Array, i: number, key: Rgba)
   };
 }
 
-// The most common opaque colour on the border, if the border is mostly
-// opaque (a background to take away).
-export function borderColour(img: Image): Rgba | undefined {
+// The background around the art: the per-channel median of the border's
+// opaque pixels, when most of the border is within `fuzz` of it (a solid
+// colour, maybe with compression noise).
+export function borderColour(img: Image, fuzz = 0.1): Rgba | undefined {
   const { width: w, height: h, rgba } = img;
-  const counts = new Map<number, number>();
-  let n = 0;
-  const tally = (x: number, y: number) => {
-    const i = (y * w + x) * 4;
-    n++;
-    if (rgba[i + 3] < 255) return;
-    const k = (rgba[i] << 16) | (rgba[i + 1] << 8) | rgba[i + 2];
-    counts.set(k, (counts.get(k) ?? 0) + 1);
-  };
+  const at: number[] = [];
   for (let x = 0; x < w; x++) {
-    tally(x, 0);
-    if (h > 1) tally(x, h - 1);
+    at.push(x * 4);
+    if (h > 1) at.push(((h - 1) * w + x) * 4);
   }
   for (let y = 1; y < h - 1; y++) {
-    tally(0, y);
-    if (w > 1) tally(w - 1, y);
+    at.push(y * w * 4);
+    if (w > 1) at.push((y * w + w - 1) * 4);
   }
-  let best = -1;
-  let bestN = 0;
-  for (const [k, c] of counts) {
-    if (c > bestN) {
-      bestN = c;
-      best = k;
-    }
-  }
-  return bestN * 2 > n ? [(best >> 16) & 255, (best >> 8) & 255, best & 255, 255] : undefined;
+  const opaque = at.filter(i => rgba[i + 3] === 255);
+  if (opaque.length * 2 <= at.length) return undefined;
+  const median = (c: number) => {
+    const v = opaque.map(i => rgba[i + c]).sort((a, b) => a - b);
+    return v[v.length >> 1];
+  };
+  const key: Rgba = [median(0), median(1), median(2), 255];
+  const match = fuzzyMatch(fuzz);
+  return at.filter(i => match(rgba, i, key)).length * 2 > at.length ? key : undefined;
 }
 
 // Which pixels the key takes: 1 for taken. `edges`: those 4-connected to a

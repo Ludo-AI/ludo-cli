@@ -340,7 +340,7 @@ TOOLS.push({
   details: [
     "Takes away the background colour around the art: the pixels within --fuzz of it that connect to",
     "the image's edges, so the same colour inside the sprite (eyes, highlights) stays. --everywhere takes",
-    "every pixel of that colour instead. The colour is the most common one on the border unless given.",
+    "every pixel of that colour instead. The colour is the border's (its median) unless given.",
     "--fuzz is ImageMagick's (-fuzz 10% -transparent <colour> takes the same pixels as --everywhere).",
     "On a sheet every frame is keyed on its own edges. For painted or photographed backgrounds, use",
     "ludo image remove-background."
@@ -358,7 +358,7 @@ TOOLS.push({
     const given = textFlag(call, "--color");
     const everywhere = call.flags.has("--everywhere");
     return runEdit(ctx, call, "ludo toolbox image key <image> [--color #ffffff]", (frames, src) => {
-      const key = given ? hexColour(given, "--color") : borderColour(src.image);
+      const key = given ? hexColour(given, "--color") : borderColour(src.image, fuzz / 100);
       if (!key) {
         throw new CliError(`${src.file} has no solid colour around its edges to take away`, EXIT.BAD_INPUT, "Name the colour with --color, or use ludo image remove-background.");
       }
