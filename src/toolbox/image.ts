@@ -1,3 +1,4 @@
+import path from "node:path";
 import { CliError, EXIT } from "../errors.js";
 import { printJson, type Ctx } from "../generate.js";
 import { MAX_TOOLBOX_PIXELS, type Image } from "../tty/png.js";
@@ -27,7 +28,8 @@ import {
 import { hint, TOOLS, type ToolCall, type ToolFlag } from "./registry.js";
 import { resizeNearest, resizePillow } from "./resample.js";
 import { unfake, type ReduceMethod } from "./unfake.js";
-import { quantizeFrames } from "./quantize.js";
+import { PaletteMap, quantizeFrames } from "./quantize.js";
+import { coloursOf, hexOf, loadPalette, PALETTE_EXTENSIONS, PaletteError, savePalette } from "./palette.js";
 import { applyKey, borderColour, keyMask } from "./key.js";
 
 // Every image tool runs the same way: one image, or every frame of a sheet
@@ -372,6 +374,146 @@ TOOLS.push({
         trim: src.trim,
         facts: { color: hex(key), fuzz, everywhere, pixels_taken: taken, share_taken: Math.round((taken / total) * 1000) / 1000, ...trimJson(src.trim) },
         says: `Took away ${hex(key)} (fuzz ${fuzz}%${everywhere ? ", everywhere" : ""}): ${taken} pixels, ${Math.round((taken / total) * 100)}% of the image`
+      };
+    });
+  }
+});
+
+TOOLS.push({
+  group: "image",
+  name: "palette",
+  args: "<image>",
+  summary: "List an image's colours, most used first, and save them as a palette file",
+  details: [
+    "A sheet's colours are counted over all its frames. --save writes them in the format its extension",
+    "names: .hex (Lospec), .gpl (GIMP, Aseprite), .pal (JASC, Aseprite), .txt (Paint.NET) or .png (one",
+    "pixel per colour). Use it with `ludo toolbox image recolor --palette` to give other art the same colours."
+  ],
+  flags: [
+    { flag: "--save", value: "file", description: "Write the palette to a .hex, .gpl, .pal, .txt or .png file" },
+    { flag: "--top", value: "n", description: "List this many colours (default 16; the JSON and --save have them all)" }
+  ],
+  async run(ctx, call) {
+    if (call.args.length !== 1) throw new CliError("Usage: ludo toolbox image palette <image> [--save palette.hex]", EXIT.USAGE);
+    const src = loadImageFile(call.args[0]);
+    const save = textFlag(call, "--save");
+    if (save !== undefined && !PALETTE_EXTENSIONS.includes(path.extname(save).toLowerCase())) {
+      throw usageError(`--save writes ${PALETTE_EXTENSIONS.join(", ")} files (got "${save}")`);
+    }
+    const top = call.flags.has("--top") ? positiveInt(call, "--top")! : 16;
+    const colours = coloursOf([src.image]).sort((a, b) => b.count - a.count);
+    if (!colours.length) throw new CliError(`${src.file} is transparent all over: it has no colours`, EXIT.BAD_INPUT);
+    if (save !== undefined && colours.length > 1024) {
+      throw new CliError(`${src.file} has ${colours.length} colours, too many for a palette file`, EXIT.BAD_INPUT, `Reduce them first: ludo toolbox image recolor ${shown(src.file)} --colors 32`);
+    }
+    if (save !== undefined) savePalette(save, colours.map(c => c.colour));
+    const pixels = colours.reduce((n, c) => n + c.count, 0);
+    const next = hint("Give other art these colours", `ludo toolbox image recolor <image> --palette ${save !== undefined ? shown(save) : shown(src.file)}`);
+    if (ctx.jsonOut) {
+      printJson(
+        {
+          image: shown(src.file),
+          count: colours.length,
+          colors: colours.slice(0, 4096).map(c => ({ hex: hexOf(c.colour), pixels: c.count })),
+          ...(save !== undefined ? { saved: shown(save) } : {}),
+          ...(ctx.globals.quiet ? {} : { hint: next })
+        },
+        false
+      );
+    } else {
+      process.stdout.write(`${colours.length} colours in ${pixels} opaque pixels\n`);
+      for (const c of colours.slice(0, top)) process.stdout.write(`  ${hexOf(c.colour)}  ${((c.count / pixels) * 100).toFixed(1).padStart(5)}%\n`);
+      if (colours.length > top) process.stdout.write(`  ... and ${colours.length - top} more\n`);
+      if (save !== undefined) process.stdout.write(`Saved ${shown(save)}\n`);
+      if (!ctx.globals.quiet) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
+    }
+    return EXIT.OK;
+  }
+});
+
+TOOLS.push({
+  group: "image",
+  name: "recolor",
+  args: "<image>",
+  summary: "Fewer colours, a given palette, or one palette swapped for another",
+  details: [
+    "  --colors N               at most N colours, chosen for the image (Wu's quantizer, no dithering)",
+    "  --palette <file|hexes>   every colour becomes its nearest in that palette (a Lospec palette, or",
+    "                           another sprite's colours)",
+    "  --swap <A> --to <B>      each colour of palette A becomes the colour at the same place in B",
+    "                           (an enemy in red becomes one in blue); colours not in A stay",
+    "Palettes are files (.hex, .gpl, .pal, .txt, or an image's colours from .png) or hex lists",
+    "(#1a1c2c,#5d275d). On a sheet the frames share one palette. Nearest is by RGB distance."
+  ],
+  flags: [
+    { flag: "--colors", value: "N", description: "At most N colours (2 to 256)" },
+    { flag: "--palette", value: "file|hexes", description: "Map every colour to its nearest in this palette" },
+    { flag: "--swap", value: "file|hexes", description: "The colours to replace (with --to)" },
+    { flag: "--to", value: "file|hexes", description: "What they become, in the same order" },
+    { flag: "--save-palette", value: "file", description: "Also write the result's palette (.hex, .gpl, .pal, .txt or .png)" },
+    ...SHARED
+  ],
+  async run(ctx, call) {
+    const modes = ["--colors", "--palette", "--swap"].filter(f => call.flags.has(f));
+    if (modes.length !== 1) throw usageError("Pass one of --colors, --palette or --swap (with --to)");
+    if (call.flags.has("--swap") !== call.flags.has("--to")) throw usageError("--swap and --to go together");
+    const savePal = textFlag(call, "--save-palette");
+    if (savePal !== undefined && !PALETTE_EXTENSIONS.includes(path.extname(savePal).toLowerCase())) {
+      throw usageError(`--save-palette writes ${PALETTE_EXTENSIONS.join(", ")} files (got "${savePal}")`);
+    }
+    const pal = (flag: string) => {
+      try {
+        const p = loadPalette(textFlag(call, flag) ?? "");
+        if (!p.length) throw new PaletteError("it has no colours");
+        return p;
+      } catch (err) {
+        if (err instanceof PaletteError) throw new CliError(`${flag}: ${err.message}`, EXIT.BAD_INPUT);
+        throw err;
+      }
+    };
+    let colours: number | undefined;
+    if (call.flags.has("--colors")) {
+      colours = positiveInt(call, "--colors");
+      if (colours === undefined || colours < 2 || colours > 256) throw usageError("--colors takes 2 to 256");
+    }
+    const target = call.flags.has("--palette") ? pal("--palette") : undefined;
+    const swap = call.flags.has("--swap") ? { from: pal("--swap"), to: pal("--to") } : undefined;
+    if (swap && swap.from.length !== swap.to.length) throw usageError(`--swap has ${swap.from.length} colours and --to ${swap.to.length}: they pair up in order`);
+    return runEdit(ctx, call, "ludo toolbox image recolor <image> --colors 16", (frames, src) => {
+      const before = coloursOf(frames).length;
+      let out: Image[];
+      let changed = 0;
+      if (colours) out = quantizeFrames(frames, colours).frames;
+      else {
+        // Each colour once: its nearest (or its swap), remembered.
+        const map = target ? new PaletteMap(target) : undefined;
+        const swaps = new Map(swap?.from.map((c, i) => [(c[0] << 16) | (c[1] << 8) | c[2], swap.to[i]]));
+        out = frames.map(f => {
+          const rgba = f.rgba.slice();
+          for (let i = 0; i < rgba.length; i += 4) {
+            if (!rgba[i + 3]) continue;
+            const c = map ? target![map.index(rgba[i], rgba[i + 1], rgba[i + 2])] : swaps.get((rgba[i] << 16) | (rgba[i + 1] << 8) | rgba[i + 2]);
+            if (!c || (c[0] === rgba[i] && c[1] === rgba[i + 1] && c[2] === rgba[i + 2])) continue;
+            rgba[i] = c[0];
+            rgba[i + 1] = c[1];
+            rgba[i + 2] = c[2];
+            changed++;
+          }
+          return { width: f.width, height: f.height, rgba };
+        });
+      }
+      const after = coloursOf(out);
+      if (savePal !== undefined) savePalette(savePal, after.sort((a, b) => b.count - a.count).map(c => c.colour));
+      return {
+        frames: out,
+        trim: src.trim,
+        facts: {
+          colors: { before, after: after.length },
+          ...(swap ? { swapped_pixels: changed } : {}),
+          ...(savePal !== undefined ? { palette_saved: shown(savePal) } : {}),
+          ...trimJson(src.trim)
+        },
+        says: swap ? `Swapped ${swap.from.length} colours: ${changed} pixels changed` : `${before} colours to ${after.length}`
       };
     });
   }

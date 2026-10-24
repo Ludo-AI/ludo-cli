@@ -18,6 +18,7 @@ import { contentBox, emptiness, extrude, flip, pad, rotate, scaleDown, scaleUp }
 import { crop } from "../dist/toolbox/sheet.js";
 import { textureAtlas } from "../dist/tty/texturepacker.js";
 import { keyMask } from "../dist/toolbox/key.js";
+import { formatPalette, parseHexList, parsePalette } from "../dist/toolbox/palette.js";
 import { parseArgv } from "../dist/args.js";
 import { EXIT } from "../dist/errors.js";
 
@@ -944,6 +945,78 @@ test("image key keeps the background colour inside the sprite unless --everywher
   const far = await run(["toolbox", "image", "key", file, "--color", "#00ff00"]);
   assert.equal(far.code, EXIT.BAD_INPUT);
   assert.match(far.stderr, /No pixel .* is within 10% of #00ff00 at its edges/);
+});
+
+// PICO-8's 16 colours, as Lospec writes them.
+const PICO8 = ["000000", "1d2b53", "7e2553", "008751", "ab5236", "5f574f", "c2c3c7", "fff1e8", "ff004d", "ffa300", "ffec27", "00e436", "29adff", "83769c", "ff77a8", "ffccaa"];
+
+test("palette files: each format reads back what it wrote, and Lospec's and GIMP's own files read", t => {
+  const colours = PICO8.map(h => [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4), 16)]);
+  for (const ext of [".hex", ".gpl", ".pal", ".txt"]) assert.deepEqual(parsePalette(formatPalette(colours, ext), ext), colours, ext);
+  const jasc = "JASC-PAL\r\n0100\r\n16\r\n" + colours.map(c => c.join(" ")).join("\r\n") + "\r\n";
+  assert.deepEqual(parsePalette(jasc, ".pal"), colours);
+  const gimp = "GIMP Palette\nName: PICO-8\nColumns: 4\n#\n" + colours.map(c => `${c.join("\t")}\tUntitled`).join("\n");
+  assert.deepEqual(parsePalette(gimp, ".gpl"), colours);
+  assert.deepEqual(parsePalette(";paint.net Palette File\n;Colors: 16\n" + PICO8.map(h => "FF" + h.toUpperCase()).join("\n"), ".txt"), colours);
+  assert.deepEqual(parseHexList("#000 #1d2b53,7e2553"), [[0, 0, 0], [29, 43, 83], [126, 37, 83]]);
+  assert.throws(() => parsePalette("JASC-PAL\n0100\n3\n1 2 3\n", ".pal"), /says 3 colours and has 1/);
+  assert.throws(() => parseHexList("#12345g"), /not a hex colour/);
+  // Pillow's GIMP palette reader takes ours.
+  let pillow = true;
+  try {
+    execFileSync("python3", ["-I", "-c", "import PIL"], { stdio: "ignore" });
+  } catch {
+    pillow = false;
+  }
+  if (!pillow) return t.skip("Pillow is not installed");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-gpl-"));
+  fs.writeFileSync(path.join(dir, "p.gpl"), formatPalette(colours, ".gpl"));
+  const read = execFileSync("python3", ["-I", "-c", "import sys\nfrom PIL.GimpPaletteFile import GimpPaletteFile\np=GimpPaletteFile(open(sys.argv[1],'rb')).getpalette()[0]\nprint(','.join(str(v) for v in p[:48]))", path.join(dir, "p.gpl")]).toString().trim();
+  assert.equal(read, colours.flat().join(","));
+});
+
+test("image palette lists colours most used first and saves them; recolor reduces, maps and swaps", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-palette-"));
+  // 3 colours: red 60%, green 30%, blue 10%, on transparency.
+  const img = { width: 10, height: 10, rgba: new Uint8Array(400) };
+  for (let p = 0; p < 100; p++) img.rgba.set(p < 60 ? [220, 20, 30, 255] : p < 90 ? [30, 200, 40, 255] : [20, 40, 210, 255], p * 4);
+  const file = writeSheet(dir, "art.png", img);
+  const listed = JSON.parse((await run(["toolbox", "image", "palette", file, "--save", path.join(dir, "art.gpl"), "--json"])).stdout);
+  assert.deepEqual(listed.colors.map(c => [c.hex, c.pixels]), [["#dc141e", 60], ["#1ec828", 30], ["#1428d2", 10]]);
+  assert.deepEqual(parsePalette(fs.readFileSync(path.join(dir, "art.gpl"), "utf8"), ".gpl"), [[220, 20, 30], [30, 200, 40], [20, 40, 210]]);
+  const badExt = await run(["toolbox", "image", "palette", file, "--save", path.join(dir, "p.ase")]);
+  assert.equal(badExt.code, EXIT.USAGE);
+
+  // --palette: each colour to its nearest, as a brute-force search finds it.
+  const pico = PICO8.map(h => "#" + h).join(",");
+  const busy = writeSheet(dir, "busy.png", noise(24, 24, 0, 21));
+  const mapped = JSON.parse((await run(["toolbox", "image", "recolor", busy, "--palette", pico, "--out", dir, "--json"])).stdout);
+  const out = readPng(fs.readFileSync(path.resolve(dir, path.basename(mapped.image)))).image;
+  const src = readPng(fs.readFileSync(busy)).image;
+  const pal = PICO8.map(h => [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4), 16)]);
+  for (let i = 0; i < src.rgba.length; i += 4) {
+    if (!src.rgba[i + 3]) continue;
+    const d = c => (c[0] - src.rgba[i]) ** 2 + (c[1] - src.rgba[i + 1]) ** 2 + (c[2] - src.rgba[i + 2]) ** 2;
+    const best = pal.reduce((a, c) => (d(c) < d(a) ? c : a));
+    assert.deepEqual([...out.rgba.subarray(i, i + 3)], best, `pixel ${i / 4}`);
+  }
+  assert.ok(mapped.colors.after <= 16);
+
+  const reduced = JSON.parse((await run(["toolbox", "image", "recolor", busy, "--colors", "8", "--save-palette", path.join(dir, "eight.hex"), "--out", dir, "--json"])).stdout);
+  assert.ok(reduced.colors.after <= 8 && reduced.colors.before > 8, JSON.stringify(reduced.colors));
+  assert.equal(parsePalette(fs.readFileSync(path.join(dir, "eight.hex"), "utf8"), ".hex").length, reduced.colors.after);
+
+  // --swap: red to gold, blue to black; green stays.
+  const swapped = JSON.parse((await run(["toolbox", "image", "recolor", file, "--swap", "#dc141e,#1428d2", "--to", "#ffd700,#000000", "--out", dir, "--json"])).stdout);
+  assert.equal(swapped.swapped_pixels, 70);
+  const sw = readPng(fs.readFileSync(path.resolve(dir, path.basename(swapped.image)))).image;
+  assert.deepEqual([...sw.rgba.subarray(0, 4)], [255, 215, 0, 255]);
+  assert.deepEqual([...sw.rgba.subarray(60 * 4, 60 * 4 + 4)], [30, 200, 40, 255]);
+  const uneven = await run(["toolbox", "image", "recolor", file, "--swap", "#dc141e", "--to", "#ffd700,#000000"]);
+  assert.equal(uneven.code, EXIT.USAGE);
+  assert.match(uneven.stderr, /pair up in order/);
+  const none = await run(["toolbox", "image", "recolor", file]);
+  assert.match(none.stderr, /Pass one of --colors, --palette or --swap/);
 });
 
 function joinTwo(img) {
