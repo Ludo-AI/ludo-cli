@@ -48,7 +48,7 @@ they log in or create an account (and pick a plan with API access if needed) and
    sheet into frames, `ludo toolbox sprite join <frames...>` puts frames back into a sheet,
    `ludo toolbox sprite frames <sheet> --drop 7 --hold 4x3` edits its frames,
    `ludo toolbox sprite loop <sheet>` checks that it loops (`--apply` trims it to its best loop),
-   `ludo toolbox sprite gif <sheet>` makes an animated GIF (a GIF reads as a sheet of its frames), and
+   `ludo toolbox sprite gif <sheet>` makes an animated GIF (a GIF or animated WebP reads as a sheet of its frames), and
    `ludo toolbox sprite pack <sheets...>` brings a character's animations to one size, ground line and
    frame size (its `pack.json` re-runs it: `--manifest`), and `ludo toolbox sprite sequence <sheets...>`
    chains animations so each continues from the one before (check the transitions it reports).

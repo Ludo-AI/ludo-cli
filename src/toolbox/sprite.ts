@@ -21,13 +21,13 @@ function sheetGrid(src: Loaded, call: ToolCall) {
   return resolveGrid(src, gridFlag(call));
 }
 
-export function resolveGrid(src: Loaded, flagGrid: { cols: number; rows: number } | undefined, flag = "--grid"): { grid: Grid; from: "flag" | "stamp" | "gif" | "detected"; confidence?: number } {
+export function resolveGrid(src: Loaded, flagGrid: { cols: number; rows: number } | undefined, flag = "--grid"): { grid: Grid; from: "flag" | "stamp" | "gif" | "webp" | "detected"; confidence?: number } {
   const { width, height } = src.image;
   let out: ReturnType<typeof resolveGrid>;
   if (flagGrid) {
     out = { grid: { ...flagGrid, frames: countFrames(src.image, flagGrid.cols, flagGrid.rows), fps: src.grid?.fps ?? 10 }, from: "flag" };
   } else if (src.grid) {
-    out = { grid: src.grid, from: src.gif ? "gif" : "stamp" };
+    out = { grid: src.grid, from: src.animation ?? "stamp" };
   } else {
     const guess = guessGrid(src.image);
     if (guess.confidence < CONFIDENT) {
@@ -131,7 +131,7 @@ TOOLS.push({
         false
       );
     } else {
-      const how = from === "flag" ? "from --grid" : from === "stamp" ? "from its Ludo stamp" : from === "gif" ? "the GIF's frames" : `detected, ${Math.round(confidence! * 100)}% sure`;
+      const how = from === "flag" ? "from --grid" : from === "stamp" ? "from its Ludo stamp" : from === "gif" ? "the GIF's frames" : from === "webp" ? "the WebP's frames" : `detected, ${Math.round(confidence! * 100)}% sure`;
       process.stdout.write(`${frames} frames of ${frameSize.frame_width}x${frameSize.frame_height} (${grid.cols}x${grid.rows} grid, ${how})\n`);
       process.stdout.write(`Saved to ${shown(dir)}${path.sep}\n`);
       if (!ctx.globals.quiet) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
@@ -371,7 +371,7 @@ TOOLS.push({
       );
     } else {
       const out = (line: string) => process.stdout.write(line + "\n");
-      out(`${n} frames (${grid.cols}x${grid.rows} grid${from === "stamp" ? ", from its Ludo stamp" : from === "gif" ? ", the GIF's frames" : from === "flag" ? "" : ", detected"})`);
+      out(`${n} frames (${grid.cols}x${grid.rows} grid${from === "stamp" ? ", from its Ludo stamp" : from === "gif" ? ", the GIF's frames" : from === "webp" ? ", the WebP's frames" : from === "flag" ? "" : ", detected"})`);
       const seamText = `${n} -> 1 is ${seam.ratio}x a typical step`;
       if (seam.verdict === "static") out("No frame moves: there is nothing to loop.");
       else if (seam.verdict === "smooth") out(`Loops smoothly: the seam ${seamText}.`);

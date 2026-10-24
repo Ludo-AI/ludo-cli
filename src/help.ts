@@ -201,7 +201,7 @@ ${groups}
 ${TOOLS.length ? `## Free tools (offline, no account, no credits)
 - \`ludo toolbox\` lists them; \`ludo toolbox <group> <tool> --help\` gives the flags. They need no login and no network.
 ${TOOLS.map(t => `- \`ludo toolbox ${t.group} ${t.name} ${t.args}\`: ${t.summary}`).join("\n")}
-- A GIF reads as a sheet of its frames, so every sprite and image tool takes one; \`ludo toolbox sprite gif <sheet>\` goes the other way.
+- A GIF or animated WebP reads as a sheet of its frames, so every sprite and image tool takes one; \`ludo toolbox sprite gif <sheet>\` goes the other way.
 - A tool's JSON may carry \`hint: {text, command}\`, the natural next step; mention it to the user once if it fits.
 - Exit code 12: an input file it cannot read or use, or a grid it cannot tell for sure; pass \`--grid <cols>x<rows>\`.
 
