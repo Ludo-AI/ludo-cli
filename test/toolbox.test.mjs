@@ -19,6 +19,7 @@ import { crop } from "../dist/toolbox/sheet.js";
 import { textureAtlas } from "../dist/tty/texturepacker.js";
 import { keyMask } from "../dist/toolbox/key.js";
 import { formatPalette, parseHexList, parsePalette } from "../dist/toolbox/palette.js";
+import { alphaComposite, dilateAlpha } from "../dist/toolbox/effects.js";
 import { parseArgv } from "../dist/args.js";
 import { EXIT } from "../dist/errors.js";
 
@@ -1017,6 +1018,74 @@ test("image palette lists colours most used first and saves them; recolor reduce
   assert.match(uneven.stderr, /pair up in order/);
   const none = await run(["toolbox", "image", "recolor", file]);
   assert.match(none.stderr, /Pass one of --colors, --palette or --swap/);
+});
+
+test("outline dilation is ImageMagick's morphology; compositing is Pillow's alpha_composite to the byte", t => {
+  const rnd = (seed => () => ((seed = (seed * 16807) % 2147483647) / 2147483647))(9);
+  const img = { width: 23, height: 17, rgba: new Uint8Array(23 * 17 * 4) };
+  for (let i = 0; i < img.rgba.length; i += 4) {
+    const r = rnd();
+    img.rgba.set([(rnd() * 256) | 0, (rnd() * 256) | 0, (rnd() * 256) | 0, r < 0.85 ? 0 : r < 0.93 ? 255 : (rnd() * 256) | 0], i);
+  }
+  const im = ["magick", ...(process.platform === "win32" ? [] : ["convert"])].find(cmd => {
+    try {
+      execFileSync(cmd, ["-version"], { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-fx-"));
+  fs.writeFileSync(path.join(dir, "a.png"), encodePng(img));
+  if (im) {
+    for (const [shape, kernelName] of [["circle", "Disk"], ["square", "Square"], ["diamond", "Diamond"]]) {
+      for (const n of [1, 2, 3]) {
+        const theirs = execFileSync(im, [path.join(dir, "a.png"), "-alpha", "extract", "-virtual-pixel", "Black", "-morphology", "Dilate", `${kernelName}:${n}`, "-depth", "8", "gray:-"]);
+        assert.deepEqual([...dilateAlpha(img, shape, n)], [...theirs], `${shape} ${n}`);
+      }
+    }
+  } else t.diagnostic("ImageMagick is not installed: dilation not checked");
+  let pillow = true;
+  try {
+    execFileSync("python3", ["-I", "-c", "import PIL"], { stdio: "ignore" });
+  } catch {
+    pillow = false;
+  }
+  if (!pillow) return t.skip("Pillow is not installed");
+  const under = { width: 23, height: 17, rgba: new Uint8Array(23 * 17 * 4).map(() => (rnd() * 256) | 0) };
+  fs.writeFileSync(path.join(dir, "b.png"), encodePng(under));
+  const theirs = execFileSync("python3", ["-I", "-c", "import sys\nfrom PIL import Image\nsys.stdout.buffer.write(Image.alpha_composite(Image.open(sys.argv[2]).convert('RGBA'), Image.open(sys.argv[1]).convert('RGBA')).tobytes())", path.join(dir, "a.png"), path.join(dir, "b.png")]);
+  // Compared as decoded from the same PNGs (RGB under alpha 0 is not kept).
+  const back = name => readPng(fs.readFileSync(path.join(dir, name))).image;
+  assert.ok(canonical(alphaComposite(back("b.png"), back("a.png")).rgba).equals(canonical(theirs)));
+});
+
+test("outline and shadow go under the art and grow the canvas only where they would not fit", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-outline-"));
+  // A 4x4 red block in a 10x10 image: 3 px of margin all round.
+  const img = { width: 10, height: 10, rgba: new Uint8Array(400) };
+  for (let y = 3; y < 7; y++) for (let x = 3; x < 7; x++) img.rgba.set([200, 30, 30, 255], (y * 10 + x) * 4);
+  const file = writeSheet(dir, "block.png", img);
+  const thin = JSON.parse((await run(["toolbox", "image", "outline", file, "--out", dir, "--json"])).stdout);
+  assert.deepEqual([thin.width, thin.height, thin.outline_width, thin.grown], [10, 10, 1, undefined]);
+  const o = readPng(fs.readFileSync(path.resolve(dir, path.basename(thin.image)))).image;
+  const at = (x, y) => [...o.rgba.subarray((y * 10 + x) * 4, (y * 10 + x) * 4 + 4)];
+  assert.deepEqual(at(2, 4), [0, 0, 0, 255], "outline beside the block");
+  assert.deepEqual(at(2, 2), [0, 0, 0, 0], "no corner at 1 px circle");
+  assert.deepEqual(at(4, 4), [200, 30, 30, 255], "the art on top");
+  const sq = JSON.parse((await run(["toolbox", "image", "outline", file, "--shape", "square", "--out", dir, "--json"])).stdout);
+  assert.deepEqual([...readPng(fs.readFileSync(path.resolve(dir, path.basename(sq.image)))).image.rgba.subarray((2 * 10 + 2) * 4, (2 * 10 + 2) * 4 + 4)], [0, 0, 0, 255]);
+  const thick = JSON.parse((await run(["toolbox", "image", "outline", file, "--width", "5", "--color", "#ffffff", "--out", dir, "--json"])).stdout);
+  assert.deepEqual([thick.width, thick.height, thick.grown], [14, 14, { top: 2, right: 2, bottom: 2, left: 2 }]);
+
+  const shadow = JSON.parse((await run(["toolbox", "image", "shadow", file, "--offset", "-5,1", "--opacity", "40", "--out", dir, "--json"])).stdout);
+  assert.deepEqual([shadow.width, shadow.height, shadow.grown], [12, 10, { top: 0, right: 0, bottom: 0, left: 2 }]);
+  const sh = readPng(fs.readFileSync(path.resolve(dir, path.basename(shadow.image)))).image;
+  // The block now sits at x 5..8; its shadow at x 0..3, y 4..7, 40% black.
+  assert.deepEqual([...sh.rgba.subarray((5 * 12 + 1) * 4, (5 * 12 + 1) * 4 + 4)], [0, 0, 0, 102]);
+  assert.deepEqual([...sh.rgba.subarray((5 * 12 + 6) * 4, (5 * 12 + 6) * 4 + 4)], [200, 30, 30, 255]);
+  const zero = await run(["toolbox", "image", "shadow", file, "--offset", "0,0"]);
+  assert.equal(zero.code, EXIT.USAGE);
 });
 
 function joinTwo(img) {

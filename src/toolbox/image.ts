@@ -31,6 +31,7 @@ import { unfake, type ReduceMethod } from "./unfake.js";
 import { PaletteMap, quantizeFrames } from "./quantize.js";
 import { coloursOf, hexOf, loadPalette, PALETTE_EXTENSIONS, PaletteError, savePalette } from "./palette.js";
 import { applyKey, borderColour, keyMask } from "./key.js";
+import { dropShadow, margins, outline, type Shape } from "./effects.js";
 
 // Every image tool runs the same way: one image, or every frame of a sheet
 // whose grid is known (its Ludo stamp, or --grid) with the same numbers, then
@@ -514,6 +515,96 @@ TOOLS.push({
           ...trimJson(src.trim)
         },
         says: swap ? `Swapped ${swap.from.length} colours: ${changed} pixels changed` : `${before} colours to ${after.length}`
+      };
+    });
+  }
+});
+
+// Room around every frame for an effect that reaches `need` pixels past
+// the content on each side: only what is missing is added, the same to all
+// frames.
+function roomFor(frames: Image[], need: Sides): Sides {
+  const m = margins(frames);
+  const short = (n: number, have: number) => Math.max(0, n - (Number.isFinite(have) ? have : n));
+  return { top: short(need.top, m.top), right: short(need.right, m.right), bottom: short(need.bottom, m.bottom), left: short(need.left, m.left) };
+}
+
+const anyRoom = (s: Sides) => s.top + s.right + s.bottom + s.left > 0;
+
+const SHAPES = ["circle", "square", "diamond"] as const;
+
+TOOLS.push({
+  group: "image",
+  name: "outline",
+  args: "<image>",
+  summary: "Draw an outline around the art",
+  details: [
+    "Every pixel within --width of the art (by --shape: circle, square or diamond, as ImageMagick's",
+    "Disk, Square and Diamond kernels) gets the outline colour, under the art; soft edges keep their",
+    "softness. A 1 px circle is the classic pixel-art outline (no corners); square fills them. The",
+    "canvas grows only where the outline would run off it, every frame of a sheet alike."
+  ],
+  flags: [
+    { flag: "--color", value: "hex", description: "Outline colour (default #000000; #rrggbbaa for see-through)" },
+    { flag: "--width", value: "px", description: "Thickness, 1 to 32 (default 1)" },
+    { flag: "--shape", value: "name", description: "circle (default), square or diamond" },
+    ...SHARED
+  ],
+  async run(ctx, call) {
+    const colour = hexColour(textFlag(call, "--color") ?? "#000000", "--color");
+    const n = call.flags.has("--width") ? positiveInt(call, "--width")! : 1;
+    if (n > 32) throw usageError("--width takes 1 to 32");
+    const shape = (textFlag(call, "--shape") ?? "circle").toLowerCase() as Shape;
+    if (!(SHAPES as readonly string[]).includes(shape)) throw usageError(`--shape takes ${SHAPES.join(", ")} (got "${shape}")`);
+    return runEdit(ctx, call, "ludo toolbox image outline <image> [--width 1] [--color #000000]", (frames, src) => {
+      const room = roomFor(frames, { top: n, right: n, bottom: n, left: n });
+      const grown = anyRoom(room) ? frames.map(f => pad(f, room)) : frames;
+      const trim = anyRoom(room) ? trimPadded(src.trim, room) : src.trim;
+      return {
+        frames: grown.map(f => outline(f, colour, n, shape)),
+        trim,
+        facts: { color: hex(colour), outline_width: n, shape, ...(anyRoom(room) ? { grown: room } : {}), ...trimJson(trim) },
+        says: `Outlined ${n} px ${shape} in ${hex(colour)}${anyRoom(room) ? `, the canvas grown to ${grown[0].width}x${grown[0].height} to fit it` : ""}`
+      };
+    });
+  }
+});
+
+TOOLS.push({
+  group: "image",
+  name: "shadow",
+  args: "<image>",
+  summary: "Put a drop shadow under the art",
+  details: [
+    "The art's own shape, moved by --offset (right and down are positive), in --color at --opacity,",
+    "under the art. The canvas grows only where the shadow would run off it, every frame alike."
+  ],
+  flags: [
+    { flag: "--offset", value: "x,y", description: "How far the shadow falls, in pixels (default 2,2)" },
+    { flag: "--color", value: "hex", description: "Shadow colour (default #000000)" },
+    { flag: "--opacity", value: "percent", description: "0 to 100 (default 50)" },
+    ...SHARED
+  ],
+  async run(ctx, call) {
+    const rawOffset = textFlag(call, "--offset") ?? "2,2";
+    const m = /^\s*(-?\d+)\s*,\s*(-?\d+)\s*$/.exec(rawOffset);
+    if (!m) throw usageError(`--offset takes x,y in pixels, like 2,2 or -3,4 (got "${rawOffset}")`);
+    const [dx, dy] = [Number(m[1]), Number(m[2])];
+    if (Math.abs(dx) > 256 || Math.abs(dy) > 256 || (!dx && !dy)) throw usageError("--offset takes -256 to 256 on each axis, not 0,0");
+    const rawOpacity = textFlag(call, "--opacity");
+    const opacity = rawOpacity === undefined ? 50 : Number(rawOpacity.replace(/%$/, ""));
+    if (!(opacity > 0 && opacity <= 100)) throw usageError(`--opacity takes 1 to 100 (got "${rawOpacity}")`);
+    const base = hexColour(textFlag(call, "--color") ?? "#000000", "--color");
+    const colour: [number, number, number, number] = [base[0], base[1], base[2], Math.round((base[3] * opacity) / 100)];
+    return runEdit(ctx, call, "ludo toolbox image shadow <image> [--offset 2,2]", (frames, src) => {
+      const room = roomFor(frames, { top: Math.max(0, -dy), right: Math.max(0, dx), bottom: Math.max(0, dy), left: Math.max(0, -dx) });
+      const grown = anyRoom(room) ? frames.map(f => pad(f, room)) : frames;
+      const trim = anyRoom(room) ? trimPadded(src.trim, room) : src.trim;
+      return {
+        frames: grown.map(f => dropShadow(f, dx, dy, colour)),
+        trim,
+        facts: { offset: [dx, dy], color: hex(base), opacity, ...(anyRoom(room) ? { grown: room } : {}), ...trimJson(trim) },
+        says: `Shadow at ${dx},${dy} in ${hex(base)} at ${opacity}%${anyRoom(room) ? `, the canvas grown to ${grown[0].width}x${grown[0].height} to fit it` : ""}`
       };
     });
   }
