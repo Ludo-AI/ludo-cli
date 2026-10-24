@@ -409,8 +409,8 @@ async function engineExport(ctx: Ctx, sheet: string | undefined, grid: ReturnTyp
   try {
     const img = loadImage(sheet);
     if (!img) throw new Error("could not read the spritesheet");
-    const file = writeEngineFile(engine, sheet, img.width, img.height, { cols: grid.cols, rows: grid.rows, frames: grid.frames, fps: grid.fps });
-    return [{ url: `(${ENGINE_FILE[engine]})`, path: file }];
+    const files = writeEngineFile(engine, sheet, img.width, img.height, { cols: grid.cols, rows: grid.rows, frames: grid.frames, fps: grid.fps });
+    return files.map(file => ({ url: `(${ENGINE_FILE[engine]})`, path: file }));
   } catch (err) {
     ctx.log(`--engine ${engine}: ${(err as Error).message}`);
     return [];

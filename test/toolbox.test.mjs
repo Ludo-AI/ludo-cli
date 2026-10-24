@@ -879,7 +879,7 @@ test("a TexturePacker atlas has frames keyed in playing order, animations and fr
 test("sprite export writes the engine file next to the sheet, and other sheet tools take --engine", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-export-"));
   const file = writeSheet(dir, "run.png", makeSheet({ cols: 3, rows: 2, frames: 5 }), { cols: 3, rows: 2, frames: 5, fps: 12 });
-  assert.match((await run(["toolbox", "sprite", "export", file])).stderr, /Pass --engine texturepacker or --engine godot/);
+  assert.match((await run(["toolbox", "sprite", "export", file])).stderr, /Pass --engine texturepacker, godot or unity/);
 
   const tp = await run(["toolbox", "sprite", "export", file, "--engine", "texturepacker"]);
   assert.equal(tp.code, EXIT.OK, tp.stderr);

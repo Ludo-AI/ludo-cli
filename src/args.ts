@@ -22,7 +22,7 @@ export const GLOBAL_FLAGS: Record<string, { value: boolean; description: string 
   "--copy": { value: false, description: "Copy the saved file paths to the clipboard when done" },
   "--engine": {
     value: true,
-    description: "Also write engine files next to spritesheets: godot (a Godot 4 SpriteFrames .tres) or texturepacker (a TexturePacker JSON atlas for PixiJS and Phaser)"
+    description: "Also write engine files next to spritesheets: godot (a Godot 4 SpriteFrames .tres), texturepacker (a TexturePacker JSON atlas for PixiJS and Phaser) or unity (the sheet's .png.meta, sliced into sprites, and an .anim clip)"
   },
   "--name": { value: true, description: "Name the saved files: --name sfx_pump saves sfx_pump.mp3 (never overwrites; -v1..-vN with --n)" },
   "--n": { value: true, description: "Make N variations of the same request and pick the best (runs N jobs, or one when the API takes n)" },

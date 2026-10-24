@@ -12,7 +12,7 @@ import { ENGINES, type Engine } from "./tty/engines.js";
 //
 //   {
 //     "out": "assets/generated",            where files are saved
-//     "engine": "godot",                    as --engine (godot or texturepacker)
+//     "engine": "godot",                    as --engine (godot, texturepacker or unity)
 //     "max_credits": 200,                   session budget (see budget.ts)
 //     "style_image": "art/style.png",       for operations with a style_image field
 //     "defaults": {                         per command ("group command" or API id)

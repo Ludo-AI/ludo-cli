@@ -622,9 +622,9 @@ test("a spritesheet is saved with its grid inside, and machine output stays plai
 });
 
 test("--engine rejects engines it does not support", async () => {
-  const { code, stderr } = await run(["sprite", "animate", "--initial-image", "x", "--motion-prompt", "y", "--engine", "unity"]);
+  const { code, stderr } = await run(["sprite", "animate", "--initial-image", "x", "--motion-prompt", "y", "--engine", "gamemaker"]);
   assert.equal(code, 2);
-  assert.match(stderr, /--engine supports: godot/);
+  assert.match(stderr, /--engine supports: godot, texturepacker, unity/);
 });
 
 test("preview refuses to draw for a non-terminal", async () => {

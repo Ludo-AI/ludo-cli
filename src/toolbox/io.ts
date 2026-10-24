@@ -109,7 +109,7 @@ export function engineFiles(ctx: Ctx, sheet: string, image: { width: number; hei
   const engine = ctx.globals.engine;
   if (!engine) return [];
   try {
-    return [writeEngineFile(engine, sheet, image.width, image.height, grid, layout, animation)];
+    return writeEngineFile(engine, sheet, image.width, image.height, grid, layout, animation);
   } catch (err) {
     throw new CliError(`Could not write the ${ENGINE_FILE[engine]} for ${shown(sheet)}: ${(err as Error).message}`, EXIT.BAD_INPUT);
   }

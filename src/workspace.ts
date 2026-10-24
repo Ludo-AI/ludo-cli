@@ -84,10 +84,14 @@ export async function init(ctx: Ctx, parsed: Parsed): Promise<number> {
   if (fs.existsSync(configPath) && !ctx.globals.force) {
     note(configPath, "kept (pass --force to overwrite)");
   } else {
-    const config: Record<string, unknown> = { out: "assets/ludo", defaults: {} };
+    // A Unity project only imports what is under Assets/.
+    const unity = fs.existsSync(path.join(root, "ProjectSettings", "ProjectVersion.txt")) && fs.existsSync(path.join(root, "Assets"));
+    const config: Record<string, unknown> = { out: unity ? "Assets/Ludo" : "assets/ludo", defaults: {} };
     // A Godot project gets SpriteFrames next to every spritesheet; a Phaser or
-    // PixiJS one, a TexturePacker JSON atlas.
+    // PixiJS one, a TexturePacker JSON atlas; a Unity one, sliced sprites and
+    // a clip.
     if (fs.existsSync(path.join(root, "project.godot"))) config.engine = "godot";
+    else if (unity) config.engine = "unity";
     else if (usesAtlasEngine(root)) config.engine = "texturepacker";
     note(configPath, writeIfChanged(configPath, JSON.stringify(config, null, 2) + "\n"));
   }

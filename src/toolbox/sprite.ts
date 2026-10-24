@@ -394,12 +394,15 @@ TOOLS.push({
   group: "sprite",
   name: "export",
   args: "<sheet>",
-  summary: "Write engine files for a spritesheet: a TexturePacker JSON atlas or Godot SpriteFrames",
+  summary: "Write engine files for a spritesheet: a TexturePacker JSON atlas, Godot SpriteFrames or Unity sprites",
   details: [
-    "The file goes next to the sheet, which it refers to by name: keep the two side by side.",
+    "The files go next to the sheet, which they refer to by name: keep them side by side.",
     "  --engine texturepacker  a JSON atlas (TexturePacker's JSON Hash) for PixiJS (Assets.load,",
     "                          sheet.animations) and Phaser (load.atlas, anims.createFromAseprite)",
     "  --engine godot          a Godot 4 SpriteFrames .tres for an AnimatedSprite2D",
+    "  --engine unity          the sheet's .png.meta, which imports it sliced into one sprite per frame,",
+    "                          and an .anim clip that plays them on a SpriteRenderer (in a Unity project,",
+    "                          export a sheet under Assets/; an existing .meta keeps its guid)",
     "Frames are keyed 0, 1, 2... in playing order. A sheet trimmed or extruded by `ludo toolbox image`",
     "exports each frame's original size and offset, and keeps the repeated border out of the frames.",
     "Any toolbox tool that writes a sheet also takes --engine."
@@ -410,8 +413,8 @@ TOOLS.push({
     { flag: "--grid", value: "CxR", description: "The sheet's grid, when it has no Ludo stamp and detection is unsure" }
   ],
   async run(ctx: Ctx, call: ToolCall) {
-    if (call.args.length !== 1) throw new CliError("Usage: ludo toolbox sprite export <sheet> --engine texturepacker|godot", EXIT.USAGE);
-    if (!ctx.globals.engine) throw new CliError("Pass --engine texturepacker or --engine godot", EXIT.USAGE);
+    if (call.args.length !== 1) throw new CliError("Usage: ludo toolbox sprite export <sheet> --engine texturepacker|godot|unity", EXIT.USAGE);
+    if (!ctx.globals.engine) throw new CliError("Pass --engine texturepacker, godot or unity", EXIT.USAGE);
     const src = loadImageFile(call.args[0]);
     if (!/\.png$/i.test(src.file)) throw new CliError("Engine files point at a PNG: convert the sheet to PNG first", EXIT.USAGE);
     const { grid, from } = sheetGrid(src, call);
