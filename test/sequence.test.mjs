@@ -9,7 +9,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { alignGround, alignSprites, groundAlignment } from "../dist/toolbox/align.js";
+import { alignSprites, groundAlignment } from "../dist/toolbox/align.js";
 import { buildSequence } from "../dist/toolbox/sequence.js";
 import { cropBounds, nextSequenceSlot, paddedFrameLayout, sequenceCanvasBounds, sequenceGrid } from "../dist/toolbox/sequenceMath.js";
 import { resizeNearest, resizeSmooth } from "../dist/toolbox/resample.js";
@@ -19,7 +19,6 @@ import { encodePng, readPng, readText } from "../dist/tty/png.js";
 const CLI = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "ludo-sequence-test-"));
 const sha = buf => crypto.createHash("sha256").update(buf).digest("hex");
-const same = (a, b) => a.width === b.width && a.height === b.height && Buffer.compare(Buffer.from(a.rgba), Buffer.from(b.rgba)) === 0;
 
 // A character with some texture to match on: an egg-shaped body and a head,
 // shaded and patterned, on transparency.
@@ -57,8 +56,7 @@ function contentBox(img) {
   return { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
 }
 
-// Walking right, 5 px a frame, in 160x200 frames (over the aligner's 128 px,
-// so it downsamples and refines).
+// Walking right, 5 px a frame, in 160x200 frames.
 const walk = Array.from({ length: 4 }, (_, k) => frame(160, 200, HERO, 20 + 5 * k, 60));
 // The same character in a bigger frame, starting somewhere else.
 const jump = Array.from({ length: 5 }, (_, k) => frame(180, 220, HERO, 50 + 2 * k, 40 - 6 * k));
@@ -67,53 +65,61 @@ const SMALL = resizeSmooth(HERO, 48, 72);
 const small = Array.from({ length: 3 }, (_, k) => frame(140, 170, SMALL, 30 + 4 * k, 30));
 
 // ---- The aligner ----
+// It is the ML service's, checked against it in test/align.test.mjs; these
+// are cases with known answers.
 
 test("a shifted copy aligns by that shift, at scale 1", () => {
   const a = walk[3]; // the character at (35, 60)
   for (const [x, y] of [[35, 60], [50, 40], [0, 100], [90, 10]]) {
-    const b = frame(180, 220, HERO, x, y);
-    const r = alignSprites(a, b);
+    const r = alignSprites(a, frame(160, 200, HERO, x, y));
     assert.deepEqual([r.dx, r.dy, r.scale, r.method], [35 - x, 60 - y, 1, "ncc"], `character at ${x},${y}`);
     assert.ok(r.confidence > 0.999, `confidence ${r.confidence}`);
   }
-  // Small frames are matched as they are, without downsampling.
   const r = alignSprites(frame(100, 120, HERO, 10, 20), frame(100, 120, HERO, 30, 5));
   assert.deepEqual([r.dx, r.dy, r.scale], [-20, 15, 1]);
 });
 
-test("a smaller copy aligns at the scale that matches it", () => {
+test("a smaller copy aligns at about the scale that matches it", () => {
   const r = alignSprites(walk[3], small[0]);
   assert.equal(r.method, "ncc");
-  assert.ok(Math.abs(r.scale - 1.25) < 0.01, `scale ${r.scale}`);
+  assert.ok(Math.abs(r.scale / 1.25 - 1) < 0.02, `scale ${r.scale}`);
   // Its top-left lands where the big one's is, give or take resampling.
-  assert.ok(Math.abs(r.dx - (35 - 30 * 1.25)) <= 1 && Math.abs(r.dy - (60 - 30 * 1.25)) <= 1, `dx ${r.dx}, dy ${r.dy}`);
+  assert.ok(Math.abs(r.dx - (35 - 30 * 1.25)) <= 1.5 && Math.abs(r.dy - (60 - 30 * 1.25)) <= 1.5, `dx ${r.dx}, dy ${r.dy}`);
+  // Frames of different sizes are first brought to one size, as the ML does;
+  // the same character then comes out within about 1% of its size.
+  const j = alignSprites(walk[3], jump[0]);
+  assert.ok(Math.abs(j.scale - 1) < 0.015 && Math.abs(j.dx + 15) <= 1 && Math.abs(j.dy - 20) <= 1, JSON.stringify(j));
 });
 
-test("a poor match falls back to lining up the feet and the centres", () => {
-  // Forced: no match is good enough.
-  const r = alignSprites(walk[3], small[0], { confidenceThreshold: 1.01 });
-  assert.equal(r.method, "ground");
-  assert.ok(r.confidence > 0.9, "the score measured is kept");
-  assert.equal(r.scale, contentBox(walk[3]).h / contentBox(small[0]).h, "the content-height ratio");
-  assert.deepEqual({ dx: r.dx, dy: r.dy }, alignGround(walk[3], small[0], r.scale));
-  // Nothing to match on: an empty frame scores 0.
+test("frames that do not match: feet and centres lined up, or left where they are", () => {
+  // A low, wide slab of noise has little in common with the character.
+  const slab = { width: 160, height: 200, rgba: new Uint8Array(160 * 200 * 4) };
+  let s = 9;
+  for (let y = 130; y < 150; y++) {
+    for (let x = 20; x < 140; x++) {
+      s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+      slab.rgba.set([s >>> 24, (s >>> 16) & 255, (s >>> 8) & 255, 255], (y * 160 + x) * 4);
+    }
+  }
+  const r = alignSprites(walk[3], slab);
+  assert.deepEqual([r.method, r.confidence, r.dy, r.scale], ["ground", 0, 0, 1], "bottoms meet; heights over 3x apart keep the scale");
+  // Nothing to match on, or too far to line up: no move.
   const blank = { width: 160, height: 200, rgba: new Uint8Array(160 * 200 * 4) };
-  const e = alignSprites(walk[3], blank);
-  assert.deepEqual([e.method, e.confidence], ["ground", 0]);
+  assert.deepEqual(alignSprites(walk[3], blank), { dx: 0, dy: 0, scale: 1, confidence: 0, method: "none" });
+  assert.equal(alignSprites(walk[3], frame(400, 400, HERO, 300, 10)).method, "none");
 });
 
-test("ground alignment lines up bottom edges and centres of mass, at B's scale", () => {
+test("ground alignment lines up bottom edges and centres of mass", () => {
   const b = frame(180, 220, HERO, 50, 40);
-  assert.deepEqual(alignGround(walk[3], b), { dx: -15, dy: 20 });
-  // B at 2x by nearest neighbour: its edges and centre scale exactly.
-  const b2 = resizeNearest(b, 360, 440);
-  const { dx, dy } = alignGround(walk[3], b, 2);
-  const [ba, bb] = [contentBox(walk[3]), contentBox(b2)];
-  assert.equal(bb.y + bb.h + dy, ba.y + ba.h, "bottoms meet");
-  assert.ok(Math.abs(bb.x + bb.w / 2 + dx - (ba.x + ba.w / 2)) <= 1, "centres meet");
   const g = groundAlignment(walk[3], b);
-  assert.deepEqual([g.dx, g.dy, g.scale, g.method], [-15, 20, 1, "ground"]);
+  assert.equal(g.method, "ground");
   assert.ok(Number.isNaN(g.confidence));
+  // B at its scale and place: the bottoms and centres meet.
+  const placed = frame(400, 400, resizeSmooth(b, Math.round(b.width * g.scale), Math.round(b.height * g.scale)), 100 + g.dx, 100 + g.dy);
+  const [ba, bb] = [contentBox(frame(400, 400, walk[3], 100, 100)), contentBox(placed)];
+  assert.ok(Math.abs(bb.y + bb.h - (ba.y + ba.h)) <= 1, "bottoms meet");
+  assert.ok(Math.abs(bb.x + bb.w / 2 - (ba.x + ba.w / 2)) <= 1, "centres meet");
+  assert.ok(Math.abs(g.scale - 1) < 0.01, `same height, scale ${g.scale}`);
 });
 
 // ---- The sequence ----
@@ -125,12 +131,11 @@ test("the sequence is chained, cropped and laid out by the web's math", () => {
   const raw = [jump[0], small[0]];
   seq.transitions.forEach((t, i) => slots.push(nextSequenceSlot(slots[i], t, raw[i].width, raw[i].height)));
   assert.deepEqual(seq.slots, slots);
-  assert.deepEqual(seq.transitions.slice(0, 1).map(t => [t.dx, t.dy, t.scale]), [[-15, 20, 1]]);
   const { canvasW, canvasH, shiftX, shiftY } = sequenceCanvasBounds(slots);
   // Every frame's content, on the canvas.
   const boxes = [walk, jump, small].flatMap((frames, i) =>
     frames.map(f => {
-      const scaled = i === 2 ? resizeNearest(f, slots[2].w, slots[2].h) : f;
+      const scaled = f.width === slots[i].w && f.height === slots[i].h ? f : resizeNearest(f, slots[i].w, slots[i].h);
       const b = contentBox(scaled);
       return { minX: b.x + slots[i].x + shiftX, minY: b.y + slots[i].y + shiftY, maxX: b.x + b.w - 1 + slots[i].x + shiftX, maxY: b.y + b.h - 1 + slots[i].y + shiftY };
     })
@@ -140,10 +145,11 @@ test("the sequence is chained, cropped and laid out by the web's math", () => {
   assert.deepEqual([seq.layout.frameW, seq.layout.frameH], [crop.cropW, crop.cropH]);
 
   // The transitions don't jump: the last frame of one and the first of the
-  // next are the same picture in the same place.
-  assert.ok(same(seq.frames[0][3], seq.frames[1][0]), "walk -> jump");
-  const [a, b] = [contentBox(seq.frames[1][4]), contentBox(seq.frames[2][0])];
-  assert.ok(Math.abs(a.x - b.x) <= 1 && Math.abs(a.y - b.y) <= 1 && Math.abs(a.h - b.h) <= 1, `jump -> small: ${JSON.stringify([a, b])}`);
+  // next are the same picture in about the same place and size.
+  for (const [p, q, name] of [[seq.frames[0][3], seq.frames[1][0], "walk -> jump"], [seq.frames[1][4], seq.frames[2][0], "jump -> small"]]) {
+    const [a, b] = [contentBox(p), contentBox(q)];
+    assert.ok(Math.abs(a.x - b.x) <= 1 && Math.abs(a.y - b.y) <= 1 && Math.abs(a.h - b.h) <= 2, `${name}: ${JSON.stringify([a, b])}`);
+  }
   // Every frame keeps its own motion: the walk moves 5 px a frame.
   assert.deepEqual(
     seq.frames[0].map(f => contentBox(f).x),
@@ -156,7 +162,7 @@ test("--align none and ground, and saved transitions", () => {
   assert.deepEqual(none.transitions.map(t => [t.dx, t.dy, t.scale, t.method]), [[0, 0, 1, "none"]]);
   assert.deepEqual(none.slots[1], { x: 0, y: 0, w: 180, h: 220 });
   const ground = buildSequence([walk, jump], { art: "pixel", align: "ground" });
-  assert.deepEqual(ground.transitions.map(t => [t.dx, t.dy, t.scale, t.method]), [[-15, 20, 1, "ground"]]);
+  assert.deepEqual(ground.transitions.map(t => [t.dx, t.dy, t.method]), [[-15, 20, "ground"]]);
   // A given transition is used as it is.
   const fixed = buildSequence([walk, jump], { art: "pixel", align: "auto", transitions: [{ dx: 7, dy: -3, scale: 1, confidence: Number.NaN, method: "ncc" }] });
   assert.deepEqual(fixed.slots[1], { x: 7, y: -3, w: 180, h: 220 });
@@ -206,8 +212,8 @@ test("golden output: the same sequence gives the same pixels", () => {
     for (const f of seq.frames.flat()) h.update(f.rgba);
     return h.digest("hex");
   };
-  assert.equal(digest("pixel"), "0a4ecdc56e062b007abde09165f33099f09ecdd5522fc372e90b8775b02a3c83");
-  assert.equal(digest("smooth"), "8e03ad6c2a9c86ccdc48a022a120724a62bcda9f1500e513c9b5b1f1d6162010");
+  assert.equal(digest("pixel"), "8087689db888b256ba410887d886105c71f48df4c48b2d2642cc5969f2b10a1b");
+  assert.equal(digest("smooth"), "f1e5f159e74749d913ddd5daa746c8cbd802292ec9e2480782fb87d46e87a596");
 });
 
 // ---- The command ----
@@ -253,11 +259,11 @@ test("toolbox sprite sequence: one sheet, engine files and a manifest that re-ru
   assert.deepEqual(
     j.transitions.map(t => [t.from, t.to, t.dx, t.dy, t.scale, t.method]),
     [
-      ["walk", "jump", -15, 20, 1, "ncc"],
-      ["jump", "walk-1", 38, -44, 1, "ncc"]
+      ["walk", "jump", -15, 21, 0.9897, "ncc"],
+      ["jump", "walk-1", 37, -45, 1.0009, "ncc"]
     ]
   );
-  assert.ok(j.transitions.every(t => t.confidence > 0.99));
+  assert.ok(j.transitions.every(t => t.confidence > 0.98));
   assert.deepEqual(filesUnder(path.join(dir, j.sequence)), ["hero-moves.json", "hero-moves.png", "sequence.json"]);
   const buf = fs.readFileSync(path.join(dir, j.sheet));
   const { image } = readPng(buf);
@@ -265,9 +271,11 @@ test("toolbox sprite sequence: one sheet, engine files and a manifest that re-ru
   assert.deepEqual(JSON.parse(readText(buf)["ludo:grid"]), { cols: j.grid.cols, rows: j.grid.rows, frames: 13, fps: 12 });
   const atlas = JSON.parse(fs.readFileSync(path.join(dir, j.engine_files[0]), "utf8"));
   assert.deepEqual(Object.keys(atlas.animations), ["hero-moves"]);
-  // The sheet's frames are the sequence's: walk's last is jump's first.
+  // The sheet's frames are the sequence's: walk's last is jump's first, in
+  // the same place (the jump drawn about 1% smaller, as the ML matches it).
   const frames = sliceSheet(image, j.grid.cols, j.grid.rows, 13);
-  assert.ok(same(frames[3], frames[4]));
+  const [last, first] = [contentBox(frames[3]), contentBox(frames[4])];
+  assert.ok(Math.abs(last.x - first.x) <= 1 && Math.abs(last.y - first.y) <= 1 && Math.abs(last.h - first.h) <= 2, JSON.stringify([last, first]));
 
   // The manifest re-runs it to the same bytes, without aligning again.
   const again = cli(["toolbox", "sprite", "sequence", "--manifest", j.manifest, "--engine", "texturepacker", "--out", "out", "--json"], dir);

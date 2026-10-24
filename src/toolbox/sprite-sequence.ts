@@ -67,9 +67,9 @@ TOOLS.push({
     "The Ludo web app's Export Sequence, offline. Each input is a spritesheet (or a folder of frames) of",
     "one animation, in the order they play; give one twice to play it twice. Each animation is placed so",
     "its first frame continues from the last frame of the one before: --align auto finds the offset and",
-    "scale that best match the two frames (image matching, NCC), or lines up their feet and centres when",
-    "the match is poor; ground always does the latter; none puts every animation at the same spot. The",
-    "output gives each transition's offset and confidence.",
+    "scale that best match the two frames, as the web app does (Ludo's image matching, run here), or",
+    "lines up their feet and centres when they don't match; ground always does the latter; none puts",
+    "every animation at the same spot. The output gives each transition's offset and match score.",
     "",
     "All frames are then cropped to the box around everything that moves. --frame-size sets the output",
     "frame (grown if the content is bigger), --size the content's height in pixels, --vertical its",
@@ -143,9 +143,12 @@ TOOLS.push({
 
     const labels = uniquifyNames(names.map(n => n[n.length - 1]));
     seq.transitions.forEach((t, i) => {
-      if (!kept && align === "auto" && t.method === "ground") {
-        warnings.push(`${labels[i]} -> ${labels[i + 1]}: the frames did not match well (confidence ${confidence(t)}), so their feet and centres were lined up instead; check it, or set it in the manifest`);
-      }
+      if (kept || align !== "auto" || t.method === "ncc") return;
+      warnings.push(
+        t.method === "ground"
+          ? `${labels[i]} -> ${labels[i + 1]}: the frames did not match, so their feet and centres were lined up instead; check it, or set it in the manifest`
+          : `${labels[i]} -> ${labels[i + 1]}: the frames did not match and their feet could not be lined up either (too far apart or too different in size), so it was left where it is; set it in the manifest`
+      );
     });
     if (mode !== "separate" && new Set(fps).size > 1) warnings.push(`The animations have different frame rates (${fps.join(", ")}); the ${mode === "single" ? "sheet" : "sequence"} uses ${fps[0]}`);
 
