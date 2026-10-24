@@ -4,7 +4,7 @@ import { MAX_TOOLBOX_PIXELS, type Image } from "../tty/png.js";
 import type { Grid } from "../tty/preview.js";
 import { countFrames } from "./grid.js";
 import { baseOf, carriedChunks, engineFiles, freeName, loadImageFile, shown, writePng, type Loaded } from "./io.js";
-import { crop, joinFrames, sliceSheet } from "./sheet.js";
+import { crop, frameRects, joinFrames, sliceSheet } from "./sheet.js";
 import { gridFlag, hexColour, positiveInt, textFlag } from "./flags.js";
 import {
   contentBox,
@@ -26,6 +26,8 @@ import {
 } from "./pixels.js";
 import { hint, TOOLS, type ToolCall, type ToolFlag } from "./registry.js";
 import { resizeNearest, resizePillow } from "./resample.js";
+import { unfake, type ReduceMethod } from "./unfake.js";
+import { quantizeFrames } from "./quantize.js";
 
 // Every image tool runs the same way: one image, or every frame of a sheet
 // whose grid is known (its Ludo stamp, or --grid) with the same numbers, then
@@ -321,6 +323,105 @@ TOOLS.push({
         trim,
         facts: { scale: f, filter, ...trimJson(trim) },
         says: `Scaled ${width}x${height} by ${label} to ${w}x${h}${filter === "nearest" ? "" : ` (${filter})`}`
+      };
+    });
+  }
+});
+
+const METHODS = ["dominant", "median", "mode", "mean", "nearest"] as const;
+
+TOOLS.push({
+  group: "image",
+  name: "snap",
+  args: "<image>",
+  summary: "Put AI pixel art back on its own grid: one pixel per art pixel",
+  details: [
+    "Image models draw \"pixel art\" big (a 128 px sprite at 6x), soft at the edges, often off any whole",
+    "grid (200 cells resampled to 2048 px is 10.24 px a cell), or with cells that wander by a few pixels.",
+    "This finds the art pixel's size and phase and gives each cell one colour, its most common one.",
+    "An exact upscale (98% of colour edges on one grid) comes back losslessly; anything else goes",
+    "through the detectors of unfake.js (MIT): tiled edge periods, fractional grids and",
+    "cells fitted to hand-drawn edges. The JSON says how much of the image the result explains (fit);",
+    "art already at one pixel per pixel can still look periodic, so check a low fit, or pass --scale.",
+    "On a sheet the grid is found once for the whole sheet and every frame is cut the same way."
+  ],
+  flags: [
+    { flag: "--scale", value: "N", description: "The art pixel's size, when you know it (may be fractional: 10.24); found otherwise" },
+    { flag: "--method", value: "name", description: "How a cell becomes a pixel: dominant (default), median, mode, mean or nearest" },
+    { flag: "--colors", value: "N", description: "At most N colours in the result (default: keep them all)" },
+    { flag: "--keep-size", description: "Draw the result back at its whole-pixel scale: about the same size, on a clean grid" },
+    ...SHARED
+  ],
+  async run(ctx, call) {
+    const rawScale = textFlag(call, "--scale");
+    const scale = rawScale === undefined ? undefined : Number(rawScale);
+    if (scale !== undefined && !(scale >= 1 && scale <= 256)) throw usageError(`--scale takes a pixel size from 1 to 256 (got "${rawScale}")`);
+    const method = (textFlag(call, "--method") ?? "dominant").toLowerCase() as ReduceMethod;
+    if (!(METHODS as readonly string[]).includes(method)) throw usageError(`--method takes ${METHODS.join(", ")} (got "${method}")`);
+    const colours = call.flags.has("--colors") ? positiveInt(call, "--colors") : undefined;
+    if (colours !== undefined && (colours < 2 || colours > 4096)) throw usageError("--colors takes 2 to 4096");
+    return runEdit(ctx, call, "ludo toolbox image snap <image> [--scale N]", (frames, src) => {
+      const grid = gridOf(src, call);
+      // The whole sheet (or the image) decides the grid: more edges to go on.
+      const whole = unfake(src.image, { method, ...(scale ? { scale } : {}) });
+      if (whole.scale <= 1) {
+        throw new CliError(
+          `${src.file} has no pixel grid to snap to: it looks like one pixel per pixel already`,
+          EXIT.BAD_INPUT,
+          "If its pixels are a known size, pass it with --scale."
+        );
+      }
+      let out: Image[];
+      if (!grid) out = [whole.image];
+      else {
+        // Every frame cut on the sheet's own grid: a whole scale keeps the
+        // sheet's phase, so frames do not jump a cell against each other.
+        const rects = frameRects(src.image.width, src.image.height, grid.cols, grid.rows, grid.frames);
+        const s = whole.scale;
+        const phase = Number.isInteger(s) && whole.crop ? whole.crop : undefined;
+        const each = frames.map((f, i) =>
+          unfake(f, {
+            method,
+            scale: s,
+            ...(phase ? { phase: { x: (((phase.x - rects[i].x) % s) + s) % s, y: (((phase.y - rects[i].y) % s) + s) % s } } : {})
+          }).image
+        );
+        const w = Math.max(...each.map(f => f.width));
+        const h = Math.max(...each.map(f => f.height));
+        out = each.map(f => (f.width === w && f.height === h ? f : pad(f, { top: 0, left: 0, right: w - f.width, bottom: h - f.height })));
+      }
+      let reduced: number | undefined;
+      if (colours) {
+        const q = quantizeFrames(out, colours);
+        if (q.frames !== out) reduced = q.before;
+        out = q.frames;
+      }
+      const k = Math.max(1, Math.round(whole.scale));
+      if (call.flags.has("--keep-size") && k > 1) out = out.map(f => scaleUp(f, k));
+      const shown2 = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
+      const fit = Math.round(whole.fit * 1000) / 1000;
+      const warning =
+        !scale && !whole.exact && whole.fit < 0.7
+          ? `The result explains only ${Math.round(whole.fit * 100)}% of the image: it may already be one pixel per pixel, or its pixels another size. Check it, or pass --scale.`
+          : undefined;
+      return {
+        frames: out,
+        facts: {
+          pixel_size: Math.round(whole.scale * 10000) / 10000,
+          exact: !!whole.exact,
+          fit,
+          ...(whole.grid ? { fractional_grid: { period: whole.grid.period.map(v => Math.round(v * 10000) / 10000), cells: whole.grid.cells } } : {}),
+          ...(whole.elastic ? { fitted_to_edges: { x: whole.elastic[0], y: whole.elastic[1] } } : {}),
+          ...(reduced !== undefined ? { colors: { before: reduced, after: colours } } : {}),
+          ...(call.flags.has("--keep-size") ? { drawn_at: k } : {}),
+          ...(src.trim ? { trim_dropped: true } : {}),
+          ...(warning ? { warning } : {})
+        },
+        says:
+          `Snapped ${frames[0].width}x${frames[0].height} to ${out[0].width}x${out[0].height}: art pixels of ${shown2(whole.scale)} px` +
+          (whole.exact ? " (an exact upscale: nothing lost)" : `, explaining ${Math.round(whole.fit * 100)}% of it`) +
+          (reduced !== undefined ? `, ${reduced} colours to ${colours}` : "") +
+          (warning ? `\nWarning: ${warning}` : "")
       };
     });
   }
