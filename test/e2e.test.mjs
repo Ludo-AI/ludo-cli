@@ -200,6 +200,12 @@ before(async () => {
       return json(res, 202, { id: "job-12345678", status: "queued", task_type: "removeBackground", poll_after_ms: 10 });
     }
     if (req.method === "POST" && url.pathname === "/api/assets/image") {
+      // "variations" in the prompt: one finished job holding one image per n.
+      const body = JSON.parse(raw);
+      if (body.prompt === "variations") {
+        const result = Array.from({ length: body.n || 1 }, (_, i) => ({ url: `${base}/files/out.png?i=${i}` }));
+        return json(res, 200, { id: `job-imgs${body.n}000`, status: "succeeded", task_type: "createImage", credits_charged: body.n, result });
+      }
       return json(res, 402, { message: "Error: Not enough credits" });
     }
     if (req.method === "GET" && url.pathname === "/api/assets/jobs/job-12345678") {
@@ -404,6 +410,52 @@ test("help on a first run does not wait for the server", async () => {
   } finally {
     slowSpecMs = 0;
   }
+});
+
+test("--n with --no-download reports each variation's job and URLs", async () => {
+  const { code, stdout, stderr, cwd } = await run(["image", "create", "--prompt", "variations", "--image-type", "sprite", "--n", "2", "--no-download", "--json"]);
+  assert.equal(code, 0, stderr);
+  const out = JSON.parse(stdout);
+  assert.deepEqual(
+    out.variations.map(v => [v.variation, v.status, v.job_id, v.urls]),
+    [
+      [1, "succeeded", "job-imgs2000", [`${base}/files/out.png?i=0`]],
+      [2, "succeeded", "job-imgs2000", [`${base}/files/out.png?i=1`]]
+    ]
+  );
+  assert.deepEqual(out.files, []);
+  assert.equal(out.urls.length, 2);
+  assert.ok(!fs.existsSync(path.join(cwd, "ludo-output")), "nothing was downloaded");
+});
+
+test("--n saves one file per variation", async () => {
+  const { code, stdout, stderr } = await run(["image", "create", "--prompt", "variations", "--image-type", "sprite", "--n", "2", "--json"]);
+  assert.equal(code, 0, stderr);
+  const out = JSON.parse(stdout);
+  assert.deepEqual(out.variations.map(v => [v.status, v.job_id, v.files.length, v.urls]), [
+    ["succeeded", "job-imgs2000", 1, undefined],
+    ["succeeded", "job-imgs2000", 1, undefined]
+  ]);
+  assert.equal(out.urls, undefined);
+});
+
+test("--n with --no-download on a one-per-job command keeps each job's URLs", async () => {
+  const { code, stdout, stderr } = await run(["sprite", "animate", "--initial-image", "https://example.com/a.png", "--motion-prompt", "walk", "--n", "2", "--no-download", "--json"]);
+  assert.equal(code, 0, stderr);
+  const out = JSON.parse(stdout);
+  for (const v of out.variations) {
+    assert.equal(v.status, "succeeded");
+    assert.equal(v.job_id, "job-sheet001");
+    assert.deepEqual(v.urls, [`${base}/files/sheet.png`, `${base}/files/sfx.mp3`]);
+  }
+});
+
+test("a batch with --no-download lists each job's URLs", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-"));
+  fs.writeFileSync(path.join(cwd, "jobs.json"), JSON.stringify([{ command: "image create", prompt: "variations", image_type: "sprite" }]));
+  const { code, stdout, stderr } = await run(["batch", "jobs.json", "--no-download", "--json"], {}, cwd);
+  assert.equal(code, 0, stderr);
+  assert.deepEqual(JSON.parse(stdout).results[0].urls, [`${base}/files/out.png?i=0`]);
 });
 
 test("a crash in the CLI sends a scrubbed report to Sentry", async () => {

@@ -217,6 +217,8 @@ export interface SavedResult {
   record: any;
   sheet?: string;
   files: (SavedFile & { variation?: number })[]; // paths relative to cwd
+  // The result URLs, when --no-download left them unsaved.
+  urls: { url: string; variation?: number }[];
 }
 
 export async function saveResult(ctx: Ctx, job: any, label: string, naming: Naming = {}): Promise<SavedResult> {
@@ -231,6 +233,7 @@ export async function saveResult(ctx: Ctx, job: any, label: string, naming: Nami
   };
   let sheet: string | undefined;
   let files: SavedResult["files"] = [];
+  let resultUrls: SavedResult["urls"] = [];
   if (job.status === "succeeded") {
     const dir = ctx.outDir;
     const prefix = naming.prefix || `${job.task_type || label}-${String(job.id).slice(0, 8)}`;
@@ -243,6 +246,7 @@ export async function saveResult(ctx: Ctx, job: any, label: string, naming: Nami
     const suffix = naming.suffix || (directions.size ? (i: number) => (directions.has(urls[i]) ? `-${directions.get(urls[i])}` : "") : undefined);
     const downloaded: SavedResult["files"] = globals.download && urls.length ? await downloadAll(urls, dir, prefix, ctx.log, suffix) : [];
     downloaded.forEach((f, i) => (f.variation = naming.variationOf?.(i)));
+    if (!globals.download) resultUrls = urls.map((url, i) => ({ url, variation: naming.variationOf?.(i) }));
     // WebP results also get a PNG copy side by side: engines and tools take
     // PNG everywhere, and the PNG is what carries a spritesheet's grid.
     const pngOf = new Map<string, string>();
@@ -288,7 +292,7 @@ export async function saveResult(ctx: Ctx, job: any, label: string, naming: Nami
     for (const f of inline.files) record.result = replaceString(record.result, f.path, rel(f.path));
     if (sheet) sheet = rel(sheet);
   }
-  return { record, sheet, files };
+  return { record, sheet, files, urls: resultUrls };
 }
 
 // Directional Sprites results hold one item per direction (`sheets`,
@@ -565,6 +569,7 @@ export interface UnitOutcome {
   job_id?: string;
   credits_charged?: number;
   files: SavedResult["files"];
+  urls: SavedResult["urls"];
   sheet?: string;
   error?: { message: string; exit_code: number };
 }
@@ -600,7 +605,7 @@ async function runUnits(ctx: Ctx, units: Unit[], label: string, limit: number, v
   let fatal: CliError | undefined;
   try {
     const outcomes = await pool(units, limit, async (unit, index) => {
-      const outcome: UnitOutcome = { index, label: unit.prep.label, status: "error", files: [] };
+      const outcome: UnitOutcome = { index, label: unit.prep.label, status: "error", files: [], urls: [] };
       try {
         const { command } = unit.prep;
         const { body: response } = await ctx.api.call(command.method, expandPath(command.path, unit.prep.path), {
@@ -620,6 +625,7 @@ async function runUnits(ctx: Ctx, units: Unit[], label: string, limit: number, v
           job_id: job.id,
           credits_charged: job.credits_charged,
           files: saved.files,
+          urls: saved.urls,
           sheet: saved.sheet,
           error: job.status === "succeeded" ? undefined : { message: job.error?.message || job.status, exit_code: job.status === "canceled" ? EXIT.JOB_CANCELED : EXIT.JOB_FAILED }
         });
@@ -705,23 +711,31 @@ export async function runVariations(ctx: Ctx, prep: Prepared, n: number): Promis
   ctx.log(`Submitting ${label}`);
   const outcomes = await runUnits(ctx, units, label, Math.min(4, units.length), set);
   const files = outcomes.flatMap(o => o.files);
+  const urls = outcomes.flatMap(o => o.urls);
   const ok = outcomes.filter(o => o.status === "succeeded");
+  // Variation v was made by the job of the chunk holding it. It counts as made
+  // when that job returned it, saved as a file or (--no-download) as a URL.
   const variations = Array.from({ length: n }, (_, i) => i + 1).map(v => {
-    const o = outcomes.find(x => x.files.some(f => f.variation === v)) || (native ? undefined : outcomes[v - 1]);
+    const o = outcomes[chunks.findIndex(c => v > c.offset && v <= c.offset + c.count)];
+    const vUrls = urls.filter(u => u.variation === v).map(u => u.url);
+    const made = o?.status === "succeeded" && (files.some(f => f.variation === v) || vUrls.length > 0);
     return {
       variation: v,
       job_id: o?.job_id,
-      status: o?.status || "failed",
+      status: made ? "succeeded" : o?.status === "succeeded" ? "failed" : o?.status || "failed",
       files: files.filter(f => f.variation === v).map(f => f.path),
-      error: o?.status === "succeeded" ? undefined : o?.error
+      ...(vUrls.length ? { urls: vUrls } : {}),
+      error: made ? undefined : o?.error
     };
   });
 
   let kept: number[] | undefined;
   if (!ctx.jsonOut) {
-    process.stdout.write(`${ok.length ? "✓" : "✗"} ${label}: ${variations.filter(v => v.files.length).length} of ${n} variations saved (${formatCredits(sumCharged(outcomes))})\n`);
+    const made = variations.filter(v => v.status === "succeeded").length;
+    process.stdout.write(`${ok.length ? "✓" : "✗"} ${label}: ${made} of ${n} variations ${ctx.globals.download ? "saved" : "made"} (${formatCredits(sumCharged(outcomes))})\n`);
     for (const v of variations) {
-      process.stdout.write(`  v${v.variation}: ${v.files.length ? v.files.join(", ") : `failed${v.error ? `: ${v.error.message}` : ""}`}\n`);
+      const got = v.files.length ? v.files : v.urls || [];
+      process.stdout.write(`  v${v.variation}: ${got.length ? got.join(", ") : `failed${v.error ? `: ${v.error.message}` : ""}`}\n`);
     }
     if (ctx.vis.enabled && !canShowImages()) {
       if (variations.some(v => v.files.some(p => IMAGE_EXT.test(p)))) process.stderr.write(`${previewSkipped()}\n`);
@@ -738,7 +752,17 @@ export async function runVariations(ctx: Ctx, prep: Prepared, n: number): Promis
     const saved = variations.filter(v => v.files.length);
     if (saved.length > 1 && canAsk(ctx)) kept = await pickVariations(ctx, saved.map(v => v.variation), n, set);
   } else {
-    printJson({ variation_set: set, n, credits_charged: sumCharged(outcomes), variations, files: files.map(f => ({ path: f.path, absolute_path: path.resolve(f.path), variation: f.variation })) }, prettyJson(ctx));
+    printJson(
+      {
+        variation_set: set,
+        n,
+        credits_charged: sumCharged(outcomes),
+        variations,
+        files: files.map(f => ({ path: f.path, absolute_path: path.resolve(f.path), variation: f.variation })),
+        ...(urls.length ? { urls } : {})
+      },
+      prettyJson(ctx)
+    );
   }
   if (kept) ctx.log(`Kept ${kept.map(v => `v${v}`).join(", ")}.`);
   return ok.length ? EXIT.OK : failureCode(outcomes);
@@ -806,7 +830,16 @@ export async function runBatch(ctx: Ctx, preps: Prepared[], limit: number): Prom
   if (ctx.jsonOut) {
     printJson(
       {
-        results: outcomes.map(o => ({ index: o.index, command: o.label, status: o.status, job_id: o.job_id, credits_charged: o.credits_charged, files: o.files.map(f => f.path), error: o.error })),
+        results: outcomes.map(o => ({
+          index: o.index,
+          command: o.label,
+          status: o.status,
+          job_id: o.job_id,
+          credits_charged: o.credits_charged,
+          files: o.files.map(f => f.path),
+          ...(o.urls.length ? { urls: o.urls.map(u => u.url) } : {}),
+          error: o.error
+        })),
         summary
       },
       prettyJson(ctx)
@@ -815,6 +848,7 @@ export async function runBatch(ctx: Ctx, preps: Prepared[], limit: number): Prom
     for (const o of outcomes) {
       process.stdout.write(`${o.status === "succeeded" ? "✓" : "✗"} [${o.index + 1}] ${o.label}${o.error ? `: ${o.error.message}` : ""}\n`);
       for (const f of o.files) process.stdout.write(`    ${f.path}\n`);
+      for (const u of o.urls) process.stdout.write(`    ${u.url}\n`);
     }
     process.stdout.write(`${summary.succeeded} of ${summary.total} succeeded (${formatCredits(summary.credits_charged)})\n`);
   }
