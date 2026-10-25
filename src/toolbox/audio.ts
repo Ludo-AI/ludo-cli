@@ -48,7 +48,7 @@ const dbText = (v: number, unit: string) => (Number.isFinite(v) ? `${v.toFixed(1
 const describe = (a: Audio) => `${round(a.rate / 1000, 3)} kHz ${a.channels.length === 1 ? "mono" : a.channels.length === 2 ? "stereo" : `${a.channels.length} channels`}, ${seconds(a).toFixed(2)} s`;
 
 const OUTPUT: ToolFlag[] = [
-  { flag: "--to", value: "format", description: "wav, ogg, mp3 or flac (default: the input's; WAV in-process, the rest through ffmpeg)" },
+  { flag: "--to", value: "format", description: "wav, ogg, mp3 or flac (default: the input's; WAV is written in-process, the rest through ffmpeg)" },
   { flag: "--in-place", description: "Replace the input instead of saving a new file" }
 ];
 
@@ -109,7 +109,7 @@ TOOLS.push({
     "Its format, length, peak and true peak (dBTP, between the samples, as a player rebuilds the wave),",
     "loudness (LUFS, ITU-R BS.1770: what normalize evens out), silence at either end, clipped samples,",
     "and whether it clicks where it loops. A sound under 0.4 s is measured as one block of its own length.",
-    "Reads WAV itself; MP3, OGG, FLAC and the rest through ffmpeg."
+    "Reads WAV and MP3 itself; OGG, FLAC and the rest through ffmpeg."
   ],
   flags: [THRESHOLD],
   async run(ctx, call) {

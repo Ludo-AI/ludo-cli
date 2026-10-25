@@ -430,6 +430,27 @@ test("a WAV named .mp3 is read as the WAV it is, with no ffmpeg", async () => {
   assert.match(ogg.stderr, /Writing OGG needs ffmpeg[\s\S]*--to wav/);
 });
 
+test("an MP3 is read in-process: no ffmpeg needed until something has to be written as MP3", async () => {
+  const dir = tmp();
+  fs.copyFileSync(fileURLToPath(new URL("./corpus/mp3/lame-44k-js-cbr192.mp3", import.meta.url)), path.join(dir, "jingle.mp3"));
+  const info = await run(["toolbox", "audio", "info", "jingle.mp3", "--json"], { cwd: dir, noPath: true });
+  assert.equal(info.code, EXIT.OK, info.stderr);
+  assert.equal(info.json().format, "mp3");
+  assert.equal(info.json().codec, "MP3 192 kbit/s");
+  const wav = await run(["toolbox", "audio", "normalize", "jingle.mp3", "--to", "wav", "--json"], { cwd: dir, noPath: true });
+  assert.equal(wav.code, EXIT.OK, wav.stderr);
+  assert.equal(decodeWav(fs.readFileSync(path.join(dir, wav.json().audio)), { maxSamples: MAX }).channels[0].length, info.json().samples);
+  // The default keeps the format, and writing MP3 is ffmpeg's job.
+  const mp3 = await run(["toolbox", "audio", "normalize", "jingle.mp3"], { cwd: dir, noPath: true });
+  assert.equal(mp3.code, EXIT.BAD_INPUT);
+  assert.match(mp3.stderr, /Writing MP3 needs ffmpeg[\s\S]*--to wav/);
+  // A file that only says it is an MP3 is refused as one.
+  fs.writeFileSync(path.join(dir, "fake.mp3"), Buffer.from("ID3\x04\x00\x00\x00\x00\x00\x10" + "x".repeat(64)));
+  const fake = await run(["toolbox", "audio", "info", "fake.mp3"], { cwd: dir, noPath: true });
+  assert.equal(fake.code, EXIT.BAD_INPUT);
+  assert.match(fake.stderr, /Cannot read fake\.mp3/);
+});
+
 test("audio convert writes Ogg Vorbis, MP3 and FLAC that ffmpeg reads back; MP3 in through ffmpeg", async t => {
   if (!needFfmpeg(t)) return;
   const dir = tmp();
@@ -444,7 +465,7 @@ test("audio convert writes Ogg Vorbis, MP3 and FLAC that ffmpeg reads back; MP3 
     assert.equal(p.channels, out.channels);
     assert.equal(Number(p.sample_rate), 48000);
   }
-  // MP3 in (through ffmpeg until the toolbox reads it itself), trimmed, out as MP3.
+  // MP3 in (read in-process), trimmed, out as MP3 again.
   const mp3 = path.join(dir, "ludo-output", "zap.mp3");
   const info = (await run(["toolbox", "audio", "info", mp3, "--json"], { cwd: dir })).json();
   assert.equal(info.format, "mp3");

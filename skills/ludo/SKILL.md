@@ -62,6 +62,10 @@ they log in or create an account (and pick a plan with API access if needed) and
      lists or saves colours; `image recolor --colors N | --palette <file|hexes> | --swap A --to B`
      changes them. `image tiles <tileset> --size 16x16` cuts tiles or writes Tiled/Godot/Unity
      tileset files; `image repeat <tile>` checks a tile is seamless. `image convert --to webp`.
+   - Audio: `audio info <sound>` gives length, loudness (LUFS), true peak, silence at the ends and
+     whether it clicks when looped; `audio trim` cuts that silence, `audio normalize --lufs -16`
+     makes sounds equally loud, `audio loop` makes a seamless loop, `audio convert --to
+     ogg|mp3|flac|wav` (OGG for Godot and Unity). WAV and MP3 need nothing; the rest needs ffmpeg.
    - 3D: `ludo toolbox model info <model.glb>` says what a model holds (triangles, size, textures,
      rig, animations) before you rig or animate it.
    - Engines: `ludo toolbox sprite export <sheet> --engine texturepacker|godot|unity` writes engine

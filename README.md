@@ -138,7 +138,7 @@ replaced by its path.
 ## Free tools
 
 `ludo toolbox` holds tools that run on your machine: offline, with no account, no API key and no
-credits. They work on any spritesheet, not only Ludo's.
+credits. They work on any spritesheet or sound, not only Ludo's.
 
 ```sh
 # Cut a spritesheet into one PNG per frame. The grid comes from --grid, from the sheet's Ludo
@@ -214,6 +214,14 @@ ludo toolbox sprite slice dance.gif
 # and a sheet to WebM or MOV with transparency, or MP4.
 ludo toolbox sprite from-video knight-walk.mp4 --fps 12 --key
 ludo toolbox sprite video knight-walk.png --format webm --loops 3
+
+# Sound. WAV and MP3 are read in-process; OGG, FLAC and the rest, and writing OGG or MP3, need
+# ffmpeg. Loudness is LUFS (ITU-R BS.1770), so sounds normalized alike play equally loud.
+ludo toolbox audio info zap.mp3                     # length, loudness, true peak, silence, loop seam
+ludo toolbox audio trim zap.mp3                     # silence off both ends, with short fades
+ludo toolbox audio normalize zap.mp3 --lufs -16     # never over -1 dBTP; --peak -1 sets the peak
+ludo toolbox audio loop forest.wav                  # no seam; a WAV gets the loop point Godot uses
+ludo toolbox audio convert theme.mp3 --to ogg       # Ogg Vorbis for Godot and Unity; --mono, --bits
 
 # What is in a 3D model: meshes, triangles, size, textures, skeleton and animations.
 ludo toolbox model info knight.glb

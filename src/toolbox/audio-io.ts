@@ -3,11 +3,12 @@ import path from "node:path";
 import { CliError, EXIT } from "../errors.js";
 import { noteInput } from "../telemetry.js";
 import { decodeWav, encodeWav, isWav, WavError, type Audio } from "./wav.js";
+import { decodeMp3, isMp3, Mp3Error } from "./mp3.js";
 import { FFMPEG_INSTALL, haveFfmpeg, needFfmpeg, run } from "./video.js";
 
 // Reading and writing the audio tools' files. WAV is read and written
-// in-process; every other format crosses the system's ffmpeg as raw 32-bit
-// float samples on a pipe.
+// in-process and MP3 read in-process (mp3.ts); every other format crosses
+// the system's ffmpeg as raw 32-bit float samples on a pipe.
 
 // 10 minutes of 48 kHz stereo: 230 MB of samples.
 export const MAX_AUDIO_SAMPLES = 48000 * 60 * 10 * 2;
@@ -36,8 +37,8 @@ function readFile(file: string): Buffer {
   }
 }
 
-const tooLong = (file: string, samples: number) =>
-  new CliError(`${file} is too long: ${samples} samples is over ${MAX_AUDIO_SAMPLES} (10 minutes of 48 kHz stereo)`, EXIT.BAD_INPUT, "Cut it into shorter files first.");
+const tooLong = (file: string, samples?: number) =>
+  new CliError(`${file} is too long: ${samples ? `${samples} samples is ` : ""}over ${MAX_AUDIO_SAMPLES} samples (10 minutes of 48 kHz stereo)`, EXIT.BAD_INPUT, "Cut it into shorter files first.");
 
 // The file's contents decide how it is read, not its extension: Ludo has
 // served WAV files named .mp3.
@@ -57,7 +58,20 @@ export function loadAudioFile(file: string): LoadedAudio {
       throw new CliError(`Cannot read ${file}: ${err.message}`, EXIT.BAD_INPUT, err.code === "UNSUPPORTED" ? `Convert it to 16-bit PCM WAV first, or install ffmpeg, which reads it (${FFMPEG_INSTALL}).` : undefined);
     }
   }
-  needFfmpeg("Reading this sound", "convert it to WAV first (the toolbox reads WAV itself)");
+  // An MP3 that starts with junk is not isMp3, but its extension says to try.
+  if (isMp3(buf) || /\.mp[123]$/i.test(file)) {
+    try {
+      const mp3 = decodeMp3(buf, { maxSamples: MAX_AUDIO_SAMPLES });
+      const format = mp3.layer === 3 ? "mp3" : `mp${mp3.layer}`;
+      noteInput(format, false);
+      return { file, audio: mp3, format, codec: `${mp3.layer === 3 ? "MP3" : `MPEG layer ${"I".repeat(mp3.layer)}`} ${mp3.bitrate} kbit/s${mp3.vbr ? " VBR" : ""}` };
+    } catch (err) {
+      if (!(err instanceof Mp3Error)) throw err;
+      if (err.code === "TOO_LARGE") throw tooLong(file);
+      if (err.code !== "NOT_MP3" || !haveFfmpeg()) throw new CliError(`Cannot read ${file}: ${err.message}`, EXIT.BAD_INPUT);
+    }
+  }
+  needFfmpeg("Reading this sound", "convert it to WAV or MP3 first (the toolbox reads those itself)");
   return loadWithFfmpeg(file);
 }
 
