@@ -132,8 +132,10 @@ export function encodeWav(audio: Audio, opts: WavOptions = {}): Uint8Array {
   if (!n || n > 32) throw new Error(`a WAV holds 1-32 channels, not ${n}`);
   const bytes = bits / 8;
   const dataSize = frames * n * bytes;
-  // Over two channels or 16 bits, WAVEFORMATEXTENSIBLE is what readers expect.
-  const extensible = n > 2 || bits > 16;
+  // WAVEFORMATEXTENSIBLE only over two channels, where the speaker layout
+  // needs saying: Microsoft asks for it over 16 bits too, but Godot's
+  // importer refuses it ("not PCM") and every reader takes the plain tags.
+  const extensible = n > 2;
   const fmtSize = extensible ? 40 : 16;
   const smplSize = opts.loop ? 36 + 24 : 0;
   const total = 12 + 8 + fmtSize + (smplSize ? 8 + smplSize : 0) + 8 + dataSize + (dataSize & 1);

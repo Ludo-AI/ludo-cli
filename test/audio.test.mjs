@@ -82,6 +82,10 @@ test("WAV: what it writes reads back, at every depth and channel count", () => {
       for (let c = 0; c < n; c++) for (let i = 0; i < 1001; i++) assert.ok(Math.abs(wav.channels[c][i] - channels[c][i]) <= step / 2 + 1e-7, `${n} ch ${bits} bits [${c}][${i}]`);
     }
   }
+  // The plain PCM or float format tag for mono and stereo at every depth
+  // (Godot refuses WAVE_FORMAT_EXTENSIBLE); extensible over two channels.
+  const tagOf = (n, bits) => Buffer.from(encodeWav({ rate: 8000, channels: Array.from({ length: n }, () => new Float32Array(4)) }, { bits })).readUInt16LE(20);
+  assert.deepEqual([tagOf(1, 24), tagOf(2, 16), tagOf(2, 32), tagOf(6, 16)], [1, 1, 3, 0xfffe]);
   // Full scale and past it clip, the steps round to the nearest.
   const loud = decodeWav(encodeWav({ rate: 8000, channels: [Float32Array.from([1, -1, 1.5, -2, 0.5 / 32768 + 1e-6])] }), { maxSamples: MAX });
   assert.deepEqual([...loud.channels[0]], [32767 / 32768, -1, 32767 / 32768, -1, 1 / 32768]);

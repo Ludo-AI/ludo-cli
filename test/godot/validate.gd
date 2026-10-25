@@ -164,7 +164,7 @@ func check_tileset(t: Dictionary) -> void:
 
 # A WAV from src/toolbox/wav.ts: its rate, channels and length, and the smpl
 # loop as a forward loop over the whole sound. The smpl end is the last
-# sample played (inclusive), so Godot may report it as samples - 1.
+# sample played (inclusive), which Godot keeps as its loop_end: samples - 1.
 func check_sound(s: Dictionary) -> void:
 	var name: String = s.name
 	var res = ResourceLoader.load(s.path, "", ResourceLoader.CACHE_MODE_IGNORE)
@@ -184,8 +184,8 @@ func check_sound(s: Dictionary) -> void:
 			fail(name, "loop mode %d is not forward" % w.loop_mode)
 		if w.loop_begin != 0:
 			fail(name, "loop begin %d != 0" % w.loop_begin)
-		if w.loop_end != int(s.samples) and w.loop_end != int(s.samples) - 1:
-			fail(name, "loop end %d is not the end (%d)" % [w.loop_end, s.samples])
+		if w.loop_end != int(s.samples) - 1:
+			fail(name, "loop end %d is not the last sample (%d)" % [w.loop_end, int(s.samples) - 1])
 		print("[%s] loop %d-%d of %d samples" % [name, w.loop_begin, w.loop_end, s.samples])
 	elif w.loop_mode != AudioStreamWAV.LOOP_DISABLED:
 		fail(name, "loop mode %d on a sound with no loop" % w.loop_mode)
