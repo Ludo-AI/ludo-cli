@@ -24,6 +24,8 @@ import {
 import { encodePng, readPng, withText } from "../dist/tty/png.js";
 import { readGrid } from "../dist/tty/preview.js";
 import { joinFrames, sliceSheet } from "../dist/toolbox/sheet.js";
+import { scaleUp } from "../dist/toolbox/pixels.js";
+import { resizePillow } from "../dist/toolbox/resample.js";
 
 const exec = promisify(execFile);
 const expected = JSON.parse(fs.readFileSync(new URL("./corpus/unfake/expected.json", import.meta.url), "utf8")).cases;
@@ -78,7 +80,43 @@ test("hand-drawn cells that wander around 43 px are followed edge to edge", () =
 });
 
 test("exactGrid finds nothing where there is no exact upscale", () => {
-  for (const name of ["soft-6-bilinear", "soft-8-bicubic", "noise", "native-art", "resampled-100-to-1024"]) assert.equal(exactGrid(CASES.find(c => c.name === name).img), undefined, name);
+  for (const name of ["soft-6-bilinear", "soft-8-bicubic", "noise", "native-art", "resampled-100-to-1024"]) {
+    assert.equal(exactGrid(CASES.find(c => c.name === name).img), undefined, name);
+    assert.equal(exactGrid(CASES.find(c => c.name === name).img, 0.98, 24), undefined, `${name}, lossy pass`);
+  }
+});
+
+test("an exact upscale saved lossily keeps its grid: the speckle inside cells is not read as edges", () => {
+  // A 5x upscale with every opaque pixel moved up to 10 a channel, the way
+  // lossy WebP leaves a flat cell (the Ludo walk sheets read as 24 columns
+  // instead of 25 before this pass).
+  const r = (s => () => ((s = (s * 16807) % 2147483647) / 2147483647))(9);
+  const cells = art(25, 29, 31);
+  const speckle = img => {
+    const rgba = img.rgba.slice();
+    for (let i = 0; i < rgba.length; i += 4) if (rgba[i + 3]) for (let c = 0; c < 3; c++) rgba[i + c] = Math.max(0, Math.min(255, rgba[i + c] + Math.round(r() * 20 - 10)));
+    return { ...img, rgba };
+  };
+  const lat = (n, s, cut = 0) => [0, ...Array.from({ length: n }, (_, i) => (i + 1) * s - cut)].filter((v, i, a) => i === 0 || v > a[i - 1]);
+  const img = speckle(drawn(cells, lat(25, 5), lat(29, 5)));
+  assert.equal(exactGrid(img), undefined);
+  assert.equal(exactGrid(img, 0.98, 24).x.period, 5);
+  const out = unfake(img, { method: "median" });
+  assert.deepEqual([out.scale, out.image.width, out.image.height, out.lossyExact, out.exact], [5, 25, 29, true, undefined]);
+  for (let i = 0; i < cells.rgba.length; i += 4) {
+    assert.equal(out.image.rgba[i + 3], cells.rgba[i + 3], `alpha at ${i / 4}`);
+    if (cells.rgba[i + 3]) for (let c = 0; c < 3; c++) assert.ok(Math.abs(out.image.rgba[i + c] - cells.rgba[i + c]) <= 10, `pixel ${i / 4} channel ${c}`);
+  }
+  // Off phase too: the first, cut-short cell is dropped, as for an exact one.
+  const off = unfake(speckle(drawn(cells, lat(25, 5, 2), lat(29, 5, 2))));
+  assert.deepEqual([off.scale, off.lossyExact, off.crop], [5, true, { x: 3, y: 3 }]);
+  // A lossy lattice that is not the art pixel: 9 px art, soft, then a
+  // nearest 2x (a 640x360 sprite video at 720p) has a 2 px one. The art
+  // pixel the estimators find, 18, stands.
+  const video = speckle(scaleUp(resizePillow(art(40, 24, 5), 360, 216, "bilinear"), 2));
+  assert.equal(exactGrid(video, 0.98, 24).x.period, 2);
+  const v = unfake(video);
+  assert.deepEqual([v.scale, v.image.width, v.image.height, v.lossyExact], [18, 40, 24, undefined]);
 });
 
 // ---- unfake-core's own unit tests (Rust), ported ----

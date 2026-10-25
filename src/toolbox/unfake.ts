@@ -129,14 +129,21 @@ function gcd(a: number, b: number): number {
 // best phase holds 98% of them on both axes. Pixel art that is one, scaled
 // down by it, loses nothing; anything else (soft or lossy edges) has no such
 // size and is left to the estimators.
-export function exactGrid(img: Image, need = 0.98): Grid | undefined {
+//
+// With a tolerance, only brightness changes of more than that count: an
+// exact upscale saved as lossy WebP or JPEG keeps its edges on the grid but
+// speckles every cell, which the plain check reads as edges everywhere.
+export function exactGrid(img: Image, need = 0.98, tolerance = 0): Grid | undefined {
   const { width: w, height: h, rgba } = img;
   const px = new Float64Array(w);
   const py = new Float64Array(h);
+  const luma = (i: number) => 0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2];
   const differs = (a: number, b: number) => {
     const oa = rgba[a + 3] > 127;
     if (oa !== rgba[b + 3] > 127) return true;
-    return oa && (rgba[a] !== rgba[b] || rgba[a + 1] !== rgba[b + 1] || rgba[a + 2] !== rgba[b + 2]);
+    if (!oa) return false;
+    if (!tolerance) return rgba[a] !== rgba[b] || rgba[a + 1] !== rgba[b + 1] || rgba[a + 2] !== rgba[b + 2];
+    return Math.abs(luma(a) - luma(b)) > tolerance;
   };
   for (let y = 0; y < h; y++) {
     for (let x = 1; x < w; x++) if (differs((y * w + x) * 4, (y * w + x - 1) * 4)) px[x]++;
@@ -947,6 +954,7 @@ export interface Unfaked {
   scale: number; // the cell size used, 1 when the image already is one pixel per pixel
   detected: number; // what the integer detector said
   exact?: boolean; // an exact upscale: nothing was lost
+  lossyExact?: boolean; // an exact upscale saved lossily: its grid, each cell's colour by `method`
   fit: number; // the share of the source the result explains (see fitOf)
   grid?: { period: [number, number]; offset: [number, number]; cells: [number, number] };
   elastic?: [boolean, boolean]; // the axes fitted to drawn edges
@@ -970,6 +978,11 @@ export function finalizePixels(img: Image): Image {
   return img;
 }
 
+// The lossy pass of exactGrid, on brightness (lossy WebP and H.264 keep
+// colour at half resolution, which puts every colour edge on a 2 px grid):
+// more than they speckle a flat cell, well under an edge between two colours.
+const LOSSY_TOLERANCE = 24;
+
 export function unfake(src: Image, opts: UnfakeOptions = {}): Unfaked {
   const method = opts.method ?? "dominant";
   const threshold = opts.threshold ?? 0.15;
@@ -978,6 +991,7 @@ export function unfake(src: Image, opts: UnfakeOptions = {}): Unfaked {
   let detected: number;
   let grid: Grid | undefined;
   let exact: Grid | undefined;
+  let lossy = false;
   if (opts.scale) {
     scale = Math.max(1, opts.scale);
     detected = scale;
@@ -990,6 +1004,17 @@ export function unfake(src: Image, opts: UnfakeOptions = {}): Unfaked {
     scale = detected;
     grid = fractionalGridDetect(current);
     if (grid) scale = (grid.x.period + grid.y.period) / 2;
+    // A lossy copy of an exact upscale: where its lattice is the size the
+    // estimators found, it gives the phase they can miss by a cell. Only
+    // then: a lossy lattice can also be a stage of the image's making (a
+    // 2x video upscale around 9 px art) rather than the art pixel.
+    const near = opts.exact === false ? undefined : exactGrid(current, 0.98, LOSSY_TOLERANCE);
+    if (near && Math.abs(near.x.period - scale) < 0.5) {
+      exact = near;
+      lossy = true;
+      grid = undefined;
+      scale = near.x.period;
+    }
   }
   if (!grid && !Number.isInteger(scale)) scale = Math.max(1, roundHalfAway(scale));
 
@@ -1030,7 +1055,7 @@ export function unfake(src: Image, opts: UnfakeOptions = {}): Unfaked {
     scale,
     detected,
     fit: fitOf(current, out, cells),
-    ...(exact ? { exact: true } : {}),
+    ...(exact ? (lossy ? { lossyExact: true } : { exact: true }) : {}),
     ...(gridInfo ? { grid: gridInfo } : {}),
     ...(fitted ? { elastic: fitted.adapted } : {}),
     ...(!grid && !fitted && phase ? { crop: phase } : {})

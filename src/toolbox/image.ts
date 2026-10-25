@@ -661,8 +661,9 @@ TOOLS.push({
     "This finds the art pixel's size and phase and gives each cell one colour, its most common one.",
     "An exact upscale (98% of colour edges on one grid) comes back losslessly; anything else goes",
     "through the detectors of unfake.js (MIT): tiled edge periods, fractional grids and",
-    "cells fitted to hand-drawn edges. The JSON says how much of the image the result explains (fit);",
-    "art already at one pixel per pixel can still look periodic, so check a low fit, or pass --scale.",
+    "cells fitted to hand-drawn edges (a lossy WebP or JPEG copy of an exact upscale cut on its own grid).",
+    "The JSON says how much of the image the result explains (fit); art already at one pixel per pixel",
+    "can still look periodic, so check a low fit, or pass --scale.",
     "On a sheet the grid is found once for the whole sheet and every frame is cut the same way."
   ],
   flags: [
@@ -721,7 +722,7 @@ TOOLS.push({
       const shown2 = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
       const fit = Math.round(whole.fit * 1000) / 1000;
       const warning =
-        !scale && !whole.exact && whole.fit < 0.7
+        !scale && !whole.exact && !whole.lossyExact && whole.fit < 0.7
           ? `The result explains only ${Math.round(whole.fit * 100)}% of the image: it may already be one pixel per pixel, or its pixels another size. Check it, or pass --scale.`
           : undefined;
       return {
@@ -729,6 +730,7 @@ TOOLS.push({
         facts: {
           pixel_size: Math.round(whole.scale * 10000) / 10000,
           exact: !!whole.exact,
+          ...(whole.lossyExact ? { lossy_exact: true } : {}),
           fit,
           ...(whole.grid ? { fractional_grid: { period: whole.grid.period.map(v => Math.round(v * 10000) / 10000), cells: whole.grid.cells } } : {}),
           ...(whole.elastic ? { fitted_to_edges: { x: whole.elastic[0], y: whole.elastic[1] } } : {}),
@@ -739,7 +741,7 @@ TOOLS.push({
         },
         says:
           `Snapped ${frames[0].width}x${frames[0].height} to ${out[0].width}x${out[0].height}: art pixels of ${shown2(whole.scale)} px` +
-          (whole.exact ? " (an exact upscale: nothing lost)" : `, explaining ${Math.round(whole.fit * 100)}% of it`) +
+          (whole.exact ? " (an exact upscale: nothing lost)" : whole.lossyExact ? ` (an exact upscale saved lossily, explaining ${Math.round(whole.fit * 100)}% of it)` : `, explaining ${Math.round(whole.fit * 100)}% of it`) +
           (reduced !== undefined ? `, ${reduced} colours to ${colours}` : "") +
           (warning ? `\nWarning: ${warning}` : "")
       };
