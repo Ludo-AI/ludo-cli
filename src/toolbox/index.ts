@@ -8,6 +8,7 @@ import "./sprite-sequence.js";
 import "./sprite-video.js";
 import "./image.js";
 import "./tiles.js";
+import "./audio.js";
 import "./model.js";
 
 export { TOOLS } from "./registry.js";

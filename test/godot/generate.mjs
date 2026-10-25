@@ -192,3 +192,19 @@ for (const [name, tw, th, spacing, margin, cols, rows] of [["plain", 16, 16, 0, 
 }
 fs.writeFileSync(path.join(out, "tilesets.json"), JSON.stringify(tilesets, null, 2));
 console.log(`generated ${tilesets.length} tilesets`);
+
+// Sounds (src/toolbox/wav.ts encodeWav): WAVs with and without the smpl
+// loop that `ludo toolbox audio loop` writes, which Godot's importer should
+// turn into a forward loop ("Detect From WAV", its default).
+const { encodeWav } = await import("../../dist/toolbox/wav.js");
+const sounds = [];
+for (const [name, rate, channels, bits, loop] of [["loop-stereo", 44100, 2, 16, true], ["mono-24", 48000, 1, 24, false], ["loop-float", 22050, 2, 32, true]]) {
+  const n = Math.round(rate * 0.75);
+  const chans = Array.from({ length: channels }, (_, c) => Float32Array.from({ length: n }, (_, i) => 0.5 * Math.sin((2 * Math.PI * (220 + 110 * c) * i) / rate)));
+  const file = path.join(out, "sounds", `${name}.wav`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, encodeWav({ rate, channels: chans }, { bits, ...(loop ? { loop: { start: 0, end: n } } : {}) }));
+  sounds.push({ name, path: `res://out/sounds/${name}.wav`, rate, stereo: channels === 2, samples: n, loop });
+}
+fs.writeFileSync(path.join(out, "sounds.json"), JSON.stringify(sounds, null, 2));
+console.log(`generated ${sounds.length} sounds`);

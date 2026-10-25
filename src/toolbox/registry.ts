@@ -29,6 +29,7 @@ export interface Tool {
 export const TOOL_GROUPS: Record<string, string> = {
   sprite: "Spritesheets and frames",
   image: "Images",
+  audio: "Sound effects, music and voices",
   model: "3D models"
 };
 

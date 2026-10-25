@@ -26,8 +26,14 @@ func _initialize() -> void:
 	else:
 		for t in tilesets:
 			check_tileset(t)
+	var sounds = JSON.parse_string(FileAccess.get_file_as_string("res://out/sounds.json"))
+	if typeof(sounds) != TYPE_ARRAY or sounds.is_empty():
+		fail("sounds", "could not read res://out/sounds.json")
+		sounds = []
+	for s in sounds:
+		check_sound(s)
 	if failures == 0:
-		print("ALL %d CASES PASSED" % (cases.size() + tilesets.size()))
+		print("ALL %d CASES PASSED" % (cases.size() + tilesets.size() + sounds.size()))
 	quit(1 if failures > 0 else 0)
 
 
@@ -154,3 +160,32 @@ func check_tileset(t: Dictionary) -> void:
 			fail(name, "tile %s colour %s" % [coords, got])
 	if failures == failures_before:
 		print("ok [%s] %d tiles" % [name, want.size()])
+
+
+# A WAV from src/toolbox/wav.ts: its rate, channels and length, and the smpl
+# loop as a forward loop over the whole sound. The smpl end is the last
+# sample played (inclusive), so Godot may report it as samples - 1.
+func check_sound(s: Dictionary) -> void:
+	var name: String = s.name
+	var res = ResourceLoader.load(s.path, "", ResourceLoader.CACHE_MODE_IGNORE)
+	if not (res is AudioStreamWAV):
+		fail(name, "%s did not import as an AudioStreamWAV" % s.path)
+		return
+	var w: AudioStreamWAV = res
+	if w.mix_rate != int(s.rate):
+		fail(name, "mix rate %d != %d" % [w.mix_rate, s.rate])
+	if w.stereo != bool(s.stereo):
+		fail(name, "stereo %s != %s" % [w.stereo, s.stereo])
+	var length := float(s.samples) / float(s.rate)
+	if absf(w.get_length() - length) > 0.002:
+		fail(name, "length %s != %s" % [w.get_length(), length])
+	if bool(s.loop):
+		if w.loop_mode != AudioStreamWAV.LOOP_FORWARD:
+			fail(name, "loop mode %d is not forward" % w.loop_mode)
+		if w.loop_begin != 0:
+			fail(name, "loop begin %d != 0" % w.loop_begin)
+		if w.loop_end != int(s.samples) and w.loop_end != int(s.samples) - 1:
+			fail(name, "loop end %d is not the end (%d)" % [w.loop_end, s.samples])
+		print("[%s] loop %d-%d of %d samples" % [name, w.loop_begin, w.loop_end, s.samples])
+	elif w.loop_mode != AudioStreamWAV.LOOP_DISABLED:
+		fail(name, "loop mode %d on a sound with no loop" % w.loop_mode)

@@ -14,7 +14,7 @@ export interface VideoInfo {
   alpha: boolean; // VP8/VP9 with an alpha channel (WebM's alpha_mode tag)
 }
 
-const run = (cmd: string, args: string[], input?: Buffer) =>
+export const run = (cmd: string, args: string[], input?: Buffer) =>
   spawnSync(cmd, args, { input, maxBuffer: 2 ** 31, timeout: 10 * 60_000, windowsHide: true });
 
 export function haveFfmpeg(): boolean {
@@ -25,10 +25,11 @@ export function haveFfmpeg(): boolean {
   }
 }
 
-export function needFfmpeg() {
+export const FFMPEG_INSTALL = process.platform === "darwin" ? "brew install ffmpeg" : process.platform === "win32" ? "winget install ffmpeg" : "sudo apt install ffmpeg (or your system's package)";
+
+export function needFfmpeg(what = "Video", otherwise?: string) {
   if (haveFfmpeg()) return;
-  const how = process.platform === "darwin" ? "brew install ffmpeg" : process.platform === "win32" ? "winget install ffmpeg" : "sudo apt install ffmpeg (or your system's package)";
-  throw new CliError("Video needs ffmpeg, which is not installed (ffmpeg and ffprobe on the PATH)", EXIT.BAD_INPUT, `Install it: ${how}`);
+  throw new CliError(`${what} needs ffmpeg, which is not installed (ffmpeg and ffprobe on the PATH)`, EXIT.BAD_INPUT, `Install it: ${FFMPEG_INSTALL}${otherwise ? `; or ${otherwise}` : ""}`);
 }
 
 const rate = (r: string | undefined) => {
