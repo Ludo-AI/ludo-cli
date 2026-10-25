@@ -95,6 +95,11 @@ test("names YAML would misread are quoted, and read back", () => {
   assert.deepEqual(readUnityMeta(meta).fileIds, { "boss: phase 2_0": "21300000", "boss: phase 2_1": "21300002" });
 });
 
+test("a .meta checked out with Windows line endings keeps its guid and file IDs", () => {
+  assert.deepEqual(readUnityMeta(unityMeta.replace(/\n/g, "\r\n")), readUnityMeta(unityMeta));
+  assert.equal(Object.keys(readUnityMeta(unityMeta.replace(/\n/g, "\r\n")).fileIds).length, 7);
+});
+
 test("a re-export keeps the guid and file IDs Unity gave the sheet; the clip is never overwritten", () => {
   const dir = tmp();
   const sheet = path.join(dir, "explosion.png");

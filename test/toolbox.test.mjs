@@ -777,15 +777,12 @@ test("image tools refuse bad flags and empty images clearly", async () => {
 
 test("pixel edits match ImageMagick's", t => {
   // ImageMagick 7 is `magick`; 6 is `convert`, which on Windows is another tool entirely.
-  const im = ["magick", ...(process.platform === "win32" ? [] : ["convert"])].find(cmd => {
-    try {
-      execFileSync(cmd, ["-version"], { stdio: "ignore" });
-      return true;
-    } catch {
-      return false;
-    }
-  });
-  if (!im) return t.skip("ImageMagick is not installed");
+  // ImageMagick 7 only: 6 (Ubuntu's) floods with other fuzz rules.
+  let im;
+  try {
+    if (/^Version: ImageMagick 7\./.test(execFileSync("magick", ["-version"]).toString())) im = "magick";
+  } catch {}
+  if (!im) return t.skip("ImageMagick 7 is not installed");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-image-im-"));
   try {
     const img = noise(9, 6, 0, 11);
@@ -865,15 +862,12 @@ test("a fractional scale keeps a trimmed sheet's record in step", async () => {
 });
 
 test("image key takes what ImageMagick takes: -transparent everywhere, floodfill from the edges", t => {
-  const im = ["magick", ...(process.platform === "win32" ? [] : ["convert"])].find(cmd => {
-    try {
-      execFileSync(cmd, ["-version"], { stdio: "ignore" });
-      return true;
-    } catch {
-      return false;
-    }
-  });
-  if (!im) return t.skip("ImageMagick is not installed");
+  // ImageMagick 7 only: 6 (Ubuntu's) floods with other fuzz rules.
+  let im;
+  try {
+    if (/^Version: ImageMagick 7\./.test(execFileSync("magick", ["-version"]).toString())) im = "magick";
+  } catch {}
+  if (!im) return t.skip("ImageMagick 7 is not installed");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-key-im-"));
   const rnd = (seed => () => ((seed = (seed * 16807) % 2147483647) / 2147483647))(3);
   let cases = 0;
@@ -962,14 +956,14 @@ test("palette files: each format reads back what it wrote, and Lospec's and GIMP
   assert.deepEqual(parseHexList("#000 #1d2b53,7e2553"), [[0, 0, 0], [29, 43, 83], [126, 37, 83]]);
   assert.throws(() => parsePalette("JASC-PAL\n0100\n3\n1 2 3\n", ".pal"), /says 3 colours and has 1/);
   assert.throws(() => parseHexList("#12345g"), /not a hex colour/);
-  // Pillow's GIMP palette reader takes ours.
-  let pillow = true;
+  // Pillow's GIMP palette reader takes ours. Before 11.2 it counted the
+  // Name: and Columns: lines as colours, so it misread GIMP's own files too.
+  let pillow = false;
   try {
-    execFileSync("python3", ["-I", "-c", "import PIL"], { stdio: "ignore" });
-  } catch {
-    pillow = false;
-  }
-  if (!pillow) return t.skip("Pillow is not installed");
+    const [major, minor] = execFileSync("python3", ["-I", "-c", "import PIL; print(PIL.__version__)"]).toString().split(".").map(Number);
+    pillow = major > 11 || (major === 11 && minor >= 2);
+  } catch {}
+  if (!pillow) return t.skip("Pillow 11.2 or later is not installed");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-gpl-"));
   fs.writeFileSync(path.join(dir, "p.gpl"), formatPalette(colours, ".gpl"));
   const read = execFileSync("python3", ["-I", "-c", "import sys\nfrom PIL.GimpPaletteFile import GimpPaletteFile\np=GimpPaletteFile(open(sys.argv[1],'rb')).getpalette()[0]\nprint(','.join(str(v) for v in p[:48]))", path.join(dir, "p.gpl")]).toString().trim();

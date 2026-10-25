@@ -322,6 +322,8 @@ export function unityAnimationClip(name: string, guid: string, fileIds: string[]
 
 /** The guid and sprite file IDs of a .meta Unity (or we) wrote, if it is one. */
 export function readUnityMeta(text: string): UnityIds | undefined {
+  // Unity writes \n, but git's autocrlf hands Windows users \r\n.
+  text = text.replace(/\r\n/g, "\n");
   const guid = /^guid: ([0-9a-f]{32})\s*$/m.exec(text)?.[1];
   if (!guid) return undefined;
   const fileIds: Record<string, string> = {};
