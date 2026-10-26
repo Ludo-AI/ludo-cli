@@ -21,12 +21,16 @@
 //    pivot at the centre of its untrimmed frame, so trimmed and untrimmed
 //    frames sit in the same place. An extruded one keeps the repeated border
 //    out of each rect.
+//  - A pivot from `sprite export --pivot` is every sprite's custom pivot
+//    (alignment 9), in its own rect's units from the bottom-left; --ppu sets
+//    spritePixelsToUnits (100, Unity's default, without it).
 
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { frameRects } from "../toolbox/sheet.js";
 import type { AtlasGrid, FrameLayout } from "./texturepacker.js";
+import type { EngineOptions } from "./engines.js";
 
 export interface UnityGrid extends AtlasGrid {
   loop?: boolean;
@@ -94,9 +98,12 @@ export function unityTextureMeta(
   grid: AtlasGrid,
   layout: FrameLayout = {},
   earlier?: UnityIds,
-  rects?: { x: number; y: number; w: number; h: number }[] // explicit sprite rects (a tileset's), top-left origin
+  rects?: { x: number; y: number; w: number; h: number }[], // explicit sprite rects (a tileset's), top-left origin
+  options: EngineOptions = {}
 ): string {
   check(sheetWidth, sheetHeight, grid, layout);
+  if (options.ppu !== undefined && !(Number.isFinite(options.ppu) && options.ppu > 0)) throw new Error(`Unity export: pixels per unit must be a positive number, got ${options.ppu}`);
+  const p = options.pivot;
   const e = layout.extrude ?? 0;
   const t = rects ? undefined : layout.trim;
   const cells = rects ?? frameRects(sheetWidth, sheetHeight, grid.cols, grid.rows, grid.frames).map(r => ({ x: r.x + e, y: r.y + e, w: r.w - 2 * e, h: r.h - 2 * e }));
@@ -106,8 +113,12 @@ export function unityTextureMeta(
   const sprites = cells.map((r, i) => {
     const { w, h } = r;
     const trimmed = t && t.w === w && t.h === h && (t.w !== t.source_w || t.h !== t.source_h);
-    // The untrimmed frame's centre, in the trimmed rect's own units (y up).
-    const pivot = trimmed ? { x: (t.source_w / 2 - t.x) / w, y: (t.source_h / 2 - (t.source_h - t.y - h)) / h } : { x: 0.5, y: 0.5 };
+    // The pivot (else the untrimmed frame's centre), in the rect's own units
+    // from its bottom-left: a trimmed rect starts t.x, t.y into its frame.
+    const [px, py] = p ? [p.x, p.y] : trimmed ? [t.source_w / 2, t.source_h / 2] : [w / 2, h / 2];
+    const [ox, oy] = trimmed ? [t.x, t.y] : [0, 0];
+    const pivot = { x: (px - ox) / w, y: (oy + h - py) / h };
+    const custom = trimmed || !!p;
     return [
       `    - serializedVersion: 2`,
       `      name: ${yamlText(names[i])}`,
@@ -117,7 +128,7 @@ export function unityTextureMeta(
       `        y: ${sheetHeight - (r.y + h)}`,
       `        width: ${w}`,
       `        height: ${h}`,
-      `      alignment: ${trimmed ? 9 : 0}`,
+      `      alignment: ${custom ? 9 : 0}`,
       `      pivot: {x: ${unityFloat(pivot.x)}, y: ${unityFloat(pivot.y)}}`,
       `      border: {x: 0, y: 0, z: 0, w: 0}`,
       `      customData: `,
@@ -185,7 +196,7 @@ export function unityTextureMeta(
     `  spriteMeshType: 0`,
     `  alignment: 0`,
     `  spritePivot: {x: 0.5, y: 0.5}`,
-    `  spritePixelsToUnits: 100`,
+    `  spritePixelsToUnits: ${unityFloat(options.ppu ?? 100)}`,
     `  spriteBorder: {x: 0, y: 0, z: 0, w: 0}`,
     `  spriteGenerateFallbackPhysicsShape: 1`,
     `  alphaUsage: 1`,
@@ -338,7 +349,7 @@ export function readUnityMeta(text: string): UnityIds | undefined {
  * overwriting: adds -2, -3, ...) next to the sheet, and returns both paths.
  * Throws a plain Error with a readable message.
  */
-export function writeUnityFiles(sheetPath: string, sheetWidth: number, sheetHeight: number, grid: UnityGrid, animation?: string, layout?: FrameLayout): string[] {
+export function writeUnityFiles(sheetPath: string, sheetWidth: number, sheetHeight: number, grid: UnityGrid, animation?: string, layout?: FrameLayout, options: EngineOptions = {}): string[] {
   const dir = path.dirname(path.resolve(sheetPath));
   const base = path.basename(sheetPath, path.extname(sheetPath));
   const metaPath = path.resolve(sheetPath) + ".meta";
@@ -349,7 +360,7 @@ export function writeUnityFiles(sheetPath: string, sheetWidth: number, sheetHeig
     if (err?.code !== "ENOENT") throw new Error(`Could not read ${metaPath}: ${err?.code || err?.message || err}`);
   }
   const guid = earlier?.guid ?? randomBytes(16).toString("hex");
-  const meta = unityTextureMeta(base, guid, sheetWidth, sheetHeight, grid, layout, earlier);
+  const meta = unityTextureMeta(base, guid, sheetWidth, sheetHeight, grid, layout, earlier, undefined, options);
   const ids = spriteFileIds(base, grid.frames, earlier);
   try {
     fs.writeFileSync(metaPath, meta);

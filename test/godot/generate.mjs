@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 // to run.sh only, so it does nothing when the test runner spawns it.
 if (process.env.NODE_TEST_CONTEXT) process.exit(0);
 
-const { spriteFramesTres, writeGodotSpriteFrames, godotTexturePath } = await import("../../dist/tty/godot.js");
+const { spriteFramesTres, writeGodotSpriteFrames, writeGodotScene, godotTexturePath } = await import("../../dist/tty/godot.js");
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const out = path.join(here, "out");
@@ -165,6 +165,23 @@ try {
 
 fs.writeFileSync(path.join(out, "cases.json"), JSON.stringify(cases, null, 2));
 console.log(`generated ${cases.length} cases; non-divisible grid throws as expected`);
+
+// Scenes (sprite export --pivot): an AnimatedSprite2D playing the .tres
+// whose offset puts the pivot at the node's origin, plain and trimmed +
+// extruded (where the frame Godot draws is the untrimmed one).
+const scenes = [];
+for (const [name, grid, fw, fh, layout, pivot] of [
+  ["pivot", { cols: 2, rows: 2, frames: 4, fps: 8 }, 20, 30, {}, { x: 9, y: 28 }],
+  ["pivot-trimmed", { cols: 3, rows: 2, frames: 5, fps: 8 }, 16, 14, { trim: { x: 3, y: 2, w: 12, h: 10, source_w: 20, source_h: 16 }, extrude: 2 }, { x: 11, y: 15 }]
+]) {
+  const sheet = path.join(out, "res", `${name}.png`);
+  const { width, height } = writeSheet(sheet, grid, fw, fh);
+  const tres = writeGodotSpriteFrames(sheet, width, height, grid, "run", layout);
+  const tscn = writeGodotScene(tres, width, height, grid, pivot, "run", layout);
+  scenes.push({ name, tscn: "res://" + path.relative(here, tscn).split(path.sep).join("/"), animation: "run", frames: grid.frames, pivot: [pivot.x, pivot.y] });
+}
+fs.writeFileSync(path.join(out, "scenes.json"), JSON.stringify(scenes, null, 2));
+console.log(`generated ${scenes.length} scenes`);
 
 // TileSets (src/toolbox/tiles.ts godotTileSet): tiles of distinct colours,
 // some left empty, with and without spacing and margin.

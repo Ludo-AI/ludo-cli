@@ -5,7 +5,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spriteFramesTres, writeGodotSpriteFrames, findGodotProject, godotTexturePath } from "../dist/tty/godot.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { animatedSpriteScene, spriteFramesTres, writeGodotScene, writeGodotSpriteFrames, findGodotProject, godotTexturePath } from "../dist/tty/godot.js";
+import { encodePng } from "../dist/tty/png.js";
 
 function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ludo-godot-test-"));
@@ -135,4 +138,43 @@ test("IO failures surface as a plain Error with a clear message", () => {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a pivot comes as an AnimatedSprite2D scene whose offset puts it at the node's origin", () => {
+  const grid = { cols: 2, rows: 2, frames: 3, fps: 8 };
+  assert.equal(
+    animatedSpriteScene("walk.tres", "walk", 64, 64, grid, { x: 10, y: 30 }, "walk"),
+    [
+      `[gd_scene format=3]`,
+      ``,
+      `[ext_resource type="SpriteFrames" path="walk.tres" id="1_frames"]`,
+      ``,
+      `[node name="walk" type="AnimatedSprite2D"]`,
+      `sprite_frames = ExtResource("1_frames")`,
+      `animation = &"walk"`,
+      `autoplay = "walk"`,
+      `offset = Vector2(6, -14)`,
+      ``
+    ].join("\n")
+  );
+  // Trimmed and extruded: Godot draws the untrimmed 20x16 frame.
+  const layout = { trim: { x: 3, y: 2, w: 12, h: 10, source_w: 20, source_h: 16 }, extrude: 2 };
+  assert.match(animatedSpriteScene("p.tres", "a.b", 48, 28, { cols: 3, rows: 2, frames: 5, fps: 8 }, { x: 11, y: 15 }, "default", layout), /\[node name="a_b" type="AnimatedSprite2D"\][^]*offset = Vector2\(-1, -7\)/);
+  const dir = tmpdir();
+  const tres = path.join(dir, "walk.tres");
+  fs.writeFileSync(tres, "");
+  assert.equal(path.basename(writeGodotScene(tres, 64, 64, grid, { x: 10, y: 30 })), "walk.tscn");
+  assert.equal(path.basename(writeGodotScene(tres, 64, 64, grid, { x: 10, y: 30 })), "walk-2.tscn");
+});
+
+test("ludo toolbox sprite export --engine godot --pivot feet writes the scene too", async () => {
+  const dir = tmpdir();
+  const cli = path.join(import.meta.dirname, "..", "dist", "cli.js");
+  const fig = { width: 64, height: 32, rgba: new Uint8Array(64 * 32 * 4) };
+  for (let y = 4; y < 28; y++) for (let x = 0; x < 64; x++) if (x % 32 >= 8 && x % 32 < 24) fig.rgba.set([200, 60, 40, 255], (y * 64 + x) * 4);
+  fs.writeFileSync(path.join(dir, "stand.png"), encodePng(fig));
+  const env = { ...process.env, LUDO_CONFIG_DIR: dir, LUDO_TELEMETRY: "0" };
+  const out = JSON.parse((await promisify(execFile)(process.execPath, [cli, "toolbox", "sprite", "export", "stand.png", "--grid", "2x1", "--engine", "godot", "--pivot", "feet", "--json"], { env, cwd: dir })).stdout);
+  assert.deepEqual(out.engine_files, ["stand.tres", "stand.tscn"]);
+  assert.match(fs.readFileSync(path.join(dir, "stand.tscn"), "utf8"), /path="stand.tres"[^]*offset = Vector2\(0, -12\)/);
 });
