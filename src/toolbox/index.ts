@@ -15,7 +15,6 @@ import "./preview.js";
 import "./audio-analysis.js";
 import "./asset.js";
 import "./model-analysis.js";
-import "./image-analysis.js";
 
 export { TOOLS } from "./registry.js";
 

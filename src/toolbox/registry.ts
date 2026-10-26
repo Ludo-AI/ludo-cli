@@ -31,7 +31,6 @@ export const TOOL_GROUPS: Record<string, string> = {
   image: "Images",
   audio: "Sound effects, music and voices",
   model: "3D models",
-  video: "Videos",
   asset: "Folders of assets: inventories, engine checks, budgets"
 };
 

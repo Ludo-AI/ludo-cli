@@ -49,7 +49,7 @@ export function tileRects(l: TileLayout): TileRect[] {
   return out;
 }
 
-export const isEmpty = (img: Image, r: TileRect) => {
+const isEmpty = (img: Image, r: TileRect) => {
   for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) if (img.rgba[(y * img.width + x) * 4 + 3]) return false;
   return true;
 };
@@ -90,7 +90,7 @@ export function godotTileSet(texturePath: string, l: TileLayout, tiles: TileRect
   ].join("\n");
 }
 
-export const sizeFlag = (raw: string | undefined): [number, number] | undefined => {
+const sizeFlag = (raw: string | undefined): [number, number] | undefined => {
   if (raw === undefined) return undefined;
   const m = /^\s*(\d+)\s*(?:x\s*(\d+))?\s*$/i.exec(raw);
   if (!m) throw new CliError(`--size takes WxH or one number for square tiles, like 16x16 or 32 (got "${raw}")`, EXIT.USAGE);
