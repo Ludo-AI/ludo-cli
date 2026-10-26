@@ -122,9 +122,13 @@ export function drawableName(name: string): string {
 }
 
 // A name cut in the middle to fit, keeping its start and more of its end
-// (takes of one prompt differ at the end: createImage-9f3a2b...-3.png).
+// (takes of one prompt differ at the end: createImage-9f3a2b...-3). The
+// extension goes first: it rarely tells two cells apart, and in a narrow
+// cell it would be all that is left of the end.
 export function fitMiddle(s: string, width: number, size = 1): string {
   if (textWidth(s, size) <= width) return s;
+  const stem = s.replace(/\.[A-Za-z0-9]{1,5}$/, "");
+  if (stem !== s) return fitMiddle(stem, width, size);
   const chars = [...s];
   for (let keep = chars.length - 1; keep > 1; keep--) {
     const tail = Math.ceil((2 * keep) / 3);
@@ -151,7 +155,10 @@ export function drawImageContact(images: { name: string; image: Image; size?: st
     const number = `${k + 1} `;
     const caption = number + fitMiddle(drawableName(name), l.cell - textWidth(number, SIZE), SIZE);
     text(img, x, y + l.cell + 4, caption, INK, SIZE);
-    text(img, x, y + l.cell + 8 + textHeight(SIZE), fitText(`${size ?? `${image.width}x${image.height}`}${s !== 1 ? ` at ${round(s, 2)}x` : ""}`, l.cell, SIZE), DIM, SIZE);
+    // The size, and the scale when there is room for it.
+    const real = size ?? `${image.width}x${image.height}`;
+    const withScale = s !== 1 ? `${real} at ${round(s, 2)}x` : real;
+    text(img, x, y + l.cell + 8 + textHeight(SIZE), fitText(textWidth(withScale, SIZE) <= l.cell ? withScale : real, l.cell, SIZE), DIM, SIZE);
     return { x, y, scale: s, label: caption, drawn: { x: ix, y: iy, width: shownImg.width, height: shownImg.height } };
   });
   return { image: img, layout: l, placed };

@@ -99,7 +99,7 @@ test("image contact: takes stay apart (numbered, cut in the middle), other scrip
   const labels = out.images.map(i => i.label);
   assert.equal(new Set(labels).size, labels.length, labels.join(" | "));
   const takes = out.images.filter(i => i.file.startsWith("createImage"));
-  for (const t of takes) assert.match(t.label, new RegExp(`^${t.number} creat.*\\.\\.\\..*-${t.file.slice(-5, -4)}\\.png$`), t.label);
+  for (const t of takes) assert.match(t.label, new RegExp(`^${t.number} creat.*\\.\\.\\..*-${t.file.slice(-5, -4)}$`), t.label);
   const gif = out.images.find(i => i.file === "anim.gif");
   assert.deepEqual([gif.width, gif.height, gif.frames], [20, 10, 3]);
   // Accents go, other scripts become a hash that keeps the names apart.
@@ -107,6 +107,8 @@ test("image contact: takes stay apart (numbered, cut in the middle), other scrip
   assert.match(drawableName("héros_ドラゴン.png"), /^heros_~[0-9a-f]{4}\.png$/);
   assert.notEqual(drawableName("héros_ドラゴン.png"), drawableName("héros_ゴブリン.png"));
   assert.equal(fitMiddle("abcdefghij", textWidth("a...ghij")), "a...ghij");
+  // In a narrow cell the extension goes before the end of the name does.
+  assert.equal(fitMiddle("attack__0390027a99.png", textWidth("att...7a99")), "at...27a99");
   // Nothing readable is an error.
   const none = tmp();
   fs.writeFileSync(path.join(none, "broken.png"), "not a png");
