@@ -1,8 +1,8 @@
-// `ludo toolbox asset ...` on synthetic folders: what manifest says each file
-// is, the loader code it writes (Phaser's type-checked against Phaser's own
-// types and loaded in Phaser 3 and 4, PixiJS's manifest loaded in PixiJS 8,
-// both in headless Chromium when one is installed), lint's engine rules,
-// budget's limits, scale's factors and diff's verdicts.
+// `ludo toolbox asset manifest` on synthetic folders: what it says each file
+// is, the gaps it finds and the Ludo commands it points to, and the loaders
+// it writes (Phaser's TypeScript type-checked against Phaser's own types, it
+// and the asset pack loaded in Phaser 3 and 4, PixiJS's manifest loaded in
+// PixiJS 8, in headless Chromium when one is installed).
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -12,10 +12,10 @@ import http from "node:http";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { encodePng, withText, readPng } from "../dist/tty/png.js";
+import { encodePng, withText } from "../dist/tty/png.js";
 import { encodeWav } from "../dist/toolbox/wav.js";
 import { EXIT } from "../dist/errors.js";
-import { assetKeys, characterOf, dHash, gpuBytes, lintAssets, parseBudget, parseBytes, parseSize, soundKind } from "../dist/toolbox/asset.js";
+import { assetKeys, characterOf, dHash, soundKind } from "../dist/toolbox/asset.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const CLI = path.join(root, "dist", "cli.js");
@@ -109,22 +109,35 @@ function writeSound(file, { seconds, rate = 44100, channels = 1, bits = 16, kind
   return file;
 }
 
-// A .gltf with one triangle of the given height, joints and clips.
-function writeGltf(file, { height = 1.8, minY = 0, joints = [], clips = [], scenes = 1, scene = 0 }) {
-  const nodes = [{ mesh: 0, name: "body", ...(joints.length ? { skin: 0 } : {}) }, ...joints.map(name => ({ name }))];
+// A .gltf (or, named .glb, a GLB) with one triangle of the given height,
+// joints and clips; `mesh: false` leaves only the skeleton and its clips, as
+// Ludo's animation files are.
+function writeGltf(file, { height = 1.8, minY = 0, joints = [], clips = [], scenes = 1, scene = 0, mesh = true }) {
+  const nodes = [mesh ? { mesh: 0, name: "body", ...(joints.length ? { skin: 0 } : {}) } : { name: "root" }, ...joints.map(name => ({ name }))];
   const accessors = [{ count: 3, componentType: 5126, type: "VEC3", min: [0, minY, 0], max: [0.5, minY + height, 0.2] }, { count: 2, componentType: 5126, type: "SCALAR", min: [0], max: [1] }];
   const json = {
     asset: { version: "2.0" },
     ...(scene === null ? {} : { scene }),
     scenes: Array.from({ length: scenes }, () => ({ nodes: [0] })),
     nodes,
-    meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+    ...(mesh ? { meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }] } : {}),
     accessors,
-    ...(joints.length ? { skins: [{ joints: joints.map((_, i) => i + 1) }] } : {}),
+    ...(joints.length && mesh ? { skins: [{ joints: joints.map((_, i) => i + 1) }] } : {}),
     ...(clips.length ? { animations: clips.map(name => ({ name, channels: [{ sampler: 0, target: { node: 1, path: "rotation" } }], samplers: [{ input: 1, output: 1 }] })) } : {})
   };
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(json));
+  if (!file.endsWith(".glb")) fs.writeFileSync(file, JSON.stringify(json));
+  else {
+    // GLB: a 12-byte header, then the JSON chunk padded with spaces to 4 bytes.
+    const text = Buffer.from(JSON.stringify(json).padEnd(Math.ceil(JSON.stringify(json).length / 4) * 4, " "));
+    const head = Buffer.alloc(20);
+    head.write("glTF", 0);
+    head.writeUInt32LE(2, 4);
+    head.writeUInt32LE(20 + text.length, 8);
+    head.writeUInt32LE(text.length, 12);
+    head.write("JSON", 16);
+    fs.writeFileSync(file, Buffer.concat([head, text]));
+  }
   return file;
 }
 
@@ -176,8 +189,10 @@ test("manifest says what each file is, with its grid, sizes and hashes", async (
   assert.deepEqual(by["models/knight.gltf"].model.joints, ["Hips", "Spine", "Head"]);
   assert.match(by["ui/coin.png"].sha256, /^[0-9a-f]{64}$/);
   assert.equal(by["ui/coin.png"].bytes, fs.statSync(path.join(dir, "ui/coin.png")).size);
-  assert.ok(!m.assets.some(a => "file" in a || "phash" in a));
-  assert.equal(r.json.hint.command.startsWith("ludo toolbox asset lint"), true);
+  assert.ok(!m.assets.some(a => "file" in a || "phash" in a || "clipTargets" in a));
+  // One character, one of each thing: nothing to compare, so no gaps.
+  assert.deepEqual(m.gaps, []);
+  assert.match(r.json.hint.command, /^ludo toolbox sprite export .*--engine godot$/);
 });
 
 test("manifest groups a character's animations and finds duplicates", async () => {
@@ -244,26 +259,30 @@ test("unit: keys, characters, sound kinds and the difference hash", () => {
 
 // ---- --emit ----
 
-test("--emit writes Phaser, Godot, Unity, PixiJS and JSON loaders with stable keys", async () => {
+test("--emit writes Phaser, PixiJS and JSON loaders with stable keys, one file of each set of duplicates", async () => {
   const dir = gameFolder();
   const out = path.join(tmp(), "gen");
-  const r = await run(["toolbox", "asset", "manifest", dir, "--emit", "phaser", "--emit", "godot", "--emit", "unity", "--emit", "pixi", "--emit", "json", "--base", "assets", "--out", out]);
+  const r = await run(["toolbox", "asset", "manifest", dir, "--emit", "phaser", "--emit", "pixi", "--emit", "json", "--base", "assets", "--out", out]);
   assert.equal(r.code, EXIT.OK, r.stderr);
-  assert.deepEqual(r.json.emitted.map(f => path.basename(f)), ["assets.ts", "assets.gd", "LudoAssets.cs", "assets-manifest.json", "assets.json"]);
+  assert.deepEqual(r.json.emitted.map(f => path.basename(f)), ["assets-pack.json", "assets.ts", "assets-manifest.json", "assets.json"]);
   const phaser = fs.readFileSync(path.join(out, "assets.ts"), "utf8");
   assert.match(phaser, /SpritesHeroWalk = "sprites_hero_walk",/);
   assert.match(phaser, /scene\.load\.spritesheet\(AssetKey\.SpritesHeroWalk, "sprites\/hero_walk\.png", \{ frameWidth: 32, frameHeight: 48, endFrame: 7 \}\);/);
   assert.match(phaser, /scene\.load\.audio\(AssetKey\.AudioOverworld, "audio\/overworld\.wav"\);/);
   assert.match(phaser, /path = "assets\/"/);
   assert.match(phaser, /\/\/ models\/knight\.gltf: a 3D model; Phaser has no glTF loader/);
-  const godot = fs.readFileSync(path.join(out, "assets.gd"), "utf8");
-  assert.match(godot, /"sprites_hero_walk": preload\("assets\/sprites\/hero_walk\.png"\),/);
-  assert.match(godot, /"sprites_hero_walk": \{"hframes": 4, "vframes": 2, "frames": 8, "fps": 12\},/);
-  const unity = fs.readFileSync(path.join(out, "LudoAssets.cs"), "utf8");
-  assert.match(unity, /public const string SpritesHeroWalk = "assets\/sprites\/hero_walk\.png";/);
-  assert.match(unity, /new Entry\("sprites_hero_walk", SpritesHeroWalk, Kind\.Spritesheet, 8, 4, 2, 12f\),/);
+  const pack = JSON.parse(fs.readFileSync(path.join(out, "assets-pack.json"), "utf8"));
+  assert.equal(pack.assets.path, "assets/");
+  assert.deepEqual(pack.assets.files.find(f => f.key === "sprites_hero_walk"), { type: "spritesheet", key: "sprites_hero_walk", url: "sprites/hero_walk.png", frameConfig: { frameWidth: 32, frameHeight: 48, endFrame: 7 } });
+  assert.deepEqual(pack.meta.sheets.sprites_hero_walk, { frames: 8, frameRate: 12 });
+  // The three coins look the same at one size: each loader queues one of them.
+  const coins = ["ui/coin.png", "ui/coin-copy.png", "ui/coin-old.png"];
+  assert.equal(pack.assets.files.filter(f => coins.includes(f.url)).length, 1);
+  assert.equal(coins.filter(c => phaser.includes(`, "${c}");`)).length, 1);
+  assert.equal(coins.filter(c => phaser.includes(`// ${c}: left out, the same picture as`)).length, 2);
   const pixi = JSON.parse(fs.readFileSync(path.join(out, "assets-manifest.json"), "utf8"));
   assert.deepEqual(pixi.bundles.find(b => b.name === "textures").assets, [{ alias: "textures_lava", src: "assets/textures/lava.png" }]);
+  assert.equal(pixi.bundles.find(b => b.name === "images").assets.length, 1);
   assert.equal(JSON.parse(fs.readFileSync(path.join(out, "assets.json"), "utf8")).count, 11);
   // Keys are the same run after run; the loader overwrites its own copy.
   const again = await run(["toolbox", "asset", "manifest", dir, "--emit", "phaser", "--base", "assets", "--out", out]);
@@ -272,23 +291,35 @@ test("--emit writes Phaser, Godot, Unity, PixiJS and JSON loaders with stable ke
   assert.ok(!fs.existsSync(path.join(out, "assets-2.ts")));
 });
 
-test("Godot paths come from project.godot, and files Godot cannot import are left out", async () => {
-  const project = tmp();
-  fs.writeFileSync(path.join(project, "project.godot"), "");
-  const dir = path.join(project, "art");
-  writeSheet(path.join(dir, "hero.png"), disc(16, 16));
-  fs.mkdirSync(dir, { recursive: true });
-  fs.copyFileSync(path.join(root, "test/corpus/gif", fs.readdirSync(path.join(root, "test/corpus/gif")).find(f => f.endsWith(".gif"))), path.join(dir, "spin.gif"));
-  // A WAV named .mp3, as some downloads are: Godot's MP3 importer fails on it.
-  writeSound(path.join(dir, "fake.mp3"), { seconds: 0.5, kind: "blip" });
+test("a PNG and its WebP copy load once, under the plain key, with the stamp's frame rate", async () => {
+  const dir = tmp();
+  const png = writeSheet(path.join(dir, "sprites/hero_walk.png"), figureSheet({ cols: 4, rows: 2 }), { cols: 4, rows: 2, frames: 8, fps: 12 });
+  const conv = await run(["toolbox", "image", "convert", png, "--to", "webp", "--out", path.join(dir, "sprites")]);
+  assert.equal(conv.code, EXIT.OK, conv.stderr);
   const out = path.join(tmp(), "gen");
-  const r = await run(["toolbox", "asset", "manifest", dir, "--emit", "godot", "--out", out]);
+  const r = await run(["toolbox", "asset", "manifest", dir, "--emit", "phaser", "--base", "", "--out", out]);
   assert.equal(r.code, EXIT.OK, r.stderr);
-  const gd = fs.readFileSync(path.join(out, "assets.gd"), "utf8");
-  assert.match(gd, /"hero": preload\("res:\/\/art\/hero\.png"\),/);
-  assert.match(gd, /# "spin": spin\.gif left out: Godot does not import GIF/);
-  assert.match(gd, /# "fake": fake\.mp3 left out: named \.mp3, but a WAV inside/);
-  assert.ok(!/preload\("res:\/\/art\/spin\.gif"\)/.test(gd));
+  assert.deepEqual(r.json.duplicates.map(d => d.files), [["sprites/hero_walk.png", "sprites/hero_walk.webp"]]);
+  const pack = JSON.parse(fs.readFileSync(path.join(out, "assets-pack.json"), "utf8"));
+  assert.equal(pack.assets.files.length, 1);
+  assert.equal(pack.assets.files[0].key, "sprites_hero_walk");
+  assert.deepEqual(pack.meta.sheets.sprites_hero_walk, { frames: 8, frameRate: 12 });
+  assert.equal(pack.assets.path, undefined, "an empty --base leaves the loader's own path");
+  assert.ok(r.json.notes.some(n => /left out, the same picture as/.test(n)));
+});
+
+test("--emit godot and unity point to sprite export", async () => {
+  const dir = tmp();
+  writeSheet(path.join(dir, "a.png"), disc(16, 16));
+  for (const engine of ["godot", "unity"]) {
+    const r = await run(["toolbox", "asset", "manifest", dir, "--emit", engine]);
+    assert.equal(r.code, EXIT.USAGE);
+    assert.ok(r.stderr.includes(`--emit takes phaser, pixi, json (got "${engine}"). For ${engine === "godot" ? "Godot" : "Unity"}, write each sheet's engine files: ludo toolbox sprite export <sheet> --engine ${engine}`), r.stderr);
+  }
+  // --engine names only the engines files are written for.
+  const other = await run(["toolbox", "sprite", "export", path.join(dir, "a.png"), "--engine", "unreal"]);
+  assert.equal(other.code, EXIT.USAGE);
+  assert.match(other.stderr, /--engine supports: godot, texturepacker, unity/);
 });
 
 test("the Phaser loader type-checks against Phaser 3's and Phaser 4's own types", async () => {
@@ -391,7 +422,12 @@ for (const lib of ["phaser4", "phaser3"]) {
               },
               create() {
                 const keys = Object.values(mod.AssetKey);
-                resolve({ path: this.load.path, textures: keys.map(k => [k, this.textures.exists(k) ? this.textures.get(k).frameTotal - 1 : -1]), sheets: mod.SHEETS });
+                const textures = keys.map(k => [k, this.textures.exists(k) ? this.textures.get(k).frameTotal - 1 : -1]);
+                // The asset pack, in a fresh loader run: the same textures.
+                for (const k of keys) this.textures.remove(k);
+                this.load.pack("ludo", "/gen/assets-pack.json");
+                this.load.once("complete", () => resolve({ path: this.load.path, textures, packed: keys.map(k => [k, this.textures.exists(k) ? this.textures.get(k).frameTotal - 1 : -1]), sheets: mod.SHEETS, packSheets: this.cache.json.get("ludo").meta.sheets }));
+                this.load.start();
               }
             }
           });
@@ -404,7 +440,9 @@ for (const lib of ["phaser4", "phaser3"]) {
       ["sprites_hero_walk", 7],
       ["textures_lava", 0]
     ]);
+    assert.deepEqual(got.packed, got.textures);
     assert.deepEqual(got.sheets, { sprites_hero_walk: { frames: 7, frameRate: 12 } });
+    assert.deepEqual(got.packSheets, got.sheets);
     assert.equal(got.path, "", "preload() puts the loader's path back");
   });
 }
@@ -435,191 +473,70 @@ test("pixi8 loads the emitted manifest's bundles", async t => {
   assert.deepEqual(got, { frames: 7, lava: [64, 64] });
 });
 
-// ---- lint ----
+// ---- gaps ----
 
-test("lint checks Godot's rules: GIF and Opus not imported, 16-bit PNGs, sample rates; errors exit 1", async () => {
+test("gaps: a move most other characters have, sheets without their sound, an unrigged and an unanimated model", async () => {
   const dir = tmp();
-  fs.copyFileSync(path.join(root, "test/corpus/gif", fs.readdirSync(path.join(root, "test/corpus/gif")).find(f => f.endsWith(".gif"))), path.join(dir, "spin.gif"));
-  fs.copyFileSync(path.join(root, "test/corpus/pngsuite/basn6a16.png"), path.join(dir, "deep.png"));
-  writeSound(path.join(dir, "hi_rate.wav"), { seconds: 0.5, rate: 96000, kind: "blip" });
-  writeSheet(path.join(dir, "Hero.png"), disc(16, 16));
-  const r = await run(["toolbox", "asset", "lint", dir, "--engine", "godot"]);
-  assert.equal(r.code, EXIT.ERROR, r.stderr);
-  const rules = r.json.issues.map(i => `${i.file} ${i.rule} ${i.severity}`);
-  assert.deepEqual(rules, ["spin.gif format error", "deep.png 16-bit-png info", "Hero.png file-name info", "hi_rate.wav sample-rate info"]);
-  const gif = r.json.issues[0];
-  assert.match(gif.fix, /^ludo toolbox image convert .*spin\.gif --to png/);
-  assert.match(gif.source, /^https:\/\/docs\.godotengine\.org\//);
-  assert.equal(r.json.passed, false);
-  assert.ok(r.json.hint.command.startsWith("ludo toolbox image convert"));
-});
-
-test("lint checks Unity, Unreal and the web: WebP, MP3 loops, bit depths, sizes, power of two, glTF scenes", async () => {
-  const dir = tmp();
-  fs.writeFileSync(path.join(dir, "lava.webp"), fs.readFileSync(path.join(root, "test/corpus/webp", fs.readdirSync(path.join(root, "test/corpus/webp")).find(f => f.endsWith(".webp")))));
-  writeSheet(path.join(dir, "floor_tile.png"), tile(96, 96));
-  writeSheet(path.join(dir, "banner.png"), { width: 4100, height: 8, rgba: new Uint8Array(4100 * 8 * 4).fill(255) });
-  fs.copyFileSync(path.join(root, "test/corpus/mp3/lame-24k-js-v4.mp3"), path.join(dir, "music_loop.mp3"));
-  writeSound(path.join(dir, "float.wav"), { seconds: 0.3, bits: 32, kind: "blip" });
-  writeSound(path.join(dir, "deep.wav"), { seconds: 0.3, bits: 24, kind: "blip" });
-  writeGltf(path.join(dir, "level.gltf"), { scenes: 3, scene: 1 });
-  const lint = async engine => {
-    const r = await run(["toolbox", "asset", "lint", dir, "--engine", engine]);
-    return { code: r.code, rules: r.json.issues.map(i => `${i.file} ${i.rule} ${i.severity}`) };
-  };
-  const unity = await lint("unity");
-  assert.equal(unity.code, EXIT.ERROR);
-  for (const want of ["lava.webp format error", "music_loop.mp3 mp3-loop warning", "floor_tile.png power-of-two warning", "level.gltf gltf-scenes warning"]) assert.ok(unity.rules.includes(want), `${want} in ${unity.rules}`);
-  const unreal = await lint("unreal");
-  for (const want of ["float.wav format error", "deep.wav format info", "floor_tile.png power-of-two warning"]) assert.ok(unreal.rules.includes(want), `${want} in ${unreal.rules}`);
-  const web = await lint("web");
-  assert.equal(web.code, EXIT.OK);
-  for (const want of ["banner.png texture-size warning", "floor_tile.png power-of-two warning", "level.gltf gltf-scenes info"]) assert.ok(web.rules.includes(want), `${want} in ${web.rules}`);
-  // --strict fails on warnings too.
-  assert.equal((await run(["toolbox", "asset", "lint", dir, "--engine", "web", "--strict"])).code, EXIT.ERROR);
-});
-
-test("lint takes its own engines; other commands still refuse them", async () => {
-  const dir = tmp();
-  writeSheet(path.join(dir, "a.png"), disc(16, 16));
-  assert.equal((await run(["toolbox", "asset", "lint", dir, "--engine", "phaser"])).code, EXIT.OK);
-  const bad = await run(["toolbox", "asset", "lint", dir, "--engine", "texturepacker"]);
-  assert.equal(bad.code, EXIT.USAGE);
-  assert.match(bad.stderr, /asset lint checks godot, unity, unreal, phaser, web/);
-  assert.equal((await run(["toolbox", "asset", "lint", dir])).code, EXIT.USAGE);
-  const other = await run(["toolbox", "sprite", "export", path.join(dir, "a.png"), "--engine", "unreal"]);
-  assert.equal(other.code, EXIT.USAGE);
-  assert.match(other.stderr, /--engine supports: godot, texturepacker, unity/);
-});
-
-test("unit: names Windows rejects and names that differ only by case", () => {
-  const asset = p => ({ path: p, file: p, type: "image", kind: "image", reason: "", format: "png", bytes: 1, sha256: "", width: 16, height: 16 });
-  const issues = lintAssets([asset("ui/aux.png"), asset("ui/Hero.png"), asset("ui/hero.png"), asset("odd./x.png")], "web");
-  assert.deepEqual(
-    issues.map(i => `${i.file} ${i.rule} ${i.severity}`),
-    ["odd./x.png file-name error", "ui/aux.png file-name error", "ui/Hero.png file-name error", "ui/hero.png file-name error"]
-  );
-  assert.match(issues[2].detail, /the same name as ui\/hero\.png but for case/);
-});
-
-// ---- budget ----
-
-test("unit: bytes, GPU memory and the budget file", () => {
-  assert.equal(parseBytes("4MB", "x"), 4 * 1024 * 1024);
-  assert.equal(parseBytes("512 kb", "x"), 512 * 1024);
-  assert.equal(parseBytes(1000, "x"), 1000);
-  assert.throws(() => parseBytes("lots", "image.bytes"), /image\.bytes takes bytes/);
-  assert.equal(gpuBytes(100, 60, false, false), 100 * 60 * 4);
-  assert.equal(gpuBytes(100, 60, false, true), 128 * 64 * 4);
-  assert.equal(gpuBytes(64, 64, true, false), Math.round(64 * 64 * 4 * (4 / 3)));
-  const b = parseBudget({ total: { bytes: "1MB" }, image: { side: 256, total_gpu: "1MB" }, gpu: { mipmaps: true } }, "b.json");
-  assert.deepEqual(b.sections.get("total"), { file: {}, total: { bytes: 1024 * 1024 } });
-  assert.deepEqual(b.sections.get("image"), { file: { side: 256 }, total: { gpu: 1024 * 1024 } });
-  assert.equal(b.gpu.mipmaps, true);
-  assert.throws(() => parseBudget({ images: {} }, "b.json"), /unknown section "images"/);
-  assert.throws(() => parseBudget({ image: { width: 3 } }, "b.json"), /unknown limit "image\.width"/);
-});
-
-test("budget reports totals and the biggest files, and with a config gates them (--ci exits 1)", async () => {
-  const dir = gameFolder();
-  const plain = await run(["toolbox", "asset", "budget", dir]);
-  assert.equal(plain.code, EXIT.OK, plain.stderr);
-  assert.equal(plain.json.config, null);
-  assert.equal(plain.json.totals.total.files, 11);
-  assert.equal(plain.json.totals.audio.seconds, 24.3);
-  assert.equal(plain.json.totals.spritesheet.gpu, 128 * 96 * 4 * 2 + 96 * 96 * 4 + 256 * 32 * 4);
-  assert.equal(plain.json.biggest.bytes[0].path, "audio/overworld.wav");
-  assert.deepEqual(plain.json.violations, []);
-  const config = path.join(tmp(), "ludo-budget.json");
-  fs.writeFileSync(config, JSON.stringify({ total: { seconds: 20 }, image: { side: 100 }, sfx: { seconds: 0.2 }, model: { triangles: 0 }, gpu: { power_of_two: true } }));
-  const gated = await run(["toolbox", "asset", "budget", dir, "--config", config, "--ci"]);
-  assert.equal(gated.code, EXIT.ERROR);
-  const v = gated.json.violations.map(x => `${x.file ?? "all"} ${x.limit}`);
-  assert.deepEqual(v.sort(), ["all total_seconds", "audio/blip.wav seconds", "models/knight.gltf triangles", "sprites/hero_walk.png side", "sprites/hero_walk2.png side", "sprites/slime_hop.png side"].sort());
-  assert.equal(gated.json.gpu.power_of_two, true);
-  // Without --ci it reports and passes.
-  assert.equal((await run(["toolbox", "asset", "budget", dir, "--config", config])).code, EXIT.OK);
-  // A budget in the folder is found on its own.
-  fs.copyFileSync(config, path.join(dir, "ludo-budget.json"));
-  assert.equal((await run(["toolbox", "asset", "budget", dir, "--ci"])).code, EXIT.ERROR);
-});
-
-// ---- scale ----
-
-test("scale gives Unity pixels per unit and Godot pixel_size from a reference, and flags outliers", async () => {
-  const dir = tmp();
-  const walk = writeSheet(path.join(dir, "hero_walk.png"), figureSheet({ cols: 4, rows: 1, figH: 36 }), { cols: 4, rows: 1, frames: 4, fps: 10 });
-  const idle = writeSheet(path.join(dir, "hero_idle.png"), figureSheet({ cols: 4, rows: 1, figH: 30 }), { cols: 4, rows: 1, frames: 4, fps: 10 });
-  const slime = writeSheet(path.join(dir, "slime.png"), figureSheet({ cols: 2, rows: 1, cw: 48, ch: 24, figH: 12 }), { cols: 2, rows: 1, frames: 2, fps: 10 });
-  const model = writeGltf(path.join(dir, "knight.gltf"), { height: 180 });
-  const r = await run(["toolbox", "asset", "scale", idle, `${slime}=0.5m`, model, "--reference", `${walk}=1.8m`]);
+  // Each move its own frame count, so none passes for another's duplicate.
+  const MOVES = { idle: 3, walk: 4, attack: 5 };
+  for (const c of ["hero", "rogue"]) for (const [move, cols] of Object.entries(MOVES)) writeSheet(path.join(dir, `sprites/${c}_${move}.png`), figureSheet({ cols, rows: 1, hue: c.length * 40 }), { cols, rows: 1, frames: cols, fps: 8 });
+  // The slime walks only: hero and rogue both idle and attack.
+  writeSheet(path.join(dir, "sprites/slime_walk.png"), figureSheet({ cols: 4, rows: 1, cw: 40, ch: 20, figH: 10 }));
+  // Some sheets have their sounds, by name.
+  writeSound(path.join(dir, "audio/hero_walk_steps.wav"), { seconds: 0.3, kind: "blip" });
+  writeSound(path.join(dir, "audio/rogue_attack.wav"), { seconds: 0.3, kind: "blip" });
+  writeGltf(path.join(dir, "models/knight.glb"), { joints: ["Hips", "Spine", "Head"] });
+  writeGltf(path.join(dir, "models/barrel.glb"), {});
+  const r = await run(["toolbox", "asset", "manifest", dir]);
   assert.equal(r.code, EXIT.OK, r.stderr);
-  const by = Object.fromEntries(r.json.assets.map(a => [a.path, a]));
-  assert.deepEqual(r.json.reference, { path: "hero_walk.png", height: 1.8, unit: "m", measured: 36, measured_unit: "px" });
-  assert.deepEqual(by["hero_walk.png"].unity, { pixels_per_unit: 20 });
-  assert.deepEqual(by["hero_walk.png"].godot, { pixel_size: 0.05 });
-  assert.equal(by["hero_idle.png"].assumed, true);
-  // The idle is drawn smaller than the walk: the same character would shrink.
-  assert.match(by["hero_idle.png"].outlier, /17% shorter.*hero changes size between animations/);
-  assert.deepEqual(by["slime.png"].unity, { pixels_per_unit: 24 });
-  assert.equal(by["slime.png"].outlier, undefined);
-  assert.deepEqual(by["knight.gltf"].godot, { scale: 0.01 });
-  assert.match(by["knight.gltf"].outlier, /centimetres/);
-  assert.deepEqual(r.json.outliers.sort(), ["hero_idle.png", "knight.gltf"]);
-  // In screen pixels: Godot's Sprite2D scale, Unity's PPU at --ppu.
-  const px = await run(["toolbox", "asset", "scale", "--reference", `${walk}=72px`, "--ppu", "32"]);
-  assert.deepEqual(px.json.assets[0].godot, { scale: 2 });
-  assert.deepEqual(px.json.assets[0].unity, { pixels_per_unit: 16 });
-  assert.equal((await run(["toolbox", "asset", "scale", walk])).code, EXIT.USAGE);
-  assert.equal((await run(["toolbox", "asset", "scale", "--reference", `${walk}=tall`])).code, EXIT.USAGE);
+  const gaps = r.json.gaps.map(g => `${g.kind} ${g.subject} ${g.missing}`);
+  assert.deepEqual(gaps, [
+    "animation slime attack",
+    "animation slime idle",
+    "sound sprites/hero_attack.png sound",
+    "sound sprites/hero_idle.png sound",
+    "sound sprites/rogue_idle.png sound",
+    "sound sprites/rogue_walk.png sound",
+    "sound sprites/slime_walk.png sound",
+    "rig models/barrel.glb rig",
+    "3d-animation models/knight.glb animation"
+  ]);
+  const by = Object.fromEntries(r.json.gaps.map(g => [`${g.kind} ${g.subject} ${g.missing}`, g]));
+  assert.equal(by["animation slime idle"].detail, "slime has walk but no idle, which hero and rogue have");
+  assert.deepEqual(by["animation slime idle"].evidence, ["sprites/hero_idle.png", "sprites/rogue_idle.png"]);
+  assert.equal(by["animation slime idle"].hint.command, 'ludo sprite animate --initial-image <a frame of slime> --motion-prompt "idle"');
+  // A Ludo sheet (its stamp) gets create-audio; another gets a sound effect.
+  assert.equal(by["sound sprites/hero_idle.png sound"].hint.command, "ludo sprite create-audio --spritesheet-video-url <its video_url>");
+  assert.deepEqual(by["sound sprites/hero_idle.png sound"].evidence, ["audio/hero_walk_steps.wav", "audio/rogue_attack.wav"]);
+  assert.equal(by["sound sprites/slime_walk.png sound"].hint.command, 'ludo audio sound-effect --description "<what slime doing walk sounds like>"');
+  assert.match(by["rig models/barrel.glb rig"].hint.command, /^ludo model rig --model .*barrel\.glb$/);
+  assert.match(by["3d-animation models/knight.glb animation"].hint.command, /^ludo model animate-preset --model .*knight\.glb --preset-id <id>$/);
+  assert.equal(r.json.hint.command, by["animation slime attack"].hint.command);
 });
 
-test("unit: heights", () => {
-  assert.deepEqual(parseSize("1.8m", "x"), { value: 1.8, unit: "m" });
-  assert.deepEqual(parseSize("180cm", "x"), { value: 1.8, unit: "m" });
-  assert.deepEqual(parseSize("32px", "x"), { value: 32, unit: "px" });
-  assert.throws(() => parseSize("0m", "--reference"), /--reference takes a height/);
-});
-
-// ---- diff ----
-
-test("diff of two sheets: frames, frame size and ground are breaking; --image draws both", async () => {
+test("gaps need evidence: an animation file for the rig, Ludo's download keeping the video but no audio", async () => {
   const dir = tmp();
-  const a = writeSheet(path.join(dir, "walk.png"), figureSheet({ cols: 4, rows: 2, ground: 2 }), { cols: 4, rows: 2, frames: 8, fps: 12 });
-  const b = writeSheet(path.join(dir, "walk2.png"), figureSheet({ cols: 5, rows: 2, ground: 8, hue: 30 }), { cols: 5, rows: 2, frames: 10, fps: 10 });
-  const r = await run(["toolbox", "asset", "diff", a, b, "--image", "--out", path.join(dir, "out")]);
+  // Ludo's download of a forge sheet: the sheet and its video, no audio.
+  const job = path.join(dir, "sprites/bat_fly");
+  writeSheet(path.join(job, "animateSprite-1a2b3c4d-1.png"), figureSheet({ cols: 4, rows: 1 }), { cols: 4, rows: 1, frames: 4, fps: 10 });
+  fs.writeFileSync(path.join(job, "animateSprite-1a2b3c4d-2.mp4"), "not really a video");
+  // A hydra download: its audio sits with it.
+  const hydra = path.join(dir, "sprites/bat_dive");
+  writeSheet(path.join(hydra, "animateSprite-9f8e7d6c-1.png"), figureSheet({ cols: 4, rows: 1, hue: 90 }), { cols: 4, rows: 1, frames: 4, fps: 10 });
+  fs.writeFileSync(path.join(hydra, "animateSprite-9f8e7d6c-2.mp4"), "not really a video");
+  writeSound(path.join(hydra, "animateSprite-9f8e7d6c-3.wav"), { seconds: 0.3, kind: "blip" });
+  // A rigged knight, and Ludo's animation file for its bones.
+  writeGltf(path.join(dir, "models/knight.glb"), { joints: ["Hips", "Spine", "Head"] });
+  writeGltf(path.join(dir, "models/knight_wave.glb"), { joints: ["Hips", "Spine", "Head"], clips: ["Wave"], mesh: false });
+  const r = await run(["toolbox", "asset", "manifest", dir]);
   assert.equal(r.code, EXIT.OK, r.stderr);
-  assert.equal(r.json.compatible, false);
-  assert.deepEqual(r.json.breaking, ["frames 8→10", "ground moved 6 px up"]);
-  assert.ok(r.json.changes.includes("fps 12→10"));
-  assert.equal(r.json.a.ground, 2);
-  assert.equal(r.json.b.ground, 8);
-  assert.ok(r.json.similarity > 0 && r.json.similarity < 1);
-  const png = readPng(fs.readFileSync(path.resolve(fs.realpathSync(os.tmpdir()), r.json.image))).image;
-  assert.equal(png.height, 48 + 16);
-  assert.equal(png.width, 32 * 3 + 8 * 4);
-  // The same sheet against itself drops straight in.
-  const same = await run(["toolbox", "asset", "diff", a, a]);
-  assert.equal(same.json.compatible, true);
-  assert.deepEqual(same.json.breaking, []);
-  assert.equal(same.json.similarity, 1);
-  assert.equal(same.json.palette.similarity, 1);
-});
-
-test("diff of sounds and models, and refusals", async () => {
-  const dir = tmp();
-  const a = writeSound(path.join(dir, "hit.wav"), { seconds: 0.4, kind: "blip" });
-  const b = writeSound(path.join(dir, "hit2.wav"), { seconds: 0.8, kind: "blip" });
-  const s = await run(["toolbox", "asset", "diff", a, b]);
-  assert.equal(s.code, EXIT.OK, s.stderr);
-  assert.deepEqual(s.json.breaking, ["duration 0.4→0.8 s"]);
-  assert.equal(s.json.a.peak_at, s.json.b.peak_at);
-  const m1 = writeGltf(path.join(dir, "knight.gltf"), { joints: ["Hips", "Spine", "Head"], clips: ["Walk", "Idle"] });
-  const m2 = writeGltf(path.join(dir, "knight2.gltf"), { joints: ["Hips", "Head", "Tail"], clips: ["Walk"], height: 2.2, minY: 0.1 });
-  const m = await run(["toolbox", "asset", "diff", m1, m2]);
-  assert.equal(m.json.compatible, false);
-  assert.deepEqual(m.json.breaking, ["bones missing: Spine", "clips missing: Idle", "height 1.8→2.2", "ground moved 0.1 up"]);
-  assert.deepEqual(m.json.changes, ["bones added: Tail"]);
-  assert.equal((await run(["toolbox", "asset", "diff", a, m1])).code, EXIT.USAGE);
-  assert.equal((await run(["toolbox", "asset", "diff", a, b, "--image"])).code, EXIT.USAGE);
+  assert.deepEqual(r.json.gaps.map(g => `${g.kind} ${g.subject}`), ["sound sprites/bat_fly/animateSprite-1a2b3c4d-1.png"]);
+  const [gap] = r.json.gaps;
+  assert.match(gap.detail, /its Ludo video \(sprites\/bat_fly\/animateSprite-1a2b3c4d-2\.mp4\) is here: forge and forge-pixel make none/);
+  assert.equal(gap.hint.command, "ludo sprite create-audio --spritesheet-video-url <its video_url>");
+  // One prop alone, one character with one move: nothing to compare.
+  const alone = tmp();
+  writeGltf(path.join(alone, "barrel.glb"), {});
+  writeSheet(path.join(alone, "hero_walk.png"), figureSheet({ cols: 4, rows: 1 }), { cols: 4, rows: 1, frames: 4, fps: 10 });
+  assert.deepEqual((await run(["toolbox", "asset", "manifest", alone])).json.gaps, []);
 });

@@ -31,7 +31,7 @@ export const TOOL_GROUPS: Record<string, string> = {
   image: "Images",
   audio: "Sound effects, music and voices",
   model: "3D models",
-  asset: "Folders of assets: inventories, engine checks, budgets"
+  asset: "Folders of assets: inventories, gaps to fill with Ludo, loaders"
 };
 
 export const TOOLS: Tool[] = [];
