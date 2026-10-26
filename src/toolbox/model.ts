@@ -36,7 +36,7 @@ export interface Gltf {
     normalized?: boolean;
     sparse?: { count: number; indices: { bufferView: number; byteOffset?: number; componentType: number }; values: { bufferView: number; byteOffset?: number } };
   }[];
-  bufferViews?: { buffer: number; byteOffset?: number; byteLength: number; byteStride?: number }[];
+  bufferViews?: { buffer: number; byteOffset?: number; byteLength: number; byteStride?: number; extensions?: Record<string, unknown> }[];
   buffers?: { uri?: string; byteLength: number }[];
   materials?: unknown[];
   textures?: unknown[];
@@ -156,19 +156,35 @@ const COMPONENTS: Record<string, number> = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 
 const BYTES: Record<number, number> = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
 const buffers = new WeakMap<Loaded, Map<number, Uint8Array | undefined>>();
 
-// One element's component from a buffer, as glTF 2.0 §3.11 reads it: a
-// normalized integer is scaled to 0..1 (unsigned) or -1..1 (signed).
+// A stored integer as glTF 2.0 §3.11 reads it: a normalized one is scaled
+// to 0..1 (unsigned) or -1..1 (signed).
+function dequantize(v: number, type: number | undefined, normalized: boolean | undefined): number {
+  if (!normalized) return v;
+  switch (type) {
+    case 5120: return Math.max(v / 127, -1);
+    case 5121: return v / 255;
+    case 5122: return Math.max(v / 32767, -1);
+    case 5123: return v / 65535;
+  }
+  return v;
+}
+
+// One element's component from a buffer.
 function component(dv: DataView, o: number, type: number, normalized: boolean): number {
   switch (type) {
     case 5126: return dv.getFloat32(o, true);
-    case 5120: return normalized ? Math.max(dv.getInt8(o) / 127, -1) : dv.getInt8(o);
-    case 5121: return normalized ? dv.getUint8(o) / 255 : dv.getUint8(o);
-    case 5122: return normalized ? Math.max(dv.getInt16(o, true) / 32767, -1) : dv.getInt16(o, true);
-    case 5123: return normalized ? dv.getUint16(o, true) / 65535 : dv.getUint16(o, true);
+    case 5120: return dequantize(dv.getInt8(o), type, normalized);
+    case 5121: return dequantize(dv.getUint8(o), type, normalized);
+    case 5122: return dequantize(dv.getInt16(o, true), type, normalized);
+    case 5123: return dequantize(dv.getUint16(o, true), type, normalized);
     case 5125: return dv.getUint32(o, true);
   }
   throw new ModelError(`an accessor of component type ${type}`);
 }
+
+// Data in a buffer view the toolbox cannot decode: EXT_meshopt_compression
+// (gltfpack's) keeps it in its own codec, with no uncompressed copy.
+export class Compressed extends ModelError {}
 
 // What an accessor holds, as floats, `size` per element: its buffer view
 // read with its stride, then any sparse substitution on top. An accessor
@@ -189,6 +205,7 @@ export function readAccessor(m: Loaded, index: number): { values: Float32Array; 
     if (!bv) throw new ModelError(`buffer view ${v} is missing`);
     if (!cache!.has(bv.buffer)) cache!.set(bv.buffer, bufferBytes(m, bv.buffer));
     const buf = cache!.get(bv.buffer);
+    if (!buf && bv.extensions?.EXT_meshopt_compression) throw new Compressed("compressed (EXT_meshopt_compression)");
     if (!buf) throw new ModelError(`buffer ${bv.buffer} is missing`);
     return { dv: new DataView(buf.buffer, buf.byteOffset, buf.byteLength), start: bv.byteOffset ?? 0, stride: bv.byteStride, end: (bv.byteOffset ?? 0) + bv.byteLength, length: buf.byteLength };
   };
@@ -475,13 +492,18 @@ const quatAngle = (a: Vec, b: Vec) => 2 * Math.acos(Math.min(1, Math.abs(dot4(no
 export interface ClipFacts {
   still?: true; // every key holds one pose
   returns_to_first_pose?: boolean; // no joint jumps more than a step from the last pose to the first
-  end_jump?: { joint: string; deg: number }; // when it does not: the worst joint's jump
+  end_jump?: { joint: string; deg: number }; // when it does not: the worst joint's turn
+  end_offset?: { joint: string; distance: number }; // and how far the root or the hips end from their start
+  not_read?: string; // why its keys could not be read
   root_motion?: { distance: number; axis: string; speed: number }; // only when it travels
   move_speed?: { speed: number; axis: string; from: "planted feet" | "root motion"; range?: [number, number] };
 }
 
 // The clips that may be a gait, by name: walk_forward, Brisk Walk, h4_run.
 const LOCOMOTION = /(^|[^a-z])(walk|run|jog|sprint|strafe|march|sneak|crawl|backpedal|trot|gallop|locomot)/;
+// The hips by name (Hips, pelvis, mixamorig:Hips), not a leg's L_Hip.
+const HIPS = /(^|[^a-z])(hips|pelvis)$/i;
+
 const isLocomotion = (name: string) => LOCOMOTION.test(name.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase());
 
 const r4 = (v: number) => Math.round(v * 1e4) / 1e4 || 0;
@@ -508,17 +530,25 @@ export function animationFacts(m: Loaded): { facing?: { axis: string; turn_deg: 
 
 function clipFacts(m: Loaded, g: Graph, a: NonNullable<Gltf["animations"]>[number], name: string, feet: Foot[], tall: number): ClipFacts {
   const j = m.json;
-  const chans = channelsOf(m, a).filter(c => g.depth[c.node] >= 0);
+  let chans: Channel[];
+  try {
+    chans = channelsOf(m, a).filter(c => g.depth[c.node] >= 0);
+  } catch (err) {
+    // Keys it cannot read: said, so the clip is not taken for one with nothing to say.
+    if (err instanceof ModelError || err instanceof RangeError) return { not_read: err instanceof Compressed ? `its keys are ${err.message}` : err.message };
+    throw err;
+  }
   const start = Math.min(...chans.map(c => c.times[0] ?? Infinity));
   const end = Math.max(...chans.map(c => c.times[c.times.length - 1] ?? -Infinity));
   if (!chans.length || !Number.isFinite(start) || end <= start) return { still: true };
   const duration = end - start;
+  const T = tall || 1;
   const moves = chans.some(c => {
     const v = c.values;
     const z = c.interp === "CUBICSPLINE" ? c.size : 0; // the first value, past its in-tangent
     for (let k = z; k + c.size <= v.length; k += c.size) {
       if (c.interp === "CUBICSPLINE" && (k / c.size) % 3 !== 1) continue;
-      if (c.path === "rotation" ? degrees(quatAngle(Array.from(v.subarray(z, z + 4)), Array.from(v.subarray(k, k + 4)))) > 0.1 : Math.hypot(...[0, 1, 2].map(i => v[k + i] - v[z + i])) > 1e-4 * (tall || 1)) return true;
+      if (c.path === "rotation" ? degrees(quatAngle(Array.from(v.subarray(z, z + 4)), Array.from(v.subarray(k, k + 4)))) > 0.1 : Math.hypot(...[0, 1, 2].map(i => v[k + i] - v[z + i])) > 1e-4 * T) return true;
     }
     return false;
   });
@@ -526,23 +556,47 @@ function clipFacts(m: Loaded, g: Graph, a: NonNullable<Gltf["animations"]>[numbe
   const main = chans.reduce((p, c) => (c.times.length > p.times.length ? c : p));
   const keyDt = median(Array.from(main.times.subarray(1)).map((t, i) => t - main.times[i]));
   const out: ClipFacts = {};
+  // The topmost animated joint: the hips, in Ludo's clips; a dedicated root
+  // bone, in Unreal's.
+  const animated = [...new Set(chans.map(c => c.node))];
+  const root = animated.reduce((p, q) => (g.depth[q] < g.depth[p] ? q : p));
 
   // The seam: the jump each joint's rotation makes from the last pose back
-  // to the first, against the steps it takes either side of it (the first
-  // and the last key intervals). Jumping no further than a step or two is a
+  // to the first, and the jump the root and the hips make in the scene, less
+  // the ground the clip travels (which an engine's root motion carries
+  // over); each against the steps it takes either side of it (the first and
+  // the last key intervals). Jumping no further than a step or two is a
   // clean seam, as on a loop or a one-shot that ends at rest; which of the
   // two it is, the clip's name says, not its keys.
-  const rots = chans.filter(c => c.path === "rotation");
-  if (rots.length && keyDt > 0) {
+  if (keyDt > 0) {
     const h = Math.min(keyDt, duration / 10);
-    const per = rots.map(c => {
+    const rots = chans.filter(c => c.path === "rotation").map(c => {
       const seam = degrees(quatAngle(sampleChannel(c, end), sampleChannel(c, start)));
       const step = (degrees(quatAngle(sampleChannel(c, start), sampleChannel(c, start + h))) + degrees(quatAngle(sampleChannel(c, end - h), sampleChannel(c, end)))) / 2;
-      return { c, seam, ratio: seam / Math.max(step, 0.5) };
+      return { node: c.node, seam, ratio: seam / Math.max(step, 0.5) };
     });
-    const worst = per.reduce((p, q) => (q.ratio > p.ratio ? q : p));
-    out.returns_to_first_pose = per.every(p => p.seam < 1) || worst.ratio <= 2;
-    if (!out.returns_to_first_pose) out.end_jump = { joint: nameOf(j, worst.c.node), deg: Math.round(worst.seam) };
+    const [w0, w1, w2, w3] = [start, start + h, end - h, end].map(t => worldMatrices(j, g, poseAt(j, chans, t)));
+    const glide = flat(sub(at(w3[root]), at(w0[root])));
+    const glideStep = glide.map(v => (v * h) / duration);
+    const hips = g.order.find(nd => HIPS.test(nameOf(j, nd)));
+    const places = [...new Set([root, ...(hips === undefined ? [] : [hips])])].map(nd => {
+      const away = sub(at(w3[nd]), at(w0[nd]));
+      const seam = len(sub(away, glide));
+      const step = (len(sub(sub(at(w1[nd]), at(w0[nd])), glideStep)) + len(sub(sub(at(w3[nd]), at(w2[nd])), glideStep))) / 2;
+      return { node: nd, seam, ratio: seam / Math.max(step, 0.005 * T), away: len(away) };
+    });
+    const worst = <X extends { ratio: number }>(xs: X[]) => xs.reduce((p, q) => (q.ratio > p.ratio ? q : p));
+    const turnsBack = !rots.length || rots.every(p => p.seam < 1) || worst(rots).ratio <= 2;
+    const comesBack = places.every(p => p.seam < 0.01 * T) || worst(places).ratio <= 2;
+    out.returns_to_first_pose = turnsBack && comesBack;
+    if (!turnsBack) {
+      const w = worst(rots);
+      out.end_jump = { joint: nameOf(j, w.node), deg: Math.round(w.seam) };
+    }
+    // Ending elsewhere, how far the root or the hips end from where they
+    // started, the ground it travels included (when over 2% of the height).
+    const far = places.reduce((p, q) => (q.away > p.away ? q : p));
+    if (!out.returns_to_first_pose && (!comesBack || far.away >= 0.02 * T)) out.end_offset = { joint: nameOf(j, far.node), distance: r4(far.away) };
   }
 
   // Sample at the keys' own rate (at least 30 a second, at most 2000 in all).
@@ -550,14 +604,12 @@ function clipFacts(m: Loaded, g: Graph, a: NonNullable<Gltf["animations"]>[numbe
   const dt = duration / (n - 1);
   const worlds = Array.from({ length: n }, (_, k) => worldMatrices(j, g, poseAt(j, chans, start + k * dt)));
 
-  // Root motion: how the topmost animated joint travels over the ground
-  // (the hips, in Ludo's clips; a dedicated root bone, in Unreal's), as an
-  // engine's root-motion extraction reads it.
-  const animated = [...new Set(chans.map(c => c.node))];
-  const root = animated.reduce((p, q) => (g.depth[q] < g.depth[p] ? q : p));
+  // Root motion: how the root travels over the ground, as an engine's
+  // root-motion extraction reads it. Under a tenth of the skeleton's height
+  // is drift, not travel: Ludo's in-place runs drift up to 5% over a loop.
   const rootAt = worlds.map(w => at(w[root]));
   const travel = flat(sub(rootAt[n - 1], rootAt[0]));
-  const inPlace = len(travel) < 0.03 * (tall || 1);
+  const inPlace = len(travel) < 0.1 * T;
   if (!inPlace) out.root_motion = { distance: r4(len(travel)), axis: axisOf(travel), speed: r4(len(travel) / duration) };
   // A walk that turns (and so ends away from its first pose) has no one
   // direction to give a speed along.
@@ -572,13 +624,17 @@ function clipFacts(m: Loaded, g: Graph, a: NonNullable<Gltf["animations"]>[numbe
   // root) is also only down while it moves back against the root, as a
   // planted foot does whether the clip travels or walks in place; any other
   // foot only while it stays still.
-  const T = tall || 1;
   const minRun = Math.max(2, Math.round(0.06 / dt));
   const rate = (xs: number[], k: number) => {
     const k0 = Math.max(0, k - 1);
     const k1 = Math.min(n - 1, k + 1);
     return (xs[k1] - xs[k0]) / ((k1 - k0) * dt);
   };
+  // Barely moving up or down: since the sample before, until the one after,
+  // or across both. A run's foot lands and lifts within a frame or two, so
+  // its sample on the ground is still on one side only.
+  const still = (xs: number[], k: number, tol: number) =>
+    Math.min(Math.abs(rate(xs, k)), k > 0 ? Math.abs(xs[k] - xs[k - 1]) / dt : Infinity, k + 1 < n ? Math.abs(xs[k + 1] - xs[k]) / dt : Infinity) <= tol;
   const heights = feet.map(f => f.joints.map(nd => worlds.map(w => w[nd][13])));
   const floors = heights.map(hs => hs.map(h => Math.min(...h)));
   const reach = (ji: number) => Math.min(...floors.filter(fl => fl.length > ji).map(fl => fl[ji]));
@@ -588,7 +644,7 @@ function clipFacts(m: Loaded, g: Graph, a: NonNullable<Gltf["animations"]>[numbe
       const floor = floors[fi][ji];
       if (floor > reach(ji) + 0.05 * T) return; // never gets down to where the other feet do
       const tol = Math.min(0.05 * T, Math.max(0.015 * T, 0.3 * (Math.max(...h) - floor)));
-      for (let k = 0; k < n; k++) if (h[k] <= floor + tol && Math.abs(rate(h, k)) <= 0.35 * T) low[k] = true;
+      for (let k = 0; k < n; k++) if (h[k] <= floor + tol && still(h, k, 0.35 * T)) low[k] = true;
     });
     const ball = f.joints[Math.min(1, f.joints.length - 1)];
     // The foot against the root, on the ground, along the line it swings on.
@@ -662,8 +718,9 @@ function clipFacts(m: Loaded, g: Graph, a: NonNullable<Gltf["animations"]>[numbe
   if (!steps.length) return out;
   // A gait, not a dance, a jump or an attack: the feet take turns (one
   // ahead while the other is behind, so their swings against the root run
-  // against each other), and a planted foot sweeps back through over a
-  // third of its swing.
+  // against each other), and a planted foot sweeps back through some of its
+  // swing: over Ludo's clips a sprint's short stance covers 21% of it, the
+  // most a dance or jumping jacks named as a run covers 13%.
   const corr = (p: number[], q: number[]) => p.reduce((t, v, k) => t + v * q[k], 0) / Math.sqrt(p.reduce((t, v) => t + v * v, 0) * q.reduce((t, v) => t + v * v, 0) || 1);
   const gait = (dir: Vec) => {
     const along = contacts.map(c => {
@@ -671,7 +728,7 @@ function clipFacts(m: Loaded, g: Graph, a: NonNullable<Gltf["animations"]>[numbe
       const m0 = xs.reduce((t, v) => t + v, 0) / n;
       return xs.map(v => v - m0);
     });
-    return (contacts.length !== 2 || corr(along[0], along[1]) < -0.3) && contacts.every(c => Math.max(...c.steps.map(x => x.travel)) >= 0.35);
+    return (contacts.length !== 2 || corr(along[0], along[1]) < -0.3) && contacts.every(c => Math.max(...c.steps.map(x => x.travel)) >= 0.15);
   };
   const speed = len(travel) / duration;
   if (!inPlace) {
@@ -691,6 +748,25 @@ function clipFacts(m: Loaded, g: Graph, a: NonNullable<Gltf["animations"]>[numbe
     out.move_speed = { speed: r4(slide), axis: axisOf(dir), from: "planted feet", range: [r4(Math.min(...slides)), r4(Math.max(...slides))] };
   }
   return out;
+}
+
+// Where a mesh's vertices land in the scene: through its node's world
+// matrix or, for a skinned mesh (whose node's own transform glTF ignores),
+// its skeleton's root joint's world matrix times that joint's inverse bind
+// matrix. In the bind pose every joint gives the same matrix; gltfpack
+// folds its positions' dequantization into it.
+function placement(m: Loaded, g: Graph, skin: number | undefined, world: Mat, worlds: Mat[]): Mat {
+  const s = skin === undefined ? undefined : m.json.skins?.[skin];
+  const placed = (s?.joints ?? []).map((n, i) => ({ n, i })).filter(({ n }) => worlds[n]);
+  if (!placed.length) return world;
+  const { n, i } = placed.reduce((p, q) => (g.depth[q.n] < g.depth[p.n] ? q : p));
+  if (s!.inverseBindMatrices === undefined) return worlds[n];
+  try {
+    return multiply(worlds[n], Array.from(readAccessor(m, s!.inverseBindMatrices).values.subarray(i * 16, i * 16 + 16)));
+  } catch (err) {
+    if (err instanceof ModelError) throw new ModelError(`its skin's inverse bind matrices are ${err instanceof Compressed ? err.message : `unreadable (${err.message})`}`);
+    throw err;
+  }
 }
 
 export function modelInfo(m: Loaded) {
@@ -719,16 +795,29 @@ export function modelInfo(m: Loaded) {
   let instances = 0;
   const min = [Infinity, Infinity, Infinity];
   const max = [-Infinity, -Infinity, -Infinity];
+  let boundsNotRead: string | undefined;
   for (const { node, world } of drawn) {
     const mesh = j.meshes?.[j.nodes![node].mesh ?? -1];
     if (!mesh) continue;
     instances++;
+    let place: Mat;
+    try {
+      place = placement(m, g, j.nodes![node].skin, world, worlds);
+    } catch (err) {
+      if (!(err instanceof ModelError || err instanceof RangeError)) throw err;
+      boundsNotRead ??= err.message;
+      continue;
+    }
     for (const p of mesh.primitives ?? []) {
       const pos = acc(p.attributes?.POSITION);
       if (pos?.min?.length === 3 && pos.max?.length === 3) {
+        // min and max are the stored values (glTF 2.0 §5.1.2): a quantized
+        // position (KHR_mesh_quantization) is normalized here, as when read.
+        const lo = pos.min.map(v => dequantize(v, pos.componentType, pos.normalized));
+        const hi = pos.max.map(v => dequantize(v, pos.componentType, pos.normalized));
         for (let k = 0; k < 8; k++) {
-          const corner = [k & 1 ? pos.max[0] : pos.min[0], k & 2 ? pos.max[1] : pos.min[1], k & 4 ? pos.max[2] : pos.min[2]];
-          const w = apply(world, corner);
+          const corner = [k & 1 ? hi[0] : lo[0], k & 2 ? hi[1] : lo[1], k & 4 ? hi[2] : lo[2]];
+          const w = apply(place, corner);
           for (let a = 0; a < 3; a++) {
             min[a] = Math.min(min[a], w[a]);
             max[a] = Math.max(max[a], w[a]);
@@ -738,7 +827,8 @@ export function modelInfo(m: Loaded) {
     }
   }
   const round = (v: number) => Math.round(v * 1e5) / 1e5;
-  const bounds = Number.isFinite(min[0]) ? { min: min.map(round), max: max.map(round), size: max.map((v, a) => round(v - min[a])) } : undefined;
+  const bounds = Number.isFinite(min[0]) && !boundsNotRead ? { min: min.map(round), max: max.map(round), size: max.map((v, a) => round(v - min[a])) } : undefined;
+  const place: { bounds?: NonNullable<typeof bounds>; bounds_not_read?: string } = bounds ? { bounds } : boundsNotRead ? { bounds_not_read: boundsNotRead } : {};
 
   const images = (j.images ?? []).map(img => {
     let bytes: Uint8Array | undefined;
@@ -783,19 +873,29 @@ export function modelInfo(m: Loaded) {
     skins,
     animated: animations.length > 0,
     animations,
-    ...(bounds ? { bounds } : {}),
+    ...place,
     extensions_used: j.extensionsUsed ?? [],
     extensions_required: j.extensionsRequired ?? []
   };
 }
 
+// "ends 5° (Neck) and 0.94 units (Pelvis) from its first pose"
+function endsAway(a: ClipFacts): string {
+  const turn = a.end_jump && `${a.end_jump.deg}°`;
+  const off = a.end_offset && `${+a.end_offset.distance.toFixed(3)} units`;
+  if (turn && off) return `ends ${turn} (${a.end_jump!.joint}) and ${off} (${a.end_offset!.joint}) from its first pose`;
+  return `ends ${turn ?? off} from its first pose (${a.end_jump?.joint ?? a.end_offset?.joint})`;
+}
+
 // One clip in words: a still, or how its end meets its start, how it
 // travels, and for a walk or run the speed that keeps its feet planted.
 function clipLine(a: { name: string; seconds: number } & ClipFacts): string {
-  const said = a.still
+  const said = a.not_read
+    ? [`not read: ${a.not_read}`]
+    : a.still
     ? ["a still: every key holds one pose"]
     : [
-        a.returns_to_first_pose === undefined ? "" : a.returns_to_first_pose ? "returns to its first pose" : `ends ${a.end_jump!.deg}° from its first pose (${a.end_jump!.joint})`,
+        a.returns_to_first_pose === undefined ? "" : a.returns_to_first_pose ? "returns to its first pose" : endsAway(a),
         a.root_motion ? `travels ${+a.root_motion.distance.toFixed(3)} units along ${a.root_motion.axis}` : "",
         a.move_speed
           ? a.move_speed.from === "planted feet"
@@ -813,12 +913,15 @@ TOOLS.push({
   summary: "What is in a glTF or GLB model: meshes, triangles, size, textures, rig and animations",
   details: [
     "Counts as Khronos's glTF-Validator does (primitives, vertices and triangles of every mesh, once),",
-    "plus the mesh instances the scene draws, its size there (bounds through the node transforms), each",
-    "texture's pixel size, the skeleton's joints and each animation's length. Reads .glb, and .gltf",
-    "with its buffers and images beside it or embedded.",
+    "plus the mesh instances the scene draws, its size there (bounds through the node transforms, or a",
+    "skinned mesh's joints; quantized positions are scaled as glTF says), each texture's pixel size, the",
+    "skeleton's joints and each animation's length. Reads .glb, and .gltf with its buffers and images",
+    "beside it or embedded. Buffers compressed with EXT_meshopt_compression (gltfpack's) are not",
+    "decoded: a size or clip that needs them says so.",
     "Each clip is run through the skeleton: whether it holds one pose, returns to its first pose (no",
-    "joint jumps more than a key's step from its last pose to its first; whether to loop it is for its",
-    "name to say) and travels (root motion). A walk or run, by its name and feet that take turns, gets",
+    "joint turns, and the hips do not move, more than a key's step from its last pose to its first,",
+    "less the ground it travels; whether to loop it is for its name to say) and travels (root motion",
+    "of a tenth of its height or more). A walk or run, by its name and feet that take turns, gets",
     "the speed to move it at: the median speed its planted feet slide back when it walks in place, or",
     "its own speed when it travels. Lengths and speeds are in the model's units, as its size is. A",
     "rigged model whose feet say which way it faces gets that facing."
@@ -865,7 +968,7 @@ TOOLS.push({
     } else {
       const lines = [
         `${info.meshes} mesh${info.meshes === 1 ? "" : "es"} (${info.mesh_instances} drawn), ${info.primitives} primitive${info.primitives === 1 ? "" : "s"}, ${info.vertices} vertices, ${info.triangles} triangles`,
-        ...(info.bounds ? [`Size ${info.bounds.size.map(v => +v.toFixed(3)).join(" x ")} (x, y, z)`] : []),
+        ...(info.bounds ? [`Size ${info.bounds.size.map(v => +v.toFixed(3)).join(" x ")} (x, y, z)`] : info.bounds_not_read ? [`Size not read: ${info.bounds_not_read}`] : []),
         `${info.materials} material${info.materials === 1 ? "" : "s"}, ${info.textures} texture${info.textures === 1 ? "" : "s"}${info.images.length ? ` (${info.images.map(i => ("width" in i ? `${i.width}x${i.height}` : "?")).join(", ")})` : ""}`,
         info.rigged ? `Rigged: ${info.skins.map(s => `${s.joints} joints`).join(", ")}` : skeleton ? "No mesh: a skeleton and its animations" : "Not rigged",
         // glTF's front is +Z, which Godot keeps as Vector3.MODEL_FRONT.
