@@ -28,8 +28,8 @@ function table(n: number) {
   return t;
 }
 
-/** One in-place transform of length n over re/im. */
-function fft1d(re: Float64Array, im: Float64Array, n: number, inverse: boolean) {
+/** One in-place transform of length n (a power of two) over re/im. */
+export function fft1d(re: Float64Array, im: Float64Array, n: number, inverse: boolean) {
   const { rev, cos, sin } = table(n);
   for (let i = 0; i < n; i++) {
     const j = rev[i];
