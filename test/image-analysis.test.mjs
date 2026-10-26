@@ -389,8 +389,7 @@ test("video info reads an MP4 box by box: codec, profile, rate, frames, keyframe
   fs.writeFileSync(path.join(dir, "clip.mp4"), mp4());
   const r = await ludo(dir, ["video", "info", "clip.mp4"]);
   assert.equal(r.code, 0, r.stderr);
-  assert.equal(r.out.container, "mp4");
-  assert.equal(r.out.duration, 2);
+  assert.deepEqual([r.out.file, r.out.container, r.out.brand, r.out.duration], ["clip.mp4", "mp4", "isom", 2]);
   assert.deepEqual(r.out.video, {
     codec: "h264",
     codec_tag: "avc1",

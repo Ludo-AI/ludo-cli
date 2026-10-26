@@ -105,8 +105,9 @@ function tolerance(call: ToolCall, fallback: number): number {
 //
 // Two lines match when at most 1 % of their pixels differ by more than the
 // tolerance (the largest channel difference, premultiplied, alpha
-// included): AI art's grain and WebP noise sit within a few levels, while a
-// rivet or a gem covering a few pixels breaks the match.
+// included, from the nearest of the three pixels across from it): AI
+// art's grain and WebP noise sit within a few levels, while a rivet or a
+// gem covering a few pixels breaks the match.
 // ---------------------------------------------------------------------------
 
 type Axis = "x" | "y";
@@ -143,17 +144,24 @@ class Lines {
   count(axis: Axis) {
     return axis === "x" ? this.img.width : this.img.height;
   }
-  // The largest channel difference of each pixel pair along lines a and b,
-  // calling `each` until it returns false.
+  // For each pixel of line a, its difference (the largest channel's) from
+  // the nearest match among line b's pixel beside it and the two next to
+  // that, calling `each` until it returns false. The one pixel of slack
+  // along the line absorbs the sub-pixel wobble of drawn and generated
+  // edges (an anti-aliased border is not quite straight); a rivet or a gem
+  // is still nowhere near.
   private walk(axis: Axis, a: number, b: number, each: (d: number) => boolean) {
     const { width: w, height: h } = this.img;
     const pm = this.pm;
     const n = axis === "x" ? h : w;
     const step = axis === "x" ? w * 4 : 4;
+    const diff = (i: number, j: number) => Math.max(Math.abs(pm[i] - pm[j]), Math.abs(pm[i + 1] - pm[j + 1]), Math.abs(pm[i + 2] - pm[j + 2]), Math.abs(pm[i + 3] - pm[j + 3]));
     let i = axis === "x" ? a * 4 : a * w * 4;
     let j = axis === "x" ? b * 4 : b * w * 4;
     for (let k = 0; k < n; k++, i += step, j += step) {
-      const d = Math.max(Math.abs(pm[i] - pm[j]), Math.abs(pm[i + 1] - pm[j + 1]), Math.abs(pm[i + 2] - pm[j + 2]), Math.abs(pm[i + 3] - pm[j + 3]));
+      let d = diff(i, j);
+      if (d && k > 0) d = Math.min(d, diff(i, j - step));
+      if (d && k < n - 1) d = Math.min(d, diff(i, j + step));
       if (!each(d)) return;
     }
   }
@@ -2131,7 +2139,8 @@ TOOLS.push({
     const bytes = fs.statSync(file).size;
     const next = hint("Turn it into a spritesheet (needs ffmpeg)", `ludo toolbox sprite from-video ${shown(file)}`);
     if (ctx.jsonOut) {
-      printJson({ video: shown(file), bytes, ...info, engine_support: support, ...hintJson(ctx, next) }, false);
+      // `file`, not `video`: that is the video track.
+      printJson({ file: shown(file), bytes, ...info, engine_support: support, ...hintJson(ctx, next) }, false);
     } else {
       const v = info.video;
       const key = v.keyframe_interval ? `, a keyframe every ${v.keyframe_interval.average} frames (${v.keyframe_interval.seconds} s)` : "";
