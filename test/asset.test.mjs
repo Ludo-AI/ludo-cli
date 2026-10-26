@@ -676,7 +676,7 @@ test("the asset log: create-audio only for the sheets it takes, adjusted copies 
   assert.deepEqual(Object.keys(by).sort(), ["hero_idle/animateSprite-cccccccc-1.png", "hero_walk/animateSprite-aaaaaaaa-1.png", "slime_hit_ts/adjustSpritesheet-eeeeeeee-1.png"]);
   // Named as the PNG the CLI stamped, not the WebP the loaders take.
   const w = by["hero_walk/animateSprite-aaaaaaaa-1.png"];
-  assert.equal(w.detail, "hero_walk/animateSprite-aaaaaaaa-1.png has no sound: it was made with forge-pixel, which makes none (nor has hero_walk_ts/adjustSpritesheet-bbbbbbbb-1.png, its sprite adjust copy by name)");
+  assert.equal(w.detail, "hero_walk/animateSprite-aaaaaaaa-1.png has no sound: it was made with forge-pixel (nor has hero_walk_ts/adjustSpritesheet-bbbbbbbb-1.png, its sprite adjust copy by name)");
   assert.deepEqual(w.also, ["hero_walk_ts/adjustSpritesheet-bbbbbbbb-1.png"]);
   assert.equal(w.hint.command, "ludo sprite create-audio --spritesheet-video-url <its video_url>");
   // Ten days old: past create-audio's 7 days, so a sound effect, saying why.
@@ -700,7 +700,7 @@ test("one move's sheets lacking a sound are one gap", async () => {
   assert.equal(r.code, EXIT.OK, r.stderr);
   assert.equal(r.json.gaps.length, 1);
   const [gap] = r.json.gaps;
-  assert.equal(gap.detail, "boss-smash-N/transferMotion-0a0b0c0d-1.png and 2 other sheets of boss's smash have no sound: they were made with forge, which makes none");
+  assert.equal(gap.detail, "boss-smash-N/transferMotion-0a0b0c0d-1.png and 2 other sheets of boss's smash have no sound: they were made with forge");
   assert.deepEqual(gap.also, ["boss-smash-S/transferMotion-1a1b1c1d-1.png", "boss-smash-W/transferMotion-2a2b2c2d-1.png"]);
   assert.equal(gap.hint.command, "ludo sprite create-audio --spritesheet-video-url <its video_url>");
   assert.match(gap.hint.text, /^Give each a sound with Ludo/);

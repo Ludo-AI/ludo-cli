@@ -1176,7 +1176,7 @@ export function gapsOf(assets: Asset[], plan: LoadPlan): Gap[] {
     const why: Why | undefined = adjusted(sheet)
       ? { kind: "adjust", why: many => `: sprite adjust made ${many ? "them" : "it"}, and a copy carries its source's sound only when the source has one`, evidence: [sheet.made!.record] }
       : ludo && model
-        ? { kind: `model ${model}`, why: many => `: ${many ? "they were" : "it was"} made with ${model}, which makes none`, evidence: [sheet.made!.record] }
+        ? { kind: `model ${model}`, why: many => `: ${many ? "they were" : "it was"} made with ${model}`, evidence: [sheet.made!.record] }
         : ludo && video
           ? { kind: "video", why: many => (many ? ": their Ludo downloads have their videos but no audio" : `: its Ludo download has its video (${video.path}) but no audio`), evidence: [video.path] }
           : kin.length
