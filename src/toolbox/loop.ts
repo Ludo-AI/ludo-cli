@@ -209,8 +209,18 @@ export function analyseLoop(D: Float64Array[], minFrames = Math.ceil(D.length / 
     };
   }
   const r = (i: number, j: number) => D[i][j] / step;
-  // A step that can vouch for a tap: it moves, and not by a jump.
-  const ordinary = (i: number) => i >= 0 && i < n - 1 && !isHold(adjacent[i]) && adjacent[i] <= SMOOTH * step;
+  // A step that can vouch for a tap: it moves, and not by a jump. A big but
+  // ordinary step still can: AI motion is uneven, and without the tap a
+  // seam is judged on its size alone.
+  const ordinary = (i: number) => i >= 0 && i < n - 1 && !isHold(adjacent[i]) && adjacent[i] <= JUMP * step;
+  // A seam that lands behind where it left from: frame s is nearer e - 1
+  // than e, or s + 1 is nearer e than s is. It steps backwards and then shows
+  // a pose again, a stutter however small the seam measures, so a trimmed
+  // loop should end one frame earlier, or start one later, instead.
+  const backwards = (s: number, e: number) => {
+    const ratio = r(e, s);
+    return (s + 1 < e && r(e, s + 1) < ratio) || (e - 1 > s && r(e - 1, s) < ratio);
+  };
   // Up to one step is right (motion often eases into the loop point); much
   // more is a jump, and next to nothing is a pose shown twice.
   const seamCost = (e: number, s: number) => {
@@ -248,7 +258,8 @@ export function analyseLoop(D: Float64Array[], minFrames = Math.ceil(D.length / 
     const taps: number[] = [];
     if (e + 1 < n && ordinary(e)) taps.push(r(e + 1, s));
     if (s > 0 && ordinary(s - 1)) taps.push(r(e, s - 1));
-    return taps.length ? taps.reduce((a, b) => a + b, 0) / taps.length : seamCost(e, s);
+    if (taps.length) return taps.reduce((a, b) => a + b, 0) / taps.length;
+    return backwards(s, e) ? 1 : seamCost(e, s);
   };
 
   const seamRatio = r(n - 1, 0);

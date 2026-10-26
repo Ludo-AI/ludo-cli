@@ -496,6 +496,21 @@ test("a sheet that already loops is left whole unless a loop inside it is clearl
   assert.ok(late.best.cost <= 0.5 && late.best.frames >= 5, JSON.stringify(late.best));
 });
 
+test("a trimmed loop never keeps both of two near-twin frames, even next to big steps", () => {
+  // Frames at these phases of an 8-step cycle, D their distance round it.
+  // Bigger steps at both ends used to switch the taps off, and the seam from
+  // frame 11 (2.25) back to frame 2 (1.7) then passed on its size alone,
+  // though it steps half a step backwards and frame 3 shows that pose again.
+  // Frame 9 (8.35) is the one that matches frame 1, so 1..8 loops.
+  const phases = [0, 1.7, 2.65, 3.6, 4.55, 5.5, 6.45, 7.4, 8.35, 9.3, 10.25, 11.95];
+  const round = (a, b) => {
+    const x = (((a - b) % 8) + 8) % 8;
+    return Math.min(x, 8 - x);
+  };
+  const report = analyseLoop(phases.map(a => Float64Array.from(phases, b => round(a, b))));
+  assert.deepEqual([report.best.start, report.best.end], [1, 8], JSON.stringify(report.best));
+});
+
 test("held frames are not steps, a ping-pong is mirrored, and a still sheet is static", () => {
   const held = loopOf([0, 1, 2, 3, 3, 3, 4, 5, 6, 7], 8);
   assert.deepEqual(held.holds, [5, 6]);
