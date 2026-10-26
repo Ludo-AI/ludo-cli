@@ -30,7 +30,9 @@ export const TOOL_GROUPS: Record<string, string> = {
   sprite: "Spritesheets and frames",
   image: "Images",
   audio: "Sound effects, music and voices",
-  model: "3D models"
+  model: "3D models",
+  video: "Videos",
+  asset: "Folders of assets: inventories, engine checks, budgets"
 };
 
 export const TOOLS: Tool[] = [];
