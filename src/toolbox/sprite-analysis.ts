@@ -12,8 +12,10 @@
 // row of pixels sits at that row + 1. A sheet trimmed by `ludo toolbox image
 // trim` is measured in its untrimmed frames, the size engines see it at.
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { findAsset, LOG_NAME, readAssets, type AssetEntry } from "../assets.js";
 import { CliError, EXIT } from "../errors.js";
 import { printJson, type Ctx } from "../generate.js";
 import type { Image } from "../tty/png.js";
@@ -138,44 +140,81 @@ export const opening = (m: Uint8Array, w: number, h: number, n: number) => (n <=
 
 // ---- The body: the art without what sticks out thinly ----
 
-// The opening's radius: 3% of the art's height, so parts under about 6% of
-// it across go (a slash trail, a thin blade or tail tip, a stray strand).
-// Under 34 px tall it is 0: in small pixel art a limb is that thin.
-export const BODY_OPENING = 0.03;
-export const bodyRadius = (artHeight: number) => Math.floor(BODY_OPENING * artHeight);
+// The opening's radius: 35% of the radius of the thickest part of the art
+// (the largest disc that fits in it, the torso or the head as a rule),
+// median over frames. So what is under about a third of the body's
+// thickness across goes (a blade, a spear, a staff, a slash trail's edge,
+// a tail tip), and limbs, a plume or a shield arm, thicker than that, stay.
+// Under 34 px tall it is 0: in small pixel art a limb is a pixel or two.
+export const BODY_OPENING = 0.35;
+const SMALL_ART = 34;
 
-// The body of one frame. Its top is the top of the opened art. Its bottom is
-// the art's own lowest row (feet are never a protrusion), but no lower than
-// `floor` when given (a blade hanging below the feet). Its width is the
-// median row of the opened art, centred where those rows' centres are: a
-// sword held out in a few rows, or a raised arm, does not move a median.
-export function bodyBox(m: Uint8Array, w: number, h: number, r: number, floor?: number): Box | null {
-  const opened = opening(m, w, h, r);
-  const rowsOf = (mask: Uint8Array) => {
-    const out: [number, number, number][] = []; // y, first x, last x + 1
-    for (let y = 0; y < h; y++) {
-      let [l, rr] = [-1, -1];
-      for (let x = 0; x < w; x++) if (mask[y * w + x]) (l < 0 ? (l = x) : 0), (rr = x + 1);
-      if (l >= 0) out.push([y, l, rr]);
+export function bodyRadius(masks: Uint8Array[], w: number, h: number, artHeight: number): number {
+  if (artHeight < SMALL_ART) return 0;
+  const radii = masks.map(m => chamfer(m, w, h, 1, false).reduce((a, v) => Math.max(a, v), 0) / 3).filter(v => v > 0);
+  return Math.floor(BODY_OPENING * median(radii));
+}
+
+// 8-connected pieces of a mask (pixel art's diagonal steps hold together):
+// each pixel's piece, -1 for none.
+function pieces(m: Uint8Array, w: number, h: number): { labels: Int32Array; count: number } {
+  const labels = new Int32Array(w * h).fill(-1);
+  const stack: number[] = [];
+  let count = 0;
+  for (let s = 0; s < m.length; s++) {
+    if (!m[s] || labels[s] >= 0) continue;
+    labels[s] = count;
+    stack.push(s);
+    while (stack.length) {
+      const p = stack.pop()!;
+      const [x, y] = [p % w, (p / w) | 0];
+      for (let ny = Math.max(0, y - 1); ny <= Math.min(h - 1, y + 1); ny++) {
+        for (let nx = Math.max(0, x - 1); nx <= Math.min(w - 1, x + 1); nx++) {
+          const q = ny * w + nx;
+          if (m[q] && labels[q] < 0) (labels[q] = count), stack.push(q);
+        }
+      }
     }
-    return out;
-  };
-  const all = rowsOf(m);
-  if (!all.length) return null;
-  const rows = opened === m ? all : rowsOf(opened);
-  const use = rows.length ? rows : all;
-  const top = use[0][0];
-  const bottom = Math.max(top, Math.min(all[all.length - 1][0], floor ?? Infinity));
-  const span = Math.round(median(use.map(([, a, b]) => b - a)));
-  const mid = median(use.map(([, a, b]) => (a + b) / 2));
-  const x = Math.max(0, Math.min(w - span, Math.round(mid - span / 2)));
-  return { x, y: top, w: span, h: bottom + 1 - top };
+    count++;
+  }
+  return { labels, count };
+}
+
+// The body of one frame: the art opened by `r` (what is thinner than about
+// 2r + 1 pixels goes), within the one piece of the art that most of it is
+// in, to its bounds. So a sword or a spear held out, and a staff held
+// beside the body, are left out, and so is whatever does not touch the
+// character (a pole behind it, a spark); a plume, a shield arm or a head on
+// a thin neck are kept. Its bottom is the art's own lowest row (feet are
+// never a protrusion), but no lower than `floor` when given (a blade
+// hanging below the feet). Art all thinner than the opening is its own body.
+export function bodyBox(m: Uint8Array, w: number, h: number, r: number, floor?: number): Box | null {
+  const art = measureFrame(m, w, h).bounds;
+  if (!art) return null;
+  const { labels, count } = pieces(m, w, h);
+  const opened = opening(m, w, h, r);
+  const kept = new Int32Array(count);
+  for (let p = 0; p < m.length; p++) if (opened[p] && labels[p] >= 0) kept[labels[p]]++;
+  // The piece most of the opened art is in; with nothing left open, the largest.
+  const left = kept.some(v => v > 0);
+  if (!left) for (let p = 0; p < m.length; p++) if (labels[p] >= 0) kept[labels[p]]++;
+  const body = kept.indexOf(Math.max(...kept));
+  let [x0, y0, x1, y1] = [w, h, -1, -1];
+  for (let p = 0; p < m.length; p++) {
+    if (labels[p] !== body || (left && !opened[p])) continue;
+    const [x, y] = [p % w, (p / w) | 0];
+    (x0 = Math.min(x0, x)), (x1 = Math.max(x1, x)), (y0 = Math.min(y0, y)), (y1 = Math.max(y1, y));
+  }
+  const bottom = Math.max(y0, Math.min(art.y + art.h - 1, floor ?? Infinity));
+  return { x: x0, y: y0, w: x1 + 1 - x0, h: bottom + 1 - y0 };
 }
 
 // ---- Sheet metrics ----
 
 export type PivotKind = "feet" | "mass" | "flag";
-export type PivotChoice = { kind: "feet" | "mass" } | { kind: "flag"; at: Point };
+// `asked`: --pivot feet was given, so a sheet that is not a character
+// still gets its feet, from the frames that touch its lowest row.
+export type PivotChoice = { kind: "feet"; asked?: boolean } | { kind: "mass" } | { kind: "flag"; at: Point };
 
 export interface SheetMetrics {
   frame_width: number;
@@ -218,7 +257,7 @@ export function sheetMetrics(masks: Uint8Array[], fw: number, fh: number, choice
   const share = ground.frames_on_it / solid.length;
   const character = share >= GROUNDED_SHARE && ground.row + 1 >= fh * LOW_IN_FRAME;
 
-  const r = bodyRadius(art.height);
+  const r = bodyRadius(masks, fw, fh, art.height);
   const frames = measures.map((f, i) => ({ ...f, body: f.bounds ? bodyBox(masks[i], fw, fh, r, character ? ground.row + tol : undefined) : null }));
   const bodies = frames.map(f => f.body).filter((b): b is Box => !!b);
   const body = { width: median(bodies.map(b => b.w)), height: median(bodies.map(b => b.h)) };
@@ -227,12 +266,21 @@ export function sheetMetrics(masks: Uint8Array[], fw: number, fh: number, choice
   const meanCom: Point = [coms.reduce((a, c) => a + c[0], 0) / coms.length, coms.reduce((a, c) => a + c[1], 0) / coms.length];
   let pivot: SheetMetrics["pivot"];
   const pct = Math.round(share * 100);
+  // Asked for the feet of a sheet that is not a character (a jump spends
+  // most frames in the air): the frames that reach its lowest row, within
+  // the tolerance, stand on the ground.
+  const lowest = Math.max(...rows);
+  const landed = rows.filter(r => lowest - r <= tol);
+  const landedRow = Math.round(median(landed));
+  const why = share < GROUNDED_SHARE ? `no ground line: only ${pct}% of frames bottom out on one row` : `its lowest row (${ground.row}) is in the top two thirds of the frame, so it does not stand on it`;
   if (choice.kind === "flag") pivot = { x: choice.at[0], y: choice.at[1], kind: "flag", why: "given with --pivot" };
   else if (choice.kind === "feet" && character) {
-    pivot = { x: feetCentre(masks, frames, fw, ground.row, tol), y: ground.row + 1, kind: "feet", why: `${pct}% of frames stand on row ${ground.row}: on the ground line, between the feet (the middle of what touches the ground, median over those frames)` };
+    pivot = { x: feetCentre(masks, frames, fw, ground.row, tol), y: ground.row + 1, kind: "feet", why: `${pct}% of frames stand on row ${ground.row}: on the ground line, between the feet (the middle of what touches the ground under the body, median over those frames)` };
+  } else if (choice.kind === "feet" && choice.asked && landedRow + 1 >= fh * LOW_IN_FRAME) {
+    pivot = { x: feetCentre(masks, frames, fw, landedRow, tol), y: landedRow + 1, kind: "feet", why: `${why}, so the feet are taken from the ${landed.length} of ${solid.length} frames that reach its lowest row (${landedRow}): between the feet there, median over those frames` };
   } else {
-    const why = choice.kind === "mass" ? "asked with --pivot mass" : share < GROUNDED_SHARE ? `no ground line: only ${pct}% of frames bottom out on one row` : `its lowest row (${ground.row}) is in the top two thirds of the frame, so it does not stand on it`;
-    pivot = { x: Math.round(meanCom[0]), y: Math.round(meanCom[1]), kind: "mass", why: `${why}: the centre of mass, averaged over frames` };
+    const asked = choice.kind === "feet" && choice.asked ? `--pivot feet asked, but no frame touches a ground line in the lower third of the frame (the lowest row is ${lowest}), so there are no feet to pivot on: ` : "";
+    pivot = { x: Math.round(meanCom[0]), y: Math.round(meanCom[1]), kind: "mass", why: `${asked}${choice.kind === "mass" ? "asked with --pivot mass" : why}: the centre of mass, averaged over frames${asked ? "; pass --pivot X,Y with the feet's point in frame pixels (an idle sheet's feet pivot, from `sprite metrics`, if the frames line up)" : ""}` };
   }
 
   // Drift: the least-squares line through each frame's centre of mass. Its
@@ -270,20 +318,21 @@ export function sheetMetrics(masks: Uint8Array[], fw: number, fh: number, choice
 }
 
 // Between the feet: in each frame standing on the ground line, the middle of
-// the solid pixels within `tol` rows of its lowest one (from the back of the
-// rear foot to the toe of the front one); the median over those frames.
-// The centre of mass leans with the body (a lunge, a crouch, a big head)
-// and the union's centre follows a sword, but the feet are what stands: a
-// pivot between them keeps them in place when the sprite is flipped.
-function feetCentre(masks: Uint8Array[], frames: FrameMeasure[], fw: number, groundRow: number, tol: number): number {
+// the solid pixels within the body's columns and `tol` rows of its lowest
+// one (from the back of the rear foot to the toe of the front one); the
+// median over those frames. The centre of mass leans with the body (a
+// lunge, a crouch, a big head) and the union's centre follows a sword; a
+// spear or a staff planted beside the feet is outside the body's columns.
+// The feet are what stands: a pivot between them keeps them in place when
+// the sprite is flipped.
+function feetCentre(masks: Uint8Array[], frames: SheetMetrics["frames"], fw: number, groundRow: number, tol: number): number {
   const mids: number[] = [];
   frames.forEach((f, i) => {
-    if (f.ground_row === null || Math.abs(f.ground_row - groundRow) > tol) return;
-    let [lo, hi] = [fw, -1];
-    for (let y = f.ground_row - tol; y <= f.ground_row; y++) {
-      if (y < 0) continue;
-      for (let x = 0; x < fw; x++) if (masks[i][y * fw + x]) (lo = Math.min(lo, x)), (hi = Math.max(hi, x));
-    }
+    if (f.ground_row === null || !f.body || Math.abs(f.ground_row - groundRow) > tol) return;
+    const [x0, x1] = [f.body.x, f.body.x + f.body.w];
+    let [lo, hi, low] = [fw, -1, -1];
+    for (let y = f.ground_row; y >= 0 && low < 0; y--) for (let x = x0; x < x1; x++) if (masks[i][y * fw + x]) low = y;
+    for (let y = Math.max(0, low - tol); y <= low; y++) for (let x = x0; x < x1; x++) if (masks[i][y * fw + x]) (lo = Math.min(lo, x)), (hi = Math.max(hi, x));
     if (hi >= 0) mids.push((lo + hi + 1) / 2);
   });
   return Math.round(median(mids));
@@ -905,7 +954,8 @@ export function alphaThreshold(call: ToolCall): number {
 export function pivotChoice(call: ToolCall): PivotChoice {
   const raw = textFlag(call, "--pivot");
   if (call.flags.get("--pivot") === true) throw new CliError("--pivot needs a value: feet, mass or X,Y", EXIT.USAGE);
-  if (raw === undefined || raw === "feet") return { kind: "feet" };
+  if (raw === undefined) return { kind: "feet" };
+  if (raw === "feet") return { kind: "feet", asked: true };
   if (raw === "mass") return { kind: "mass" };
   const m = /^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/.exec(raw);
   if (!m) throw new CliError(`--pivot takes feet, mass or X,Y in frame pixels, like 64,120 (got "${raw}")`, EXIT.USAGE);
@@ -965,16 +1015,28 @@ TOOLS.push({
   args: "<sheet>",
   summary: "Measure each frame (bounds, body, ground line, centre of mass) and suggest a pivot, with engine values",
   details: [
-    "Per frame: the solid pixels' bounds, the body (the bounds without thin protrusions, as `sprite",
-    "compare` and `sprite collide` measure it), the ground row (the lowest solid row) and the centre",
+    "Per frame: the solid pixels' bounds, the body, the ground row (the lowest solid row) and the centre",
     "of mass. For the sheet: the union of the bounds, the ground line most frames stand on and how far",
     "it is above the frame's bottom edge, a pivot, and drift: whether the art travels across the frame",
     "over the clip or stays in place (its sway is listed).",
     "",
+    "The body (`sprite collide` and `sprite compare` use it too) is the box around the art once parts",
+    "under about a third of its thickness across are taken off: a morphological opening whose radius is",
+    "35% of the radius of the widest disc that fits in the art (the torso or the head), median over",
+    "frames. Of what is left, only what lies in the piece of art holding most of it counts. So a blade,",
+    "a spear or a staff held out or beside the body, a slash trail's thin edge, and anything not touching",
+    "the character are left out; a plume, a shield arm, the helmet and the legs stay. Its bottom is the",
+    "frame's lowest solid row (on a character, no lower than just under the ground line). Under 34 px",
+    "tall nothing is taken off: in small pixel art the body is the whole piece. A weapon or a cape as",
+    "thick as a limb counts as body.",
+    "",
     "A sheet is a character when at least half its frames bottom out on one row in the lower third of",
-    "the frame: its pivot is on that ground line, between the feet (the middle of the pixels touching",
-    "the ground, median over the frames standing on it), so it stays put when the sprite is flipped.",
-    "Anything else pivots on its centre of mass. The output says which, and why; --pivot overrides it.",
+    "the frame: its pivot is on that ground line, between the feet (the middle of the solid pixels at",
+    "the ground within the body's columns, median over the frames standing on it), so it stays put when",
+    "the sprite is flipped and a spear or staff planted beside the feet does not move it. Anything else",
+    "pivots on its centre of mass, unless --pivot feet is given: then the feet are taken from the frames",
+    "that reach the sheet's lowest row (a jump's take-off and landing), or, when none is in the lower",
+    "third of the frame, it says so and keeps the centre of mass. The output says which, and why.",
     "",
     "Coordinates are frame pixels from the top-left, y down; the pivot sits on pixel edges, so feet on",
     "row 120 put it at y 121. Engine values put the pivot at the node's origin: Godot's Sprite2D offset",
@@ -1018,7 +1080,7 @@ TOOLS.push({
             ? {
                 overlay: pictureJson(picture, overlay, {
                   bounds: `${hexOf(COLOURS.bounds)} box: the frame's solid pixels`,
-                  body: `${hexOf(COLOURS.body)} box: the body, without thin protrusions`,
+                  body: `${hexOf(COLOURS.body)} box: the body, without what is under a third of its thickness across (a blade, a spear, a staff)`,
                   ground: `${hexOf(COLOURS.ground)} line: the ground line (under row ${s.ground.row})`,
                   pivot: `${hexOf(COLOURS.pivot)} cross: the pivot`,
                   centre_of_mass: `${hexOf(COLOURS.mass)} dot: the frame's centre of mass`
@@ -1033,7 +1095,7 @@ TOOLS.push({
       const out = (line: string) => process.stdout.write(line + "\n");
       const u = s.union;
       out(`${sheet.grid.frames} frames of ${sheet.fw}x${sheet.fh} (${sheet.grid.cols}x${sheet.grid.rows} grid, ${howGrid(sheet.from)})`);
-      out(`Art in ${u.w}x${u.h} at ${u.x},${u.y} over all frames; body ${s.body.width}x${s.body.height} (median frame, without thin protrusions)`);
+      out(`Art in ${u.w}x${u.h} at ${u.x},${u.y} over all frames; body ${s.body.width}x${s.body.height} (median frame, without what is under a third of its thickness across)`);
       out(`Ground line: row ${s.ground.row} (${s.ground.frames_on_it} of ${s.frames.length} frames)${s.character ? `: ${feetText(s)}` : ", not a character"}`);
       out(`Pivot ${s.pivot.x}, ${s.pivot.y} (${s.pivot.kind}): ${s.pivot.why}`);
       out(`Drift: ${s.drift.verdict} (sway ${pt(s.drift.sway)} px)`);
@@ -1056,9 +1118,11 @@ TOOLS.push({
   args: "<sheet>",
   summary: "Collision shapes for a sprite's body: box and capsule, and on request the hull and outline, for each engine",
   details: [
-    "Shapes are measured on all frames together (one collider for the animation), or on each frame",
-    "with --per-frame. The box and the capsule cover the body: the art without thin protrusions (as",
-    "`sprite metrics` draws it), so a sword held out or raised is left out of them.",
+    "Shapes are measured on all frames together (one collider for the animation: the box holding every",
+    "frame's body), or on each frame with --per-frame. The box and the capsule cover the body as `sprite",
+    "metrics` measures and draws it: the art without what is under about a third of its thickness across",
+    "and without what does not touch the character, so a sword or spear held out or raised, or a staff",
+    "beside it, is left out of them; a weapon as thick as a limb is not.",
     "",
     "  box      the body's box (the default, with the capsule)",
     "  capsule  the capsule filling the box, along its long side",
@@ -1071,8 +1135,9 @@ TOOLS.push({
     "node), Unity (units at --ppu, y up: Box/Capsule/PolygonCollider2D), Phaser Arcade (body.setSize and",
     "setOffset from the frame's top-left) and Matter (a polygon, with the origin that lines the art up),",
     "Box2D v3 (metres at --ppu, y up). Use the --ppu the sprite is imported at: `sprite compare` gives",
-    "one per character, and `sprite export --ppu` writes it. --per-frame prints each frame's box and",
-    "capsule and saves the full shapes and engine values per frame to a JSON file."
+    "one per character, and `sprite export --engine unity --ppu` writes it. --per-frame prints each",
+    "frame's box and capsule, one line a frame, and saves the full shapes and engine values per frame to",
+    "a JSON file."
   ],
   flags: [
     { flag: "--shapes", value: "list", description: `Which shapes, from ${SHAPES.join(", ")} (default box,capsule)` },
@@ -1109,7 +1174,8 @@ TOOLS.push({
     // for the whole animation the box holding them all.
     const masks = sheet.masks.map(m => erode(m, fw, fh, inset));
     const floor = s.character ? s.ground.row + Math.max(1, Math.round(0.02 * s.art.height)) : undefined;
-    const bodies = masks.map(m => bodyBox(m, fw, fh, bodyRadius(s.art.height), floor));
+    const radius = bodyRadius(sheet.masks, fw, fh, s.art.height);
+    const bodies = masks.map(m => bodyBox(m, fw, fh, radius, floor));
     if (bodies.every(b => !b)) throw new CliError(`Nothing is left of ${shown(sheet.src.file)} after an inset of ${inset} px`, EXIT.USAGE, "Use a smaller --inset.");
     const union = new Uint8Array(fw * fh);
     for (const m of masks) for (let p = 0; p < m.length; p++) union[p] |= m[p];
@@ -1189,8 +1255,11 @@ TOOLS.push({
         if (polygons) out(`  polygon  ${polygons.map(p => p.length).join(" + ")} points (within ${tolerance} px)${specks ? `; ${specks} specks left out` : ""}`);
         out("Engine values and snippets (Godot, Unity, Phaser, Box2D) are in the JSON: add --json.");
       } else {
-        const boxes = result.filter(x => x).map(x => x!.shapes.box);
-        out(`  ${boxes.length} frames with shapes; boxes from ${Math.min(...boxes.map(b => b.w))}x${Math.min(...boxes.map(b => b.h))} to ${Math.max(...boxes.map(b => b.w))}x${Math.max(...boxes.map(b => b.h))}`);
+        result.forEach((x, i) => {
+          if (!x) return out(`  frame ${String(i + 1).padStart(3)}  no solid pixels`);
+          const { box, capsule } = x.shapes;
+          out(`  frame ${String(i + 1).padStart(3)}  box ${box.w}x${box.h} at ${box.x}, ${box.y}; capsule ${capsule.direction}, radius ${capsule.radius}, height ${capsule.height} at ${capsule.x}, ${capsule.y}`);
+        });
         out(`Saved ${shown(full!)} (every frame's shapes and engine values)`);
       }
       if (overlay) out(`Saved ${shown(overlay)}`);
@@ -1225,16 +1294,164 @@ export function parseHeight(spec: string, where: string): number {
   return Number(m[1]) / (unit === "cm" ? 100 : unit === "mm" ? 1000 : 1);
 }
 
-// The character a sheet shows, from its file name or else its folder's:
-// knight_walk.png and knight/idle.png are "knight", Ludo's
-// fp_hero_walk2/animateSprite-61b55cee-1.png is "fp_hero".
+// Folder words that say where files are kept, not whose they are: the CLI's
+// own ludo-output, sprites/, assets/characters/.
+const PLACE_WORDS = new Set(
+  (
+    "ludo output outputs out assets asset art arts sprites sprite sheets spritesheets spritesheet anim anims animation animations images image img imgs " +
+    "gfx graphics textures texture characters character chars res resources export exports exported build dist public static src game games data media " +
+    "files tmp temp downloads download desktop documents project projects new old final"
+  ).split(" ")
+);
+
+// How the CLI names a download (animateSprite-29402c81-1.png): the
+// operation, the job, the file's number. It says nothing of the character.
+const LUDO_DOWNLOAD = /^[a-z][A-Za-z0-9]*-[0-9a-f]{8}-\d+$/;
+
+// The character a sheet shows, from its file name, else its folder's when
+// that names one: knight_walk.png and knight/idle.png are "knight", Ludo's
+// fp_hero_walk2/animateSprite-61b55cee-1.png is "fp_hero". "" when neither
+// says (ludo-output/animateSprite-....png, sprites/walk.png).
 export function characterName(file: string): string {
+  const own = LUDO_DOWNLOAD.test(baseOf(file)) ? "" : characterOf(path.basename(file)).character;
+  if (own) return own;
   const folder = path.basename(path.dirname(path.resolve(file)));
-  const both = characterOf(`${folder}/${path.basename(file)}`).character;
-  // A Ludo download's name, or one that only names the move, says nothing more than its folder.
-  if (both === characterOf(folder).character) return both;
-  return characterOf(path.basename(file)).character || both;
+  const words = folder.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  if (words.every(w => PLACE_WORDS.has(w) || /^\d+$/.test(w))) return "";
+  return characterOf(folder).character;
 }
+
+// ---- Where a Ludo sheet came from: the asset log beside it ----
+
+// Adjust re-cuts spritesheets made in the last 7 days (its --spritesheet-url help).
+const ADJUST_DAYS = 7;
+
+export interface Origin {
+  job?: string;
+  made?: string; // created_at of the generation the animation comes from
+  image?: string; // its initial image: a path (absolute) or a URL
+  motion_prompt?: string;
+  model?: string;
+  true_size?: boolean; // exported with --frame-size -9
+  url?: string; // a spritesheet_url that re-cuts the same animation, when one is on record
+  log: string;
+}
+
+const md5s = new Map<string, string | undefined>();
+function md5Of(file: string): string | undefined {
+  if (!md5s.has(file)) {
+    try {
+      md5s.set(file, crypto.createHash("md5").update(fs.readFileSync(file)).digest("hex"));
+    } catch {
+      md5s.set(file, undefined);
+    }
+  }
+  return md5s.get(file);
+}
+
+const isUrl = (v: string) => /^(https?:|data:)/i.test(v);
+
+// The asset logs that may know a sheet: in its folder and every folder above
+// it (a project keeps one at its root), and in its folder's siblings (one
+// --out per generation, as fp_hero_walk/ and fp_hero_walk_ts/).
+class AssetLogs {
+  private read = new Map<string, AssetEntry[]>();
+  private entries(log: string): AssetEntry[] {
+    if (!this.read.has(log)) {
+      let list: AssetEntry[] = [];
+      try {
+        list = readAssets(log);
+      } catch {
+        // An unreadable log says nothing.
+      }
+      this.read.set(log, list);
+    }
+    return this.read.get(log)!;
+  }
+  private logsFor(file: string): string[] {
+    const out: string[] = [];
+    for (let dir = path.dirname(path.resolve(file)); ; dir = path.dirname(dir)) {
+      out.push(path.join(dir, LOG_NAME));
+      if (path.dirname(dir) === dir) break;
+    }
+    const parent = path.dirname(path.dirname(path.resolve(file)));
+    try {
+      for (const d of fs.readdirSync(parent, { withFileTypes: true })) if (d.isDirectory()) out.push(path.join(parent, d.name, LOG_NAME));
+    } catch {
+      // No siblings to read.
+    }
+    return [...new Set(out)];
+  }
+  private entryOf(file: string): { entry: AssetEntry; dir: string } | undefined {
+    for (const log of this.logsFor(file)) {
+      const dir = path.dirname(log);
+      if (path.relative(dir, path.resolve(file)).startsWith("..")) continue;
+      const entry = findAsset(this.entries(log), file, dir);
+      if (entry) return { entry, dir };
+    }
+    return undefined;
+  }
+  // The logged generation whose sheet a spritesheet_url names: Ludo's
+  // sheet URLs end in the sheet's MD5, so the saved WebP whose MD5 it is.
+  private bySheetUrl(url: string, near: string): { entry: AssetEntry; dir: string } | undefined {
+    const id = /([0-9a-f]{32})\.\w+$/i.exec(url.split("?")[0])?.[1]?.toLowerCase();
+    if (!id) return undefined;
+    for (const log of this.logsFor(near)) {
+      const dir = path.dirname(log);
+      for (const e of this.entries(log)) if (/\.webp$/i.test(e.file) && md5Of(path.resolve(dir, e.file)) === id) return { entry: e, dir };
+    }
+    return undefined;
+  }
+  // A spritesheet_url on record (in a later adjust or edit) for this saved sheet.
+  private urlOf(entry: AssetEntry, dir: string, near: string): string | undefined {
+    const sums = new Set(
+      this.entries(path.join(dir, LOG_NAME))
+        .filter(e => e.job_id === entry.job_id && /\.webp$/i.test(e.file))
+        .map(e => md5Of(path.resolve(dir, e.file)))
+        .filter(Boolean)
+    );
+    for (const log of this.logsFor(near)) {
+      for (const e of this.entries(log)) {
+        const u = e.body?.spritesheet_url;
+        const id = typeof u === "string" ? /([0-9a-f]{32})\.\w+$/i.exec(u.split("?")[0])?.[1]?.toLowerCase() : undefined;
+        if (id && sums.has(id)) return u as string;
+      }
+    }
+    return undefined;
+  }
+  origin(file: string): Origin | undefined {
+    const own = this.entryOf(file);
+    if (!own) return undefined;
+    const out: Origin = { job: own.entry.job_id, log: path.join(own.dir, LOG_NAME) };
+    let at: { entry: AssetEntry; dir: string } | undefined = own;
+    for (let hop = 0; at && hop < 8; hop++) {
+      const b = at.entry.body ?? {};
+      if (out.true_size === undefined && typeof b.frame_size === "number") out.true_size = b.frame_size === -9;
+      const image = typeof b.initial_image === "string" ? b.initial_image : typeof b.image === "string" ? b.image : undefined;
+      if (image) {
+        out.image = isUrl(image) ? image : path.resolve(at.dir, image);
+        out.motion_prompt = typeof b.motion_prompt === "string" ? b.motion_prompt : undefined;
+        out.model = typeof b.model === "string" ? b.model : undefined;
+        out.made = at.entry.created_at;
+        if (!out.url) out.url = this.urlOf(at.entry, at.dir, file);
+        break;
+      }
+      const src = typeof b.spritesheet_url === "string" ? b.spritesheet_url : undefined;
+      if (!src) break;
+      // An adjust re-cuts its source: the source's URL re-cuts this sheet's animation too.
+      if (hop === 0 && at.entry.operation_id === "adjustSpritesheet") out.url = src;
+      at = this.bySheetUrl(src, file);
+    }
+    return out;
+  }
+}
+
+const sameImage = (a?: string, b?: string) => !!a && !!b && (a === b || (!isUrl(a) && !isUrl(b) && !!md5Of(a) && md5Of(a) === md5Of(b)));
+const ageDays = (iso?: string) => (iso && !Number.isNaN(Date.parse(iso)) ? (Date.now() - Date.parse(iso)) / 86_400_000 : undefined);
+const animateCommand = (o: Origin, image: string, trueSize: boolean) =>
+  [`ludo sprite animate --initial-image ${quoted(isUrl(image) ? image : shown(image))}`, `--motion-prompt ${JSON.stringify(o.motion_prompt ?? "<what it does>")}`, o.model ? `--model ${o.model}` : "", trueSize ? "--frame-size -9" : ""]
+    .filter(Boolean)
+    .join(" ");
 
 // Distinct solid colours, as 24-bit keys.
 function paletteOf(frames: Image[], masks: Uint8Array[]): Set<number> {
@@ -1253,30 +1470,40 @@ function sheetIndex(key: string, files: string[]): number {
   return files.findIndex(f => path.resolve(f) === path.resolve(key) || baseOf(f) === key || path.basename(f) === key);
 }
 
+type Cause = "scale" | "input_image" | "pose_or_image" | "pose";
+
 TOOLS.push({
   group: "sprite",
   name: "compare",
   args: "<sheet>...",
   summary: "One character's sheets side by side: how big each is drawn, one pixels per unit for all, frame size, ground, pivot, fps",
   details: [
-    "Sheets are grouped by character, from their file names or else their folders' (knight_walk.png,",
-    "knight/idle.png; Ludo's fp_hero_walk2/animateSprite-....png is fp_hero), or all as one with",
-    "--character. Sheets of different characters are never compared with each other.",
+    "Sheets are grouped by character: from their file names (knight_walk.png, FrogIdle.png), else their",
+    "folders' (knight/idle.png; Ludo's fp_hero_walk2/animateSprite-....png is fp_hero) unless the folder",
+    "only says where files are kept (ludo-output, sprites, assets), else the input image the asset log",
+    "(ludo-assets.json, beside the sheet or above it) says they were animated from. Sheets none of these",
+    "names are not compared for size: pass --character to take them as one. Sheets of different",
+    "characters are never compared with each other.",
     "",
-    "Within a character each sheet's body height is measured as `sprite metrics` does: the median frame",
-    "without thin protrusions (a raised blade, a slash trail), from the top of the body to the feet. The",
-    "reference is the sheet given with --reference, else the one of median height. A sheet more than",
-    `${SIZE_TOLERANCE * 100}% taller or shorter than the reference is drawn at another size: with one pixels per unit it`,
-    "would grow or shrink between moves. That decides whether the sheets are consistent.",
+    "Within a character each sheet's body height is measured as `sprite metrics` does: the median frame's",
+    "body, the art without parts under about a third of its thickness across (a blade, a spear, a staff,",
+    "a slash trail), from its top to the feet. The reference is the sheet given with --reference, else the",
+    "one of median height (among those animated from the input image most of them share, when the asset",
+    `logs say). A sheet more than ${SIZE_TOLERANCE * 100}% taller or shorter than the reference is flagged, with`,
+    "the likely cause: a different input image (when the asset logs say so), the export's scale (frame",
+    "sizes or ground lines differ), or, when the frame size and ground line match the reference's (as",
+    "True Size sheets of one input image do), the pose or the input image, not the scale. A thick weapon",
+    "held against the body counts as body, so a raised one can hide or fake a difference.",
     "",
     "Pixels per unit: one number for the character, the reference's body height over its height in the",
-    "game (--reference walk.png=1.8m, or cm, mm, u), else over 2 units. Pass it to `sprite export --ppu`",
-    "and `sprite collide --ppu` for every sheet of the character. Godot's Sprite3D pixel_size is its",
-    "inverse. Also listed, without deciding: frame sizes, the ground line (pixels above the frame's",
-    "bottom; within 1% of the frame height, 2 px at least, counts as the same), pivots (within 2% of the",
-    "frame), fps, and for pixel art (256 colours or fewer) the share of pixels in colours the others use.",
-    "Different frame sizes and ground lines line up once each sheet has its feet pivot (`sprite export",
-    "--pivot feet`). It only reports."
+    "game (--reference walk.png=1.8m, or cm, mm, u), else over 2 units. For Unity, pass it to `sprite",
+    "export --engine unity --ppu` for every sheet of the character, and to `sprite collide --ppu` (Unity",
+    "and Box2D). Godot 2D draws one pixel per unit, so it takes none; a Sprite3D takes its inverse as",
+    "pixel_size (listed). Also listed, without deciding: frame sizes, the ground line (pixels",
+    "above the frame's bottom, under the feet pivot; within 1% of the frame height, 2 px at least, counts",
+    "as the same), pivots (within 2% of the frame), fps, and for pixel art (256 colours or fewer) the share",
+    "of pixels in colours the others use. Different frame sizes and ground lines line up once each sheet",
+    "has its feet pivot (`sprite export --pivot feet`). It only reports."
   ],
   flags: [
     { flag: "--reference", value: "sheet=height", description: "A sheet and its character's height in the game: walk.png=1.8m (one per character)" },
@@ -1298,43 +1525,114 @@ TOOLS.push({
       refs.set(i, parseHeight(raw.slice(at + 1), "--reference"));
     }
     const named = textFlag(call, "--character");
+    const logs = new AssetLogs();
     const rows = files.map((file, i) => {
       const sheet = readSheet({ ...call, flags: new Map([...call.flags].filter(([k]) => k !== "--grid").concat(grids[i] ? [["--grid", grids[i]!]] : [])) }, file, threshold);
-      const s = metricsOrFail(sheet.masks, sheet.fw, sheet.fh, { kind: "feet" }, sheet.src.file, threshold);
-      return { i, sheet, s, height: s.body.height, character: named ?? characterName(file), palette: paletteOf(sheet.frames, sheet.masks) };
+      const s = metricsOrFail(sheet.masks, sheet.fw, sheet.fh, { kind: "feet", asked: true }, sheet.src.file, threshold);
+      const origin = logs.origin(file);
+      const byName = named ?? characterName(file);
+      const byImage = !byName && origin?.image ? baseOf(origin.image) : "";
+      return {
+        i,
+        sheet,
+        s,
+        origin,
+        height: s.body.height,
+        // Above the frame's bottom, under the feet pivot (the ground line a jump lands on).
+        groundUp: s.pivot.kind === "feet" ? sheet.fh - s.pivot.y : s.ground.above_bottom,
+        character: byName || (byImage ? `${byImage} (input image)` : ""),
+        character_from: named !== undefined ? "--character" : byName ? "name" : byImage ? "asset log: the input image" : "nothing",
+        palette: paletteOf(sheet.frames, sheet.masks)
+      };
     });
     const groups = new Map<string, typeof rows>();
     for (const r of rows) groups.set(r.character, [...(groups.get(r.character) ?? []), r]);
 
     const spread = (vs: number[]) => Math.max(...vs) - Math.min(...vs);
+    const sheetInfo = (r: (typeof rows)[number]) => ({
+      sheet: shown(r.sheet.src.file),
+      frames: r.sheet.grid.frames,
+      frame_width: r.sheet.fw,
+      frame_height: r.sheet.fh,
+      body_height: r.height,
+      art_height: r.s.art.height,
+      ground_above_bottom: r.groundUp,
+      pivot: { x: r.s.pivot.x, y: r.s.pivot.y, kind: r.s.pivot.kind },
+      fps: r.sheet.grid.fps,
+      palette_size: r.palette.size,
+      character_from: r.character_from,
+      ...(r.origin
+        ? {
+            asset_log: {
+              log: shown(r.origin.log),
+              ...(r.origin.image ? { input_image: isUrl(r.origin.image) ? r.origin.image : shown(r.origin.image) } : {}),
+              ...(r.origin.true_size !== undefined ? { true_size: r.origin.true_size } : {}),
+              ...(r.origin.made ? { made: r.origin.made } : {}),
+              ...(r.origin.url ? { spritesheet_url: r.origin.url } : {}),
+              ...(r.origin.job ? { job_id: r.origin.job } : {})
+            }
+          }
+        : {})
+    });
+
     const characters = [...groups].map(([character, list]) => {
+      // Nothing says which character these are: their sizes are not compared.
+      if (!character) {
+        return {
+          character: null,
+          sheets: list.map(sheetInfo),
+          note: "nothing says which character these are (their names, their folders' or an asset log's input image): their sizes are not compared. Pass --character <name> to take them as one character."
+        };
+      }
       const given = list.filter(r => refs.has(r.i));
-      if (given.length > 1) throw new CliError(`--reference names ${given.length} sheets of ${character || "one character"}: give one per character`, EXIT.USAGE);
-      const ref = given[0] ?? [...list].sort((a, b) => a.height - b.height)[Math.floor((list.length - 1) / 2)];
+      if (given.length > 1) throw new CliError(`--reference names ${given.length} sheets of ${character}: give one per character`, EXIT.USAGE);
+      // Without --reference: the sheet of median height among those animated
+      // from the input image most of them share, when the asset logs say.
+      const kin = (r: (typeof list)[number]) => list.filter(o => sameImage(o.origin?.image, r.origin?.image));
+      const most = Math.max(...list.map(r => kin(r).length));
+      const pool = most > 1 ? list.filter(r => kin(r).length === most && sameImage(r.origin?.image, list.find(o => kin(o).length === most)!.origin?.image)) : list;
+      const ref = given[0] ?? [...pool].sort((a, b) => a.height - b.height)[Math.floor((pool.length - 1) / 2)];
       const metres = refs.get(ref.i) ?? ASSUMED_HEIGHT;
-      const groundUp = list.map(r => r.s.ground.above_bottom);
+      const groundUp = list.map(r => r.groundUp);
       const groundTol = Math.max(2, 0.01 * Math.max(...list.map(r => r.sheet.fh)));
       const px = list.map(r => r.s.pivot.x / r.sheet.fw);
       const py = list.map(r => r.s.pivot.y / r.sheet.fh);
       const pixelArt = list.every(r => r.palette.size <= 256);
-      const sheets = list.map((r, k) => {
+      const refTs = ref.origin?.true_size ?? false;
+      // Godot's offset for the feet pivot, the same for every sheet?
+      const lineUp = list.every(r => r.sheet.fw === list[0].sheet.fw && r.sheet.fh === list[0].sheet.fh && r.s.pivot.x === list[0].s.pivot.x && r.s.pivot.y === list[0].s.pivot.y);
+      const sheets = list.map(r => {
         const size = r4(r.height / ref.height);
-        const off = Math.abs(size - 1) > SIZE_TOLERANCE;
-        return {
-          sheet: shown(r.sheet.src.file),
-          frames: r.sheet.grid.frames,
-          frame_width: r.sheet.fw,
-          frame_height: r.sheet.fh,
-          body_height: r.height,
-          art_height: r.s.art.height,
-          ground_above_bottom: groundUp[k],
-          pivot: { x: r.s.pivot.x, y: r.s.pivot.y, kind: r.s.pivot.kind },
-          fps: r.sheet.grid.fps,
-          palette_size: r.palette.size,
-          size_vs_reference: size,
-          ...(r === ref ? { reference: true } : {}),
-          ...(off ? { outlier: `drawn ${Math.round(Math.abs(size - 1) * 100)}% ${size > 1 ? "larger" : "smaller"} than the reference: at one pixels per unit the character ${size > 1 ? "grows" : "shrinks"} in this animation` } : {})
-        };
+        const info = { ...sheetInfo(r), size_vs_reference: size, ...(r === ref ? { reference: true } : {}) };
+        if (Math.abs(size - 1) <= SIZE_TOLERANCE) return info;
+        const pct = `${Math.round(Math.abs(size - 1) * 100)}% ${size > 1 ? "larger" : "smaller"}`;
+        const o = r.origin;
+        const framed = r.sheet.fw === ref.sheet.fw && r.sheet.fh === ref.sheet.fh && (Math.abs(r.groundUp - ref.groundUp) <= groundTol || (!!o?.true_size && refTs));
+        let cause: Cause;
+        let why: string;
+        let fix: string | undefined;
+        if (o?.image && ref.origin?.image && !sameImage(o.image, ref.origin.image)) {
+          cause = "input_image";
+          why = `its body is ${pct} than the reference's, and it was animated from another input image (${isUrl(o.image) ? o.image : shown(o.image)}; the reference from ${isUrl(ref.origin.image) ? ref.origin.image : shown(ref.origin.image)}), which draws the character at its own size: re-exporting it does not change that, animating this move again from the reference's image does`;
+          fix = animateCommand(o, ref.origin.image, refTs);
+        } else if (framed) {
+          const same = sameImage(o?.image, ref.origin?.image);
+          cause = same ? "pose" : "pose_or_image";
+          why = `its body is ${pct} than the reference's at the same frame size and ground line${o?.true_size && refTs ? " (both True Size)" : ""}, so the export did not scale it: ${same ? "both come from the same input image, so it is the pose (a crouch, a lunge, a bow)" : "it is the pose (a crouch, a lunge) or a different input image; the asset log beside a Ludo sheet would say which image it was animated from"}`;
+        } else {
+          cause = "scale";
+          const age = ageDays(o?.made);
+          if (o?.image && age !== undefined && age > ADJUST_DAYS) {
+            why = `drawn ${pct} than the reference: at one pixels per unit the character ${size > 1 ? "grows" : "shrinks"} in this animation. Exported at True Size, every sheet of the character keeps the size and place of its input image, but \`ludo sprite adjust\` only takes spritesheets made in the last ${ADJUST_DAYS} days and this one is from ${o.made!.slice(0, 10)}: animate the move again at True Size (it costs credits), and the character's other sheets too unless they are True Size already`;
+            fix = animateCommand(o, o.image, true);
+          } else {
+            why = `drawn ${pct} than the reference: at one pixels per unit the character ${size > 1 ? "grows" : "shrinks"} in this animation. If Ludo made the character's sheets, re-export each at True Size (free): every frame keeps the size and place of its input image${r.sheet.fw === ref.sheet.fw && r.sheet.fh === ref.sheet.fh ? ". Its frame size is the reference's but its ground line is not: if both are True Size already, the cause is the input image or the pose, and re-exporting changes nothing" : ""}`;
+            fix = o?.url
+              ? `ludo sprite adjust --spritesheet-url ${o.url} --frame-size -9`
+              : `ludo sprite adjust --spritesheet-url <its spritesheet_url${o?.job ? `, from \`ludo jobs get ${o.job}\`` : ""}> --frame-size -9`;
+          }
+        }
+        return { ...info, outlier: why, cause, ...(fix ? { fix } : {}) };
       });
       const shared = pixelArt
         ? list.map((r, i) => {
@@ -1350,12 +1648,18 @@ TOOLS.push({
             return total ? r2(inOthers / total) : 1;
           })
         : undefined;
-      const outliers = sheets.filter(x => x.outlier).map(x => x.sheet);
+      // The same input image in another pose is not a size to fix.
+      const outliers = sheets.filter(x => "cause" in x && x.cause !== "pose").map(x => x.sheet);
       return {
-        character: character || null,
+        character,
         reference: { sheet: shown(ref.sheet.src.file), body_height: ref.height, height_m: metres, ...(refs.has(ref.i) ? {} : { assumed: `${ASSUMED_HEIGHT} units: pass --reference <sheet>=<height> for its real height` }) },
         pixels_per_unit: r2(ref.height / metres),
-        godot: { pixel_size: r4(metres / ref.height) },
+        godot: {
+          pixel_size: r4(metres / ref.height),
+          ...(list.length > 1 && !lineUp
+            ? { one_node: "the frame sizes or feet pivots differ, so the sheets need different offsets: on one AnimatedSprite2D (one offset for all its animations) they do not line up. Keep one node per sheet (each `sprite export --engine godot --pivot feet` scene), or change its offset with the animation" }
+            : {})
+        },
         sheets,
         ...(list.length > 1
           ? {
@@ -1375,26 +1679,36 @@ TOOLS.push({
       };
     });
 
-    const off = characters.find(c => c.outliers?.length);
-    const first = characters[0];
-    const next = off
-      ? hint("Re-export the character's Ludo sheets at True Size (free): every frame keeps the size and place of its input image", "ludo sprite adjust --spritesheet-url <its spritesheet_url> --frame-size -9")
-      : hint("Write each sheet's engine files with its feet pivot and the character's pixels per unit", `ludo toolbox sprite export ${quoted(first.reference.sheet)} --engine unity --pivot feet --ppu ${first.pixels_per_unit}`);
-    const consistent = characters.every(c => c.consistent !== false);
+    const judged = characters.filter((c): c is Extract<(typeof characters)[number], { reference: unknown }> => c.character !== null);
+    const toFix = judged.flatMap(c => c.sheets).find(x => "fix" in x && x.fix && x.cause !== "pose") as { fix: string; cause: Cause } | undefined;
+    const first = judged[0];
+    const next = toFix
+      ? hint(toFix.cause === "input_image" ? "Animate the move again from the reference's input image" : toFix.fix.startsWith("ludo sprite adjust") ? "Re-export it at True Size (free)" : "Animate the move again at True Size", toFix.fix)
+      : first
+        ? hint("Write each sheet's engine files with its feet pivot and the character's pixels per unit", `ludo toolbox sprite export ${quoted(first.reference.sheet)} --engine unity --pivot feet --ppu ${first.pixels_per_unit}`)
+        : hint("Name the character to compare these sheets", `ludo toolbox sprite compare ${files.map(f => quoted(shown(f))).join(" ")} --character <name>`);
+    const consistent = judged.every(c => c.consistent !== false);
     if (ctx.jsonOut) {
       printJson({ characters, consistent, ...(ctx.globals.quiet ? {} : { hint: next }) }, false);
     } else {
       const out = (line: string) => process.stdout.write(line + "\n");
       for (const c of characters) {
-        out(`${c.character ?? "(no name)"}: ${c.sheets.length} sheet${c.sheets.length > 1 ? "s" : ""}`);
+        out(`${c.character ?? "(no character)"}: ${c.sheets.length} sheet${c.sheets.length > 1 ? "s" : ""}`);
         const width = Math.max(...c.sheets.map(r => r.sheet.length));
         out(`  ${"".padEnd(width)}  frame      body  ground  pivot          fps    size`);
         for (const r of c.sheets) {
-          out(`  ${r.sheet.padEnd(width)}  ${`${r.frame_width}x${r.frame_height}`.padEnd(9)}  ${String(r.body_height).padStart(4)}  ${String(r.ground_above_bottom).padStart(6)}  ${`${r.pivot.x},${r.pivot.y} ${r.pivot.kind}`.padEnd(13)}  ${String(r.fps).padEnd(5)}  ${r.size_vs_reference}${r.reference ? " (reference)" : ""}${r.outlier ? `  ${r.outlier}` : ""}`);
+          const size = "size_vs_reference" in r ? `${r.size_vs_reference}${"reference" in r ? " (reference)" : ""}` : "-";
+          out(`  ${r.sheet.padEnd(width)}  ${`${r.frame_width}x${r.frame_height}`.padEnd(9)}  ${String(r.body_height).padStart(4)}  ${String(r.ground_above_bottom).padStart(6)}  ${`${r.pivot.x},${r.pivot.y} ${r.pivot.kind}`.padEnd(13)}  ${String(r.fps).padEnd(5)}  ${size}`);
+          if ("outlier" in r) out(`    ${r.outlier}.${r.fix ? `\n    Fix: ${r.fix}` : ""}`);
+        }
+        if (!("reference" in c)) {
+          out(`  ${c.note}`);
+          continue;
         }
         const ref = c.reference;
         out(`  Pixels per unit ${c.pixels_per_unit} for every sheet (Godot Sprite3D pixel_size ${c.godot.pixel_size}): the reference's ${ref.body_height} px body as ${ref.height_m} ${ref.assumed ? "units, assumed" : "m"}`);
-        if (c.consistent !== undefined) out(c.consistent ? `  Drawn at one size (bodies within ${SIZE_TOLERANCE * 100}%).` : `  Not drawn at one size: ${c.outliers!.join(", ")}.`);
+        if (c.godot.one_node) out(`  Godot: ${c.godot.one_node}.`);
+        if (c.consistent !== undefined) out(c.consistent ? `  Drawn at one size (bodies within ${SIZE_TOLERANCE * 100}%, or the same input image in another pose).` : `  Not drawn at one size: ${c.outliers!.join(", ")}.`);
       }
       if (!ctx.globals.quiet) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
     }

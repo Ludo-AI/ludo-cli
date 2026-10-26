@@ -3,10 +3,11 @@ import path from "node:path";
 import { CliError, EXIT } from "../errors.js";
 import { printJson, type Ctx } from "../generate.js";
 import type { Image } from "../tty/png.js";
-import { baseOf, freeName, loadImageFile, shown, writePng } from "./io.js";
+import { baseOf, freeName, loadImageFile, shown, writePng, type Loaded } from "./io.js";
 import { positiveInt } from "./flags.js";
 import { natural } from "./sprite.js";
-import { canvas, checkerboard, drawImage, fitText, scaled, text, textHeight, type Rgba } from "./draw.js";
+import { canvas, checkerboard, drawImage, fitText, scaled, text, textHeight, textWidth, type Rgba } from "./draw.js";
+import { GLYPHS } from "./font.js";
 import { hint, TOOLS, type ToolCall } from "./registry.js";
 
 // `ludo toolbox image contact`: one labelled PNG of several images, for an
@@ -98,11 +99,46 @@ export function fitScale(w: number, h: number, cell: number): number {
   return s >= 1 ? Math.floor(s) : s;
 }
 
-export function drawImageContact(images: { name: string; image: Image }[], opts: { maxSide: number; cell?: number; cols?: number; title: string }) {
+// A name in the picture's font: accents dropped (héros -> heros), and each
+// run of characters it has no glyph for (ドラゴン) as ~ and four hex digits
+// of the run's hash, so names in other scripts still tell apart.
+export function drawableName(name: string): string {
+  const plain = name.normalize("NFD").replace(/\p{M}/gu, "");
+  let out = "";
+  let run = "";
+  const flush = () => {
+    if (!run) return;
+    let h = 0x811c9dc5; // FNV-1a
+    for (const ch of run) h = Math.imul(h ^ ch.codePointAt(0)!, 0x01000193) >>> 0;
+    out += `~${(h & 0xffff).toString(16).padStart(4, "0")}`;
+    run = "";
+  };
+  for (const ch of plain) {
+    if (GLYPHS.has(ch)) (flush(), (out += ch));
+    else run += ch;
+  }
+  flush();
+  return out;
+}
+
+// A name cut in the middle to fit, keeping its start and more of its end
+// (takes of one prompt differ at the end: createImage-9f3a2b...-3.png).
+export function fitMiddle(s: string, width: number, size = 1): string {
+  if (textWidth(s, size) <= width) return s;
+  const chars = [...s];
+  for (let keep = chars.length - 1; keep > 1; keep--) {
+    const tail = Math.ceil((2 * keep) / 3);
+    const cut = chars.slice(0, keep - tail).join("") + "..." + chars.slice(chars.length - tail).join("");
+    if (textWidth(cut, size) <= width) return cut;
+  }
+  return fitText(s, width, size);
+}
+
+export function drawImageContact(images: { name: string; image: Image; size?: string }[], opts: { maxSide: number; cell?: number; cols?: number; title: string }) {
   const l = imageContactLayout(images.length, opts.maxSide, opts.cell ?? 256, opts.cols);
   const img = canvas(l.width, l.height, BG);
   text(img, M, M, fitText(opts.title, l.width - 2 * M, SIZE), INK, SIZE);
-  const placed = images.map(({ name, image }, k) => {
+  const placed = images.map(({ name, image, size }, k) => {
     const x = l.firstX + (k % l.cols) * l.pitchX;
     const y = l.firstY + Math.floor(k / l.cols) * l.pitchY;
     const s = fitScale(image.width, image.height, l.cell);
@@ -111,9 +147,12 @@ export function drawImageContact(images: { name: string; image: Image }[], opts:
     const ix = x + Math.floor((l.cell - shownImg.width) / 2);
     const iy = y + Math.floor((l.cell - shownImg.height) / 2);
     drawImage(img, shownImg, ix, iy);
-    text(img, x, y + l.cell + 4, fitText(name, l.cell, SIZE), INK, SIZE);
-    text(img, x, y + l.cell + 8 + textHeight(SIZE), fitText(`${image.width}x${image.height}${s !== 1 ? ` at ${round(s, 2)}x` : ""}`, l.cell, SIZE), DIM, SIZE);
-    return { x, y, scale: s, drawn: { x: ix, y: iy, width: shownImg.width, height: shownImg.height } };
+    // Numbered, so a cell is named even when its name is cut.
+    const number = `${k + 1} `;
+    const caption = number + fitMiddle(drawableName(name), l.cell - textWidth(number, SIZE), SIZE);
+    text(img, x, y + l.cell + 4, caption, INK, SIZE);
+    text(img, x, y + l.cell + 8 + textHeight(SIZE), fitText(`${size ?? `${image.width}x${image.height}`}${s !== 1 ? ` at ${round(s, 2)}x` : ""}`, l.cell, SIZE), DIM, SIZE);
+    return { x, y, scale: s, label: caption, drawn: { x: ix, y: iy, width: shownImg.width, height: shownImg.height } };
   });
   return { image: img, layout: l, placed };
 }
@@ -127,9 +166,10 @@ TOOLS.push({
     "For an agent comparing a set: icons, a UI kit, a character's variations, takes of one prompt.",
     "Images are files, or folders of them taken in natural order (icon-2 before icon-10). Each is",
     "fitted into a square cell on a checkerboard: enlarged by whole factors (pixel art keeps its",
-    "pixels), or shrunk to fit; its name and its real size are printed under it. An animated GIF or",
-    `WebP shows as its frames' sheet. The picture is at most ${MAX_SIDE} px a side. It only draws: the`,
-    "images are not changed."
+    "pixels), or shrunk to fit; its number, its name (cut in the middle when long) and its real size",
+    "are printed under it. An animated GIF or WebP shows as its frames' sheet, captioned with one frame's",
+    "size and the frame count. A file that does not read is left out with a note. The picture is at most",
+    `${MAX_SIDE} px a side. It only draws: the images are not changed.`
   ],
   flags: [
     { flag: "--cols", value: "n", description: "Images per row (default: whatever shows them largest)" },
@@ -145,9 +185,26 @@ TOOLS.push({
     if (files.length > 400) throw usage(`${files.length} images is too many for one picture; the limit is 400`);
     const cols = positiveInt(call, "--cols");
     if (cols !== undefined && cols > files.length) throw usage(`--cols ${cols} is more than the ${files.length} images`);
-    const loaded = files.map(loadImageFile);
-    const items = loaded.map(s => ({ name: path.basename(s.file), image: s.image }));
-    const sheet = drawImageContact(items, { maxSide, cell, cols, title: `${items.length} images` });
+    // A file that does not read is left out, with a note, not the whole picture.
+    const skipped: { file: string; error: string }[] = [];
+    const loaded = files.flatMap(f => {
+      try {
+        return [loadImageFile(f)];
+      } catch (err) {
+        if (!(err instanceof CliError)) throw err;
+        skipped.push({ file: shown(f), error: err.message });
+        return [];
+      }
+    });
+    if (!loaded.length) throw new CliError(`None of the images could be read: ${skipped.map(x => x.error).join("; ")}`, EXIT.BAD_INPUT);
+    if (cols !== undefined && cols > loaded.length) throw usage(`--cols ${cols} is more than the ${loaded.length} images read`);
+    // An animated GIF or WebP is drawn as its frames' sheet, captioned with its own size.
+    const own = (s: Loaded) => (s.animation && s.grid ? { width: s.image.width / s.grid.cols, height: s.image.height / s.grid.rows, frames: s.grid.frames } : { width: s.image.width, height: s.image.height });
+    const items = loaded.map(s => {
+      const o = own(s);
+      return { name: path.basename(s.file), image: s.image, size: `${o.width}x${o.height}${"frames" in o ? `, ${o.frames} frames` : ""}` };
+    });
+    const sheet = drawImageContact(items, { maxSide, cell, cols, title: `${items.length} images${skipped.length ? ` (${skipped.length} unreadable, left out)` : ""}` });
     const l = sheet.layout;
     const file = freeName(ctx.outDir, ctx.globals.name || (files.length === 1 ? `${baseOf(files[0])}-contact` : "contact"), ".png");
     writePng(file, sheet.image);
@@ -160,10 +217,15 @@ TOOLS.push({
           width: l.width,
           height: l.height,
           layout: { cols: l.cols, rows: l.rows, cell: l.cell, first_cell: { x: l.firstX, y: l.firstY }, pitch: { x: l.pitchX, y: l.pitchY } },
-          images: loaded.map((s, k) => ({ file: shown(s.file), width: s.image.width, height: s.image.height, scale: round(sheet.placed[k].scale, 3), at: sheet.placed[k].drawn })),
+          images: loaded.map((s, k) => {
+            const o = own(s);
+            return { number: k + 1, file: shown(s.file), label: sheet.placed[k].label, ...o, scale: round(sheet.placed[k].scale, 3), at: sheet.placed[k].drawn };
+          }),
+          ...(skipped.length ? { skipped } : {}),
           legend: {
             checkerboard: "transparent pixels",
-            caption: "the file's name, then its size in pixels (and the scale it is shown at, when not 1)"
+            caption:
+              "the image's number and file name (cut in the middle when long; accents dropped, and characters the font lacks as ~ and a hash), then its size in pixels (an animated GIF or WebP: one frame's, and how many; it is drawn as its frames side by side) and the scale it is shown at, when not 1"
           },
           ...(ctx.globals.quiet ? {} : { hint: next })
         },
@@ -171,6 +233,10 @@ TOOLS.push({
       );
     } else {
       process.stdout.write(`${items.length} images in a ${l.cols}x${l.rows} grid of ${l.cell} px cells\n`);
+      sheet.placed.forEach((p, k) => {
+        if (p.label !== `${k + 1} ${items[k].name}`) process.stdout.write(`  ${k + 1}  ${shown(loaded[k].file)}\n`);
+      });
+      for (const x of skipped) process.stdout.write(`Skipped ${x.file}: ${x.error}\n`);
       process.stdout.write(`Saved ${shown(file)} (${l.width}x${l.height})\n`);
       if (!ctx.globals.quiet) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
     }

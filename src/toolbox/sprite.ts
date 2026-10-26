@@ -391,6 +391,12 @@ TOOLS.push({
   }
 });
 
+// One scene per sheet: Godot characters usually play every move on one
+// AnimatedSprite2D, whose one offset fits all of them only when they share
+// the frame size and pivot.
+const GODOT_ONE_SHEET =
+  "The .tscn is an AnimatedSprite2D playing this sheet, its offset on the node. To play a character's moves on one AnimatedSprite2D, they share that offset: right only when the sheets have one frame size and pivot (`ludo toolbox sprite compare <its sheets>` says), otherwise keep a node per sheet or change the offset with the animation.";
+
 TOOLS.push({
   group: "sprite",
   name: "export",
@@ -412,8 +418,10 @@ TOOLS.push({
     "the feet, as `ludo toolbox sprite metrics` measures it (a sheet that does not stand on a ground line",
     "gets its centre of mass, and the output says so); mass or X,Y (frame pixels) also work. Unity gets",
     "it as each sprite's custom pivot; Godot, whose SpriteFrames has none, also gets a .tscn scene: an",
-    "AnimatedSprite2D with the offset that puts the pivot at the node's origin. --ppu sets Unity's",
-    "pixels per unit (default 100): use the one `ludo toolbox sprite compare` gives the character."
+    "AnimatedSprite2D playing this one sheet, with the offset that puts the pivot at the node's origin",
+    "(one offset per node: a character's sheets share one AnimatedSprite2D only with one frame size and",
+    "pivot). --ppu sets Unity's pixels per unit (default 100): use the one `ludo toolbox sprite compare`",
+    "gives the character. Godot 2D, PixiJS and Phaser draw one pixel per unit and take no --ppu."
   ],
   flags: [
     { flag: "--animation", value: "name", description: "The animation's name (default: the file's name; \"default\" for Godot)" },
@@ -434,7 +442,15 @@ TOOLS.push({
     const out = { ...grid, fps };
     const engine = ctx.globals.engine;
     const ppu = positiveNumber(call, "--ppu");
-    if (ppu !== undefined && engine !== "unity") throw new CliError("--ppu is Unity's pixels per unit: use it with --engine unity", EXIT.USAGE);
+    if (ppu !== undefined && engine !== "unity") {
+      throw new CliError(
+        "--ppu is Unity's pixels per unit: use it with --engine unity",
+        EXIT.USAGE,
+        engine === "godot"
+          ? "Godot 2D draws one pixel per unit, so leave it out; for a Sprite3D, set pixel_size to 1 / ppu (`ludo toolbox sprite compare` lists it as godot.pixel_size)."
+          : "PixiJS and Phaser draw one pixel per unit, so leave it out."
+      );
+    }
     // The pivot as `sprite metrics` measures it, in the untrimmed frame.
     let pivot: { x: number; y: number; kind: string; why: string } | undefined;
     if (call.flags.has("--pivot")) {
@@ -456,6 +472,7 @@ TOOLS.push({
           ...(src.extrude ? { extrude: src.extrude } : {}),
           ...(pivot ? { pivot } : {}),
           ...(engine === "unity" ? { pixels_per_unit: ppu ?? 100 } : {}),
+          ...(pivot && engine === "godot" ? { godot_scene: GODOT_ONE_SHEET } : {}),
           engine_files: files.map(shown),
           ...(ctx.globals.quiet ? {} : { hint: next })
         },
@@ -465,6 +482,7 @@ TOOLS.push({
       process.stdout.write(`${grid.frames} frames (${grid.cols}x${grid.rows} grid) at ${fps} fps\n`);
       if (pivot) process.stdout.write(`Pivot ${pivot.x}, ${pivot.y} (${pivot.kind}): ${pivot.why}\n`);
       process.stdout.write(savedLines(files));
+      if (pivot && engine === "godot") process.stdout.write(`${GODOT_ONE_SHEET}\n`);
       if (!ctx.globals.quiet) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
     }
     return EXIT.OK;

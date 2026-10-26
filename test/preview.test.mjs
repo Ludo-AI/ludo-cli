@@ -10,7 +10,8 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { encodePng, readPng } from "../dist/tty/png.js";
-import { fitScale, imageContactLayout, MAX_SIDE } from "../dist/toolbox/preview.js";
+import { makeGif } from "../dist/toolbox/gif.js";
+import { drawableName, fitMiddle, fitScale, imageContactLayout, MAX_SIDE } from "../dist/toolbox/preview.js";
 import { canvas, fitText, text, textWidth } from "../dist/toolbox/draw.js";
 import { GLYPHS } from "../dist/toolbox/font.js";
 import { EXIT } from "../dist/errors.js";
@@ -77,4 +78,37 @@ test("image contact: each image fitted to its cell, whole factors up, its size u
   assert.equal(out.hint.command, `ludo image edit --image <one of them> --prompt "<the change>"`);
   const many = imageContactLayout(400);
   assert.ok(many.width <= MAX_SIDE && many.height <= MAX_SIDE);
+});
+
+test("image contact: takes stay apart (numbered, cut in the middle), other scripts too, a GIF shows its own size, a broken file is left out", async () => {
+  const dir = tmp();
+  const solid = (w, h, c) => {
+    const rgba = new Uint8Array(w * h * 4);
+    for (let i = 0; i < rgba.length; i += 4) rgba.set(c, i);
+    return { width: w, height: h, rgba };
+  };
+  for (let k = 1; k <= 4; k++) fs.writeFileSync(path.join(dir, `createImage-9f3a2b1c0d4e5f60-${k}.png`), encodePng(solid(32, 32, [40 * k, 0, 0, 255])));
+  fs.writeFileSync(path.join(dir, "héros_ドラゴン.png"), encodePng(solid(8, 8, [0, 255, 0, 255])));
+  fs.writeFileSync(path.join(dir, "héros_ゴブリン.png"), encodePng(solid(8, 8, [0, 0, 255, 255])));
+  fs.writeFileSync(path.join(dir, "anim.gif"), makeGif([solid(20, 10, [255, 0, 0, 255]), solid(20, 10, [0, 255, 0, 255]), solid(20, 10, [0, 0, 255, 255])], { fps: 10, alphaThreshold: 128, loop: true }).bytes);
+  fs.writeFileSync(path.join(dir, "broken.png"), "not a png");
+  const r = await run(["toolbox", "image", "contact", ".", "--json", "--out", "out"], dir);
+  assert.equal(r.code, EXIT.OK, r.stderr);
+  const out = r.json();
+  assert.deepEqual(out.skipped.map(x => x.file), ["broken.png"]);
+  const labels = out.images.map(i => i.label);
+  assert.equal(new Set(labels).size, labels.length, labels.join(" | "));
+  const takes = out.images.filter(i => i.file.startsWith("createImage"));
+  for (const t of takes) assert.match(t.label, new RegExp(`^${t.number} creat.*\\.\\.\\..*-${t.file.slice(-5, -4)}\\.png$`), t.label);
+  const gif = out.images.find(i => i.file === "anim.gif");
+  assert.deepEqual([gif.width, gif.height, gif.frames], [20, 10, 3]);
+  // Accents go, other scripts become a hash that keeps the names apart.
+  assert.equal(drawableName("héros.png"), "heros.png");
+  assert.match(drawableName("héros_ドラゴン.png"), /^heros_~[0-9a-f]{4}\.png$/);
+  assert.notEqual(drawableName("héros_ドラゴン.png"), drawableName("héros_ゴブリン.png"));
+  assert.equal(fitMiddle("abcdefghij", textWidth("a...ghij")), "a...ghij");
+  // Nothing readable is an error.
+  const none = tmp();
+  fs.writeFileSync(path.join(none, "broken.png"), "not a png");
+  assert.equal((await run(["toolbox", "image", "contact", "broken.png", "--json"], none)).code, EXIT.BAD_INPUT);
 });

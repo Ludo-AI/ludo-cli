@@ -165,6 +165,8 @@ test("ludo toolbox sprite export --engine unity, and ludo init in a Unity projec
   assert.deepEqual(field(standMeta, "  spritePixelsToUnits"), ["24"]);
   const ppuGodot = await exec(process.execPath, [cli, "toolbox", "sprite", "export", "stand.png", "--grid", "2x1", "--engine", "godot", "--ppu", "24", "--json"], { env, cwd: dir }).catch(e => e);
   assert.equal(ppuGodot.code, 2);
+  // Godot 2D draws one pixel per unit: the error says so, and where a Sprite3D's pixel_size comes from.
+  assert.match(JSON.parse(ppuGodot.stdout).error.hint, /^Godot 2D draws one pixel per unit[^]*pixel_size/);
   const tp = await exec(process.execPath, [cli, "toolbox", "sprite", "export", "stand.png", "--grid", "2x1", "--engine", "texturepacker", "--pivot", "feet", "--json"], { env, cwd: dir }).catch(e => e);
   assert.equal(tp.code, 2);
 
