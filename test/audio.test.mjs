@@ -1,6 +1,7 @@
 // The audio tools: WAV in and out (against ffmpeg's reading and writing where
 // it is installed), loudness against EBU Tech 3341's test signals and ffmpeg's
-// ebur128 filter, the sound functions, hostile WAVs, and the CLI. Checks
+// ebur128 filter, the sound functions, music's tempo on drum patterns built
+// here, hostile WAVs, and the CLI. Checks
 // that need ffmpeg skip without it, except where LUDO_REQUIRE_WEBP_TOOLS=1
 // (CI installs it).
 import { test } from "node:test";
@@ -12,6 +13,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { decodeWav, encodeWav, isWav, WavError } from "../dist/toolbox/wav.js";
 import { audibleRange, fade, fromDb, loopClicks, loudness, repeats, samplePeak, toDb, truePeak } from "../dist/toolbox/sound.js";
+import { spectralFlux, tempo } from "../dist/toolbox/audio.js";
 import { EXIT } from "../dist/errors.js";
 
 const CLI = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
@@ -295,6 +297,89 @@ test("a sound that does not end where it starts clicks on a loop; one written se
   assert.equal(repeats(stereo(rate, concat(ch, noise(n, 0.5, 4)))), 1);
 });
 
+// ---- Tempo ----
+
+// Mixes `sound` into `into` at `at` seconds.
+function place(into, rate, at, sound, gain = 1) {
+  const o = Math.round(at * rate);
+  for (let i = 0; i < sound.length && o + i < into.length; i++) into[o + i] += gain * sound[i];
+}
+
+// Drums: a kick (a sine falling from 120 to 50 Hz), a snare (noise and a
+// 190 Hz body), a hi-hat (differenced noise: all top end), each decaying.
+const kick = rate => Float32Array.from({ length: Math.round(rate * 0.25) }, (_, i) => {
+  const t = i / rate;
+  return 0.9 * Math.exp(-t / 0.06) * Math.sin(2 * Math.PI * (50 * t + 70 * 0.03 * (1 - Math.exp(-t / 0.03))));
+});
+const snare = (rate, seed = 3) => {
+  const r = rnd(seed);
+  return Float32Array.from({ length: Math.round(rate * 0.18) }, (_, i) => {
+    const t = i / rate;
+    return Math.exp(-t / 0.05) * (0.5 * (r() * 2 - 1) + 0.3 * Math.sin(2 * Math.PI * 190 * t));
+  });
+};
+const hat = (rate, seed = 5) => {
+  const r = rnd(seed);
+  let last = 0;
+  return Float32Array.from({ length: Math.round(rate * 0.04) }, (_, i) => {
+    const v = r() * 2 - 1;
+    const out = (v - last) * 0.5 * Math.exp(-i / rate / 0.012);
+    last = v;
+    return out;
+  });
+};
+
+// `seconds` of a pattern at `bpm`: `steps(beat)` lists [offset in beats, sound, gain].
+function beat(rate, bpm, seconds, steps) {
+  const out = new Float32Array(Math.round(rate * seconds));
+  const spb = 60 / bpm;
+  for (let b = 0; b * spb < seconds; b++) for (const [offset, sound, gain] of steps(b)) place(out, rate, (b + offset) * spb, sound, gain);
+  return out;
+}
+
+const tempoOf = (rate, ch) => tempo(spectralFlux({ rate, channels: [ch] }));
+// The pick outscores every other reading.
+const agrees = (t, what) => assert.ok(t.alternatives.every(a => a.score >= 0 && a.score < 1), `${what}: ${JSON.stringify(t.alternatives)}`);
+
+test("tempo: 120 BPM within 1%, through the half- and double-tempo traps", () => {
+  const rate = 22050;
+  const patterns = {
+    // A kick on every beat.
+    "four on the floor": b => [[0, kick(rate), 1]],
+    // Loud hi-hats on every eighth: the autocorrelation also peaks at 240.
+    "eighth hats": b => [[0, kick(rate), 1], [0, hat(rate), 0.9], [0.5, hat(rate, 7), 0.9]],
+    // Kick on 1 and 3, snare on 2 and 4: kicks line up with kicks two beats
+    // apart, so the autocorrelation also peaks at 60.
+    "kick and snare": b => [[0, b % 2 ? snare(rate) : kick(rate), 1]],
+    // The same with eighth hats and a quieter snare.
+    "backbeat with hats": b => [[0, b % 2 ? snare(rate) : kick(rate), b % 2 ? 0.6 : 1], [0, hat(rate), 0.3], [0.5, hat(rate, 9), 0.3]]
+  };
+  for (const [name, steps] of Object.entries(patterns)) {
+    const t = tempoOf(rate, beat(rate, 120, 20, steps));
+    assert.ok(t, name);
+    assert.ok(Math.abs(t.bpm / 120 - 1) < 0.01, `${name}: ${t.bpm.toFixed(2)} BPM`);
+    assert.ok(t.confidence > 0.3 && t.steady > 0.9, `${name}: confidence ${t.confidence}, steady ${t.steady}`);
+    assert.deepEqual(t.alternatives.map(a => Math.round(a.bpm)), [60, 80, 180, 240]);
+    agrees(t, name);
+  }
+});
+
+test("tempo: 150 BPM kick and snare (where the prior leans to 75) and 90 BPM with eighth hats (not 180)", () => {
+  const rate = 22050;
+  // The beats settle the octave the autocorrelation and prior give to 75;
+  // 75 stays the runner-up, scored under the pick.
+  const t150 = tempoOf(rate, beat(rate, 150, 16, b => [[0, b % 2 ? snare(rate) : kick(rate), 1], [0.5, hat(rate), 0.4]]));
+  assert.ok(Math.abs(t150.bpm / 150 - 1) < 0.01, `${t150.bpm}`);
+  agrees(t150, "150");
+  assert.ok(t150.alternatives.find(a => Math.round(a.bpm) === 75).score > 0.3, JSON.stringify(t150.alternatives));
+  const t90 = tempoOf(rate, beat(rate, 90, 20, b => [[0, b % 2 ? snare(rate) : kick(rate), 1], [0.5, hat(rate), 0.8], [0, hat(rate, 8), 0.8]]));
+  assert.ok(Math.abs(t90.bpm / 90 - 1) < 0.01, `${t90.bpm}`);
+  agrees(t90, "90");
+  // An odd tempo is measured, not rounded to a lag: 1 frame is 1.2% at 120 BPM.
+  const odd = tempoOf(rate, beat(rate, 127.3, 20, b => [[0, kick(rate), 1]]));
+  assert.ok(Math.abs(odd.bpm / 127.3 - 1) < 0.003, `${odd.bpm}`);
+});
+
 // ---- The CLI ----
 
 // opts.noPath: no PATH under any spelling (Windows has Path), so no ffmpeg.
@@ -336,7 +421,26 @@ test("audio info: length, loudness, peaks, silence and the loop seam, in JSON", 
   assert.equal(info.silence_start, 0.5);
   assert.equal(info.silence_end, 0.45);
   assert.equal(info.loop_clicks, false);
+  assert.equal(info.bpm, undefined, "a sound effect has no tempo");
   assert.match(info.hint.command, /^ludo toolbox audio trim /);
+});
+
+test("audio info: music gets its tempo and the other readings, scored under the pick; a hum does not", async () => {
+  const rate = 22050;
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, "groove.wav"), encodeWav({ rate, channels: [beat(rate, 120, 12, b => [[0, b % 2 ? snare(rate) : kick(rate), 1], [0.5, hat(rate), 0.5]])] }));
+  const music = await run(["toolbox", "audio", "info", "groove.wav"], { cwd: dir });
+  assert.equal(music.code, EXIT.OK, music.stderr);
+  const m = music.json();
+  assert.ok(Math.abs(m.bpm - 120) < 1, `${m.bpm}`);
+  assert.ok(m.bpm_alternatives.some(a => a.bpm === 60), JSON.stringify(m.bpm_alternatives));
+  assert.ok(m.bpm_alternatives.every((a, i, all) => a.score < 1 && (!i || a.score <= all[i - 1].score)), JSON.stringify(m.bpm_alternatives));
+  // A hum with a slow wobble, as long: no beat, so no tempo.
+  const hum = Float32Array.from({ length: rate * 10 }, (_, i) => 0.3 * (1 + 0.2 * Math.sin((2 * Math.PI * 0.3 * i) / rate)) * Math.sin((2 * Math.PI * 110 * i) / rate));
+  fs.writeFileSync(path.join(dir, "hum.wav"), encodeWav({ rate, channels: [hum] }));
+  const h = (await run(["toolbox", "audio", "info", "hum.wav"], { cwd: dir })).json();
+  assert.equal(h.bpm, undefined);
+  assert.equal(h.bpm_alternatives, undefined);
 });
 
 test("audio trim cuts the silence, keeps --pad of it and fades the cuts", async () => {
