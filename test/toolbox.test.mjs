@@ -599,6 +599,20 @@ test("the jobs Ludo does are not toolbox tools: their names point at Ludo's", as
   }
 });
 
+test("tools that became part of another point at it", async () => {
+  for (const [group, name, command] of [
+    ["sprite", "contact", /ludo toolbox sprite metrics <sheet> --overlay/],
+    ["asset", "scale", /ludo toolbox sprite compare/],
+    ["audio", "onsets", /ludo toolbox audio info/],
+    ["model", "orient", /ludo toolbox model info/],
+    ["model", "clips", /ludo toolbox model info/]
+  ]) {
+    const r = await run(["toolbox", group, name, "x.png"]);
+    assert.equal(r.code, EXIT.USAGE, `${group} ${name}`);
+    assert.match(r.stderr, command, `${group} ${name}`);
+  }
+});
+
 test("a ping-pong made by sprite frames is reported as mirrored, with a smooth seam", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-loop-"));
   const file = writeSheet(dir, "swing.png", strip(range(0, 5).map(t => orbitFrame(t, 8))), { cols: 5, rows: 1, frames: 5, fps: 10 });

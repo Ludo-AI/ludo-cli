@@ -32,6 +32,16 @@ const AT_LUDO: Record<string, { job: string; command: string }> = {
   "audio loop": { job: "Ludo's music and ambiences loop already; to check any sound's loop seam", command: "ludo toolbox audio info <sound>" }
 };
 
+// Tools that became part of another, so an agent that learnt the old name
+// still lands somewhere.
+const MOVED: Record<string, { job: string; command: string }> = {
+  "sprite contact": { job: "The frames side by side, numbered, are sprite metrics' overlay now", command: "ludo toolbox sprite metrics <sheet> --overlay" },
+  "asset scale": { job: "Whether a character's sheets are drawn at one size, and one pixels per unit, are sprite compare's now", command: "ludo toolbox sprite compare <sheets...>" },
+  "audio onsets": { job: "A track's tempo is in audio info now", command: "ludo toolbox audio info <sound>" },
+  "model orient": { job: "Which way a rigged model faces is in model info now", command: "ludo toolbox model info <model>" },
+  "model clips": { job: "Each clip's first pose and a walk's speed are in model info now", command: "ludo toolbox model info <model>" }
+};
+
 const groupsInUse = () => Object.keys(TOOL_GROUPS).filter(g => TOOLS.some(t => t.group === g));
 
 const table = (rows: [string, string][]) => {
@@ -154,6 +164,8 @@ export async function toolbox(ctx: Ctx, parsed: Parsed, argv: string[], setLabel
   const tool = TOOLS.find(t => t.group === group && t.name === name);
   const atLudo = AT_LUDO[`${group} ${name}`];
   if (!tool && atLudo) throw new CliError(`ludo toolbox ${group} ${name} is not a toolbox tool`, EXIT.USAGE, `${atLudo.job}: ${atLudo.command}`);
+  const moved = MOVED[`${group} ${name}`];
+  if (!tool && moved) throw new CliError(`ludo toolbox ${group} ${name} is no longer a tool of its own`, EXIT.USAGE, `${moved.job}: ${moved.command}`);
   if (!tool) {
     const names = TOOLS.filter(t => t.group === group).map(t => t.name);
     throw new CliError(`Unknown tool: ludo toolbox ${group} ${name}`, EXIT.USAGE, `Tools: ${names.join(", ")}`);
