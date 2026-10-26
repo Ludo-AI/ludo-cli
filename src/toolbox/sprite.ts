@@ -8,7 +8,7 @@ import { baseOf, carriedChunks, engineFiles, freeName, loadImageFile, shown, wri
 import { noteFact } from "../telemetry.js";
 import { crop, joinFrames, sliceSheet } from "./sheet.js";
 import { applyFrameOps, parseFrameList, parseHolds, type FrameOps } from "./frames.js";
-import { analyseLoop, frameDifferences, SAME } from "./loop.js";
+import { analyseLoop, CLEAN, frameDifferences, VISIBLE, type LoopReport } from "./loop.js";
 import { gridFlag, hexColour, positiveInt, positiveNumber, textFlag } from "./flags.js";
 import { makeGif, MAX_GIF_FPS } from "./gif.js";
 import { scaleUp } from "./pixels.js";
@@ -283,52 +283,41 @@ TOOLS.push({
 });
 
 // One sheet's loop report. A sheet of one frame has nothing to loop.
-function inspectLoop(call: ToolCall, file: string, minFrames: number | undefined) {
+function inspectLoop(call: ToolCall, file: string) {
   const src = loadImageFile(file);
   const { grid, from } = sheetGrid(src, call);
   const n = grid.frames;
   if (n < 2) throw new CliError(`${src.file} has a single frame; there is nothing to loop`, EXIT.BAD_INPUT);
-  if (minFrames !== undefined && minFrames > n) throw new CliError(`--min-frames ${minFrames} is more than ${src.file}'s ${n} frames`, EXIT.USAGE);
   const cells = sliceSheet(src.image, grid.cols, grid.rows, n);
-  return { src, grid, from, cells, report: analyseLoop(frameDifferences(cells, backgroundOf(src.image)), minFrames) };
+  return { src, grid, from, cells, report: analyseLoop(frameDifferences(cells, backgroundOf(src.image))) };
 }
 
-const VERDICT_RANK = { smooth: 0, jump: 1, repeat: 1, static: 2 } as const;
+const qualityWord = (q: number | null) => (q === null ? "static" : q >= CLEAN ? "loops cleanly" : q >= VISIBLE ? "a small hitch at the seam" : "a hitch at the seam");
+const seamText = (r: LoopReport) =>
+  r.seam.verdict === "repeat" ? `the last ${r.seam.repeats === 1 ? "frame repeats the first" : `${r.seam.repeats} frames repeat the first ${r.seam.repeats}`}` : `seam ${r.seam.ratio}x a typical step`;
 
-// Several takes of one animation, the cleanest loop first: a smooth seam
-// before a jump or a repeat, then the smaller biggest step anywhere in the
-// loop (seam included), the hitch a player sees. Held frames are left out.
-function compareLoops(ctx: Ctx, call: ToolCall, minFrames: number | undefined): number {
+// Several takes of one animation, the best loop first.
+function compareLoops(ctx: Ctx, call: ToolCall): number {
   const rows = call.args.map(file => {
-    const { src, grid, report } = inspectLoop(call, file, minFrames);
-    const moving = report.steps.filter(v => v >= SAME);
-    return {
-      sheet: shown(src.file),
-      frames: grid.frames,
-      verdict: report.seam.verdict,
-      seam: report.seam.ratio,
-      biggest_step: moving.length ? Math.max(...moving) : 0,
-      jumps: report.jumps,
-      holds: report.holds,
-      mirrored: report.mirrored
-    };
+    const { src, grid, report } = inspectLoop(call, file);
+    return { sheet: shown(src.file), frames: grid.frames, quality: report.quality, seam: report.seam, jumps: report.jumps, holds: report.holds, mirrored: report.mirrored, report };
   });
-  rows.sort((a, b) => VERDICT_RANK[a.verdict] - VERDICT_RANK[b.verdict] || a.biggest_step - b.biggest_step);
+  rows.sort((a, b) => (b.quality ?? -1) - (a.quality ?? -1));
   const top = rows[0];
-  const next = top.verdict === "smooth" ? hint("Preview the cleanest one", `ludo preview ${top.sheet}`) : undefined;
+  const listed = rows.map(({ report, ...row }) => row);
+  const next = top.quality !== null ? hint("Preview the best one", `ludo preview ${top.sheet}`) : undefined;
   if (ctx.jsonOut) {
-    printJson({ sheets: rows, cleanest: top.verdict === "smooth" ? top.sheet : null, ...(ctx.globals.quiet || !next ? {} : { hint: next }) }, false);
+    printJson({ sheets: listed, best: top.quality !== null ? top.sheet : null, ...(ctx.globals.quiet || !next ? {} : { hint: next }) }, false);
     return EXIT.OK;
   }
   const width = Math.max(...rows.map(r => r.sheet.length));
-  process.stdout.write(`${rows.length} sheets, the cleanest loop first:\n`);
+  process.stdout.write(`${rows.length} sheets, the best loop first:\n`);
   rows.forEach((r, i) =>
     process.stdout.write(
-      `  ${String(i + 1).padStart(2)}. ${r.sheet.padEnd(width)}  ${r.verdict.padEnd(6)}  seam ${r.seam}x a step, biggest step ${r.biggest_step}x` +
-        `${r.jumps.length ? `, jumps into ${r.jumps.join(", ")}` : ""}${r.mirrored ? ", a ping-pong" : ""}\n`
+      `  ${String(i + 1).padStart(2)}. ${r.sheet.padEnd(width)}  ${r.quality === null ? "  -" : r.quality.toFixed(2)}  ${qualityWord(r.quality)}` +
+        `${r.quality === null ? "" : ` (${seamText(r.report)})`}${r.jumps.length ? `; big steps into ${r.jumps.join(", ")}` : ""}\n`
     )
   );
-  if (top.verdict !== "smooth") process.stdout.write("None of them loops smoothly.\n");
   if (!ctx.globals.quiet && next) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
   return EXIT.OK;
 }
@@ -337,41 +326,32 @@ TOOLS.push({
   group: "sprite",
   name: "loop",
   args: "<sheet> [<sheet>...]",
-  summary: "Check that an animation loops, or which of several takes loops cleanest",
+  summary: "How well an animation loops (0 to 1), or which of several takes loops best",
   details: [
     "Compares every frame with every other (the frame-difference matrix of Video Textures,",
-    "Schödl et al. 2000) and reads the seam from the last frame back to the first against the",
-    "animation's typical step: about one step is smooth, much more is a jump, almost none means the",
-    "last frame repeats the first (the loop stutters). When the seam is bad it finds the longest",
-    "run of frames that loops cleanly. Held frames (--hold) do not count as steps, and a ping-pong is",
-    "reported as mirrored. Given several sheets (takes of one animation, like `--n 4`), it ranks",
-    "them: a smooth seam first, then the smallest biggest step, the hitch a player would see.",
-    "It only checks, and Ludo's sheets come cut to their loop already. If one of Ludo's does not",
-    "loop: `ludo sprite edit --edit-mode fix_loop` repairs it."
+    "Schödl et al. 2000) and scores the seam, the step from the last frame back to the first,",
+    `against the animation's typical step: 1 when it plays like any other step, ${CLEAN} and up clean,`,
+    `under ${VISIBLE} a hitch a player sees. Much bigger is a jump; much smaller, the motion hovering at`,
+    "the loop point; none, a pose shown twice. Big steps inside the clip are listed, not scored.",
+    "Held frames (--hold) do not count, and a ping-pong is reported as mirrored. Given several sheets",
+    "(takes of one animation, like `--n 4`), it ranks them, the best loop first. It only measures,",
+    "and never cuts. Ludo's sheets come cut to their loop already; if one of Ludo's does not loop,",
+    "`ludo sprite edit --edit-mode fix_loop` repairs it."
   ],
-  flags: [
-    { flag: "--min-frames", value: "n", description: "Shortest loop worth finding (default: half the frames)" },
-    { flag: "--grid", value: "CxR", description: "The sheet's grid, when it has no Ludo stamp and detection is unsure" }
-  ],
+  flags: [{ flag: "--grid", value: "CxR", description: "The sheet's grid, when it has no Ludo stamp and detection is unsure" }],
   async run(ctx: Ctx, call: ToolCall) {
     if (!call.args.length) throw new CliError("Usage: ludo toolbox sprite loop <sheet> [<sheet>...]", EXIT.USAGE);
-    const minFrames = positiveInt(call, "--min-frames");
-    if (call.args.length > 1) return compareLoops(ctx, call, minFrames);
-    const { src, grid, from, cells, report } = inspectLoop(call, call.args[0], minFrames);
+    if (call.args.length > 1) return compareLoops(ctx, call);
+    const { src, grid, from, cells, report } = inspectLoop(call, call.args[0]);
     const n = grid.frames;
-    const { best, seam } = report;
-
-    // A loop inside it: Ludo's re-cut from the source video finds it, free.
-    // None: only a repair (a new pass over the animation) makes it loop.
+    const { seam, quality } = report;
     const sheetArg = shown(src.file);
     const next =
-      seam.verdict === "static"
+      quality === null
         ? undefined
-        : seam.verdict === "smooth"
+        : quality >= VISIBLE
           ? hint("Preview it playing", `ludo preview ${sheetArg}`)
-          : best
-            ? hint("If Ludo made it, Ludo re-cuts the loop from its source video, free", "ludo sprite adjust --spritesheet-url <its spritesheet_url> --loop")
-            : hint("If Ludo made it, Ludo can repair the loop (1 credit a second)", "ludo sprite edit --spritesheet-url <its spritesheet_url> --edit-mode fix_loop");
+          : hint("If Ludo made it, Ludo can repair the loop (1 credit a second)", "ludo sprite edit --spritesheet-url <its spritesheet_url> --edit-mode fix_loop");
 
     if (ctx.jsonOut) {
       printJson(
@@ -379,12 +359,12 @@ TOOLS.push({
           sheet: sheetArg,
           grid: { cols: grid.cols, rows: grid.rows, frames: n, frame_width: cells[0].width, frame_height: cells[0].height, fps: grid.fps },
           grid_from: from,
+          quality,
           seam,
           steps: report.steps,
           holds: report.holds,
           jumps: report.jumps,
           mirrored: report.mirrored,
-          best: best ?? null,
           // n x n numbers stop being useful to anyone well before 64 frames.
           ...(n <= 64 ? { matrix: report.matrix } : {}),
           ...(ctx.globals.quiet || !next ? {} : { hint: next })
@@ -394,20 +374,15 @@ TOOLS.push({
     } else {
       const out = (line: string) => process.stdout.write(line + "\n");
       out(`${n} frames (${grid.cols}x${grid.rows} grid${from === "stamp" ? ", from its Ludo stamp" : from === "gif" ? ", the GIF's frames" : from === "webp" ? ", the WebP's frames" : from === "flag" ? "" : ", detected"})`);
-      const seamText = `${n} -> 1 is ${seam.ratio}x a typical step`;
-      if (seam.verdict === "static") out("No frame moves: there is nothing to loop.");
-      else if (seam.verdict === "smooth") out(`Loops smoothly: the seam ${seamText}.`);
-      else if (seam.verdict === "repeat") {
-        out(seam.repeats === 1 ? "The last frame repeats the first, so the loop shows it twice." : `The last ${seam.repeats} frames repeat the first ${seam.repeats}, so the loop shows them twice.`);
+      if (quality === null) out("No frame moves: there is nothing to loop.");
+      else {
+        out(`Loop quality ${quality.toFixed(2)}: ${qualityWord(quality)} (${seamText(report)}, ${n} -> 1).`);
+        if (seam.verdict === "repeat") out("So the loop shows that pose twice.");
+        if (report.mirrored) out("It plays forward then back (a ping-pong).");
+        if (report.holds.length) out(`Held frames: ${report.holds.join(", ")}.`);
+        if (report.jumps.length) out(`Big steps (over twice the typical one) into frames ${report.jumps.join(", ")}.`);
+        out(`Steps: ${report.steps.slice(0, -1).join(" ")} | seam ${seam.ratio}`);
       }
-      else out(`Jumps at the seam: ${seamText}.`);
-      if (report.mirrored) out("It plays forward then back (a ping-pong).");
-      if (report.holds.length) out(`Held frames: ${report.holds.join(", ")}.`);
-      if (report.jumps.length) out(`Big steps (over twice the typical one) into frames ${report.jumps.join(", ")}.`);
-      if (seam.verdict !== "static" && seam.verdict !== "smooth") {
-        out(best ? `Best loop: frames ${best.start}-${best.end} (${best.frames} frames, seam ${best.seam}x a step).` : "No run of frames inside it loops cleanly.");
-      }
-      if (seam.verdict !== "static") out(`Steps: ${report.steps.slice(0, -1).join(" ")} | seam ${seam.ratio}`);
       if (!ctx.globals.quiet && next) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
     }
     return EXIT.OK;

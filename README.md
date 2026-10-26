@@ -151,9 +151,9 @@ ludo toolbox sprite join ludo-output/knight-walk/ --cols 4 --fps 12
 # Edit the frames of a sheet: drop frame 7, hold frame 4 for three frames, play as a ping-pong
 ludo toolbox sprite frames knight-walk.png --drop 7 --hold 4x3 --pingpong
 
-# Check that it loops: the seam from the last frame back to the first, against a typical step.
-# When it jumps or repeats, it says where the best loop inside is. Ludo fixes the loop of a sheet
-# it made: `ludo sprite adjust --loop` re-cuts it (free), `ludo sprite edit --edit-mode fix_loop`.
+# How well it loops, 0 to 1: the seam from the last frame back to the first, against the clip's
+# pace (0.8 and up is clean, under 0.5 a hitch you see). It only measures; Ludo's sheets come cut to
+# their loop, and `ludo sprite edit --edit-mode fix_loop` repairs one that does not loop.
 ludo toolbox sprite loop knight-walk.png
 # Several takes of one animation (like --n 4): which loops cleanest, the cleanest first.
 ludo toolbox sprite loop walk-1.png walk-2.png walk-3.png walk-4.png

@@ -1,7 +1,7 @@
 import type { Image } from "../tty/png.js";
 import type { Background } from "./grid.js";
 
-// Does an animation loop, and if not, where inside it does one close?
+// How well does an animation loop? One number, 0 to 1, and where it hitches.
 //
 // The method is the frame-distance matrix of Video Textures (Schödl,
 // Szeliski, Salesin & Essa, SIGGRAPH 2000, §3): D(i, j) is how different
@@ -28,16 +28,29 @@ import type { Background } from "./grid.js";
 //   a jump;
 // - a loop whose last frames are its first ones again shows them twice, and
 //   its seam can measure like an ordinary step while it steps backwards, so
-//   that is checked on its own (whole cycles excepted).
+//   that is checked on its own (whole cycles excepted);
+// - the quality is how far the seam, the step from the last frame back to
+//   the first, is off the pace: bigger than a typical step is a jump,
+//   smaller than the steps either side of it a hover (a clip stalling at its
+//   loop point), and none at all a pose shown twice.
+//   A seam measured against the clip's own median step is what best told
+//   bad loops from good in Ludo's ML calibration (28 loops marked blind,
+//   ai-server research_findings/sprite-animation.md), better than the biggest
+//   step anywhere. Big steps inside the clip are listed (jumps), not scored.
+//   It never cuts: Ludo's sheets come cut to their loop, and a second cut
+//   inside the first one is wrong.
 //
 // The thresholds are ours, picked on the fixtures in test/toolbox.test.mjs
-// and checked with scripts/loop-eval.mjs on real sheets damaged in known ways.
+// and on real sheets. Ludo's own wrap check is DINOv3 patch similarity, a
+// different measure: the two numbers are not comparable.
 
 export const SAME = 0.25; // under a quarter of a step: the same frame
 export const SMOOTH = 1.5; // a seam up to 1.5 steps plays as smooth
 const JUMP = 2; // an adjacent step over twice the typical one is a jump
-const MATCH = 0.5; // a trimmed loop is offered when its cost is at most this
-const BETTER = 0.25; // and over a seam that already plays, only when this much better
+// The quality is 1 / (1 + (w - 1)²) for a seam w times off the pace: 0.8 at
+// 1.5, 0.5 at 2 (a jump).
+export const CLEAN = 0.8; // quality from here up: loops cleanly
+export const VISIBLE = 0.5; // under this: a hitch a player sees
 const MAX_SIDE = 128; // frames are compared at this size or smaller
 const BUDGET = 5e7; // pixel comparisons for the whole matrix
 
@@ -49,10 +62,8 @@ export interface LoopReport {
   // repeat: the last `repeats` frames are the first ones again.
   seam: { ratio: number; verdict: "smooth" | "jump" | "repeat" | "static"; repeats: number };
   mirrored: boolean; // plays forward then back (a ping-pong)
-  // The best loop inside the frames (1-based, inclusive); the whole sheet when
-  // it already loops, none when no run of frames loops cleanly. cost: 0 = a
-  // perfect match, 1 = off by a whole step.
-  best: { start: number; end: number; frames: number; cost: number; seam: number } | undefined;
+  // 1 = the seam plays like any other step; null when nothing moves.
+  quality: number | null;
   matrix: number[][]; // D in typical steps: 1 = an ordinary step, 0 = the same frame
 }
 
@@ -191,99 +202,46 @@ function median(xs: number[]): number {
 
 const round = (x: number, places = 2) => Math.round(x * 10 ** places) / 10 ** places;
 
-export function analyseLoop(D: Float64Array[], minFrames = Math.ceil(D.length / 2)): LoopReport {
+export function analyseLoop(D: Float64Array[]): LoopReport {
   const n = D.length;
   const adjacent = Array.from({ length: n - 1 }, (_, i) => D[i][i + 1]);
   const { step, isHold } = typicalStep(D);
   const matrix = D.map(row => Array.from(row, d => round(step ? d / step : 0)));
   if (n < 2 || step === 0) {
-    return {
-      frames: n,
-      steps: [],
-      holds: [],
-      jumps: [],
-      seam: { ratio: 0, verdict: "static", repeats: 0 },
-      mirrored: false,
-      best: n ? { start: 1, end: n, frames: n, cost: 0, seam: 0 } : undefined,
-      matrix
-    };
+    return { frames: n, steps: [], holds: [], jumps: [], seam: { ratio: 0, verdict: "static", repeats: 0 }, mirrored: false, quality: null, matrix };
   }
   const r = (i: number, j: number) => D[i][j] / step;
-  // A step that can vouch for a tap: it moves, and not by a jump. A big but
-  // ordinary step still can: AI motion is uneven, and without the tap a
-  // seam is judged on its size alone.
-  const ordinary = (i: number) => i >= 0 && i < n - 1 && !isHold(adjacent[i]) && adjacent[i] <= JUMP * step;
-  // A seam that lands behind where it left from: frame s is nearer e - 1
-  // than e, or s + 1 is nearer e than s is. It steps backwards and then shows
-  // a pose again, a stutter however small the seam measures, so a trimmed
-  // loop should end one frame earlier, or start one later, instead.
-  const backwards = (s: number, e: number) => {
-    const ratio = r(e, s);
-    return (s + 1 < e && r(e, s + 1) < ratio) || (e - 1 > s && r(e - 1, s) < ratio);
-  };
-  // Up to one step is right (motion often eases into the loop point); much
-  // more is a jump, and next to nothing is a pose shown twice.
-  const seamCost = (e: number, s: number) => {
-    const ratio = r(e, s);
-    return ratio < SAME ? 1 : Math.max(0, ratio - 1);
-  };
-  // A loop over frames s..e runs past its loop point when its last k frames
-  // are its first k again: it shows them twice, and its seam can look like an
-  // ordinary step while it steps backwards. Not when every frame is the one k
-  // later too: then it is whole cycles, which loop. Returns k, or 0.
-  const twins = D.map((_, s) => {
-    const later: number[] = [];
-    for (let j = n - 1; j > s; j--) if (r(j, s) < SAME) later.push(j);
-    return later; // latest first, so the shortest overlap is found first
-  });
-  const overlap = (s: number, e: number) => {
-    for (const j of twins[s]) {
-      if (j > e) continue;
-      const k = e - j + 1;
+  // A loop whose last k frames are its first k again shows them twice, and
+  // its seam can look like an ordinary step while it steps backwards. Not
+  // when every frame is the one k later too: then it is whole cycles, which
+  // loop. Returns k, or 0.
+  const repeatsAtEnd = () => {
+    for (let j = n - 1; j > 0; j--) {
+      if (r(j, 0) >= SAME) continue;
+      const k = n - j;
       let all = true;
-      for (let i = 1; i < k && all; i++) all = r(j + i, s + i) < SAME;
+      for (let i = 1; i < k && all; i++) all = r(j + i, i) < SAME;
       if (!all) continue;
       let cycles = true;
-      for (let i = s; i + k <= e && cycles; i++) cycles = r(i, i + k) < SAME;
+      for (let i = 0; i + k < n && cycles; i++) cycles = r(i, i + k) < SAME;
       return cycles ? 0 : k;
     }
     return 0;
   };
-  // The cost of a loop over frames s..e (0-based), jumping from e back to s.
-  // A last frame reached by a jump is what a glitch usually looks like; a
-  // loop that keeps it is suspect however well it closes.
-  const glitchAtEnd = n > 2 && adjacent[n - 2] > SMOOTH * step;
-  const cost = (s: number, e: number) => {
-    if (overlap(s, e) || (glitchAtEnd && e === n - 1)) return 1;
-    const taps: number[] = [];
-    if (e + 1 < n && ordinary(e)) taps.push(r(e + 1, s));
-    if (s > 0 && ordinary(s - 1)) taps.push(r(e, s - 1));
-    if (taps.length) return taps.reduce((a, b) => a + b, 0) / taps.length;
-    return backwards(s, e) ? 1 : seamCost(e, s);
-  };
 
   const seamRatio = r(n - 1, 0);
-  const repeats = overlap(0, n - 1);
+  const repeats = repeatsAtEnd();
   const verdict = repeats ? "repeat" : seamRatio <= SMOOTH ? "smooth" : "jump";
-  const asIs = repeats ? 1 : seamCost(n - 1, 0);
 
-  // Longest first, so a shorter loop has to be clearly better to win.
-  const min = Math.max(2, Math.min(minFrames, n - 1));
-  let found: { s: number; e: number; c: number } | undefined;
-  for (let len = n - 1; len >= min; len--) {
-    for (let s = 0; s + len <= n; s++) {
-      const c = cost(s, s + len - 1);
-      if (!found || c < found.c - 0.05) found = { s, e: s + len - 1, c };
-    }
-  }
-  // A sheet that already loops keeps all its frames unless a loop inside it
-  // is clearly better.
-  const inside = found && found.c <= MATCH && (verdict !== "smooth" || found.c + BETTER < asIs) ? found : undefined;
-  const best: LoopReport["best"] = inside
-    ? { start: inside.s + 1, end: inside.e + 1, frames: inside.e - inside.s + 1, cost: round(inside.c), seam: round(r(inside.e, inside.s)) }
-    : verdict === "smooth"
-      ? { start: 1, end: n, frames: n, cost: round(asIs), seam: round(seamRatio) }
-      : undefined;
+  // How far the seam is off the pace (see the top). Bigger is judged against
+  // the typical step; smaller against the steps either side of it, up to a
+  // typical one, since an idle that is slow at its loop point anyway does not
+  // hover there. A pose shown twice is a stutter whatever the seam measures.
+  const beside = [adjacent[n - 2], adjacent[0]].filter(d => !isHold(d)).map(d => d / step);
+  const pace = Math.min(1, beside.length ? beside.reduce((a, b) => a + b, 0) / beside.length : 1);
+  const slow = pace / Math.max(seamRatio, 0.05);
+  const off = repeats ? Math.max(1 / SAME, slow) : Math.max(1, seamRatio, slow);
+  const quality = round(1 / (1 + (off - 1) ** 2));
 
   // A ping-pong: some pivot mirrors every frame onto a twin, i + j ≡ 2c.
   let mirrored = false;
@@ -314,7 +272,7 @@ export function analyseLoop(D: Float64Array[], minFrames = Math.ceil(D.length / 
     jumps,
     seam: { ratio: round(seamRatio), verdict, repeats },
     mirrored,
-    best,
+    quality,
     matrix
   };
 }

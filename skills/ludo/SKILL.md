@@ -49,9 +49,9 @@ they log in or create an account (and pick a plan with API access if needed) and
    `--help`). Use them instead of writing your own image script:
    - Sheets: `ludo toolbox sprite slice <sheet>` cuts one into frames, `sprite join <frames...>` puts
      frames back, `sprite frames <sheet> --drop 7 --hold 4x3` edits frames, `sprite loop <sheet>`
-     checks the loop, and `sprite loop <take1> <take2>...` ranks several takes of one animation
-     (after `--n 4`, keep the one that loops cleanest; a bad loop on a Ludo sheet: `ludo sprite
-     edit --edit-mode fix_loop`), `sprite gif <sheet>` makes a GIF,
+     scores the loop (0 to 1: the seam against the clip's pace), `sprite loop <take1> <take2>...`
+     ranks several takes of one animation (after `--n 4`, keep the best; a bad loop on a Ludo
+     sheet: `ludo sprite edit --edit-mode fix_loop`), `sprite gif <sheet>` makes a GIF,
      `sprite pack <sheets...>` brings a character's animations to one size and ground line
      (`--manifest` re-runs its `pack.json`), and `sprite sequence <sheets...>` chains animations so
      each continues from the one before (check the transitions it reports). A GIF or animated WebP

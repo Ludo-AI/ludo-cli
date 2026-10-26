@@ -12,7 +12,7 @@ import { CONFIDENT, guessGrid } from "../dist/toolbox/grid.js";
 import { encodePng, readPng, withText } from "../dist/tty/png.js";
 import { readGrid } from "../dist/tty/preview.js";
 import { applyFrameOps, parseFrameList, parseHolds } from "../dist/toolbox/frames.js";
-import { analyseLoop, frameDifferences } from "../dist/toolbox/loop.js";
+import { analyseLoop, CLEAN, frameDifferences, VISIBLE } from "../dist/toolbox/loop.js";
 import { backgroundOf } from "../dist/toolbox/grid.js";
 import { contentBox, emptiness, extrude, flip, pad, rotate, scaleDown, scaleUp } from "../dist/toolbox/pixels.js";
 import { crop } from "../dist/toolbox/sheet.js";
@@ -445,69 +445,74 @@ function loopOf(phases, n, background) {
   return analyseLoop(frameDifferences(frames, backgroundOf(frames[0])));
 }
 
-test("loop analysis finds the seam and the best loop on sheets with known answers", () => {
+test("loop quality is high on a clean cycle and low on a repeat, a glitch or a half cycle", () => {
   for (const background of [undefined, [30, 120, 90]]) {
     const at = background ? "opaque" : "clear";
     const perfect = loopOf(range(0, 8), 8, background);
     assert.equal(perfect.seam.verdict, "smooth", at);
-    assert.deepEqual([perfect.best.start, perfect.best.end], [1, 8], at);
+    assert.ok(perfect.quality >= CLEAN, `${at}: ${perfect.quality}`);
     assert.equal(perfect.mirrored, false, at);
 
     // The last frame is the first again: the loop shows that pose twice.
     const repeat = loopOf(range(0, 9), 8, background);
     assert.deepEqual([repeat.seam.verdict, repeat.seam.repeats], ["repeat", 1], at);
-    assert.deepEqual([repeat.best.start, repeat.best.end], [1, 8], at);
+    assert.ok(repeat.quality < VISIBLE, `${at}: ${repeat.quality}`);
 
     // A glitched last frame, from the middle of the cycle.
     const glitch = loopOf([...range(0, 8), 4], 8, background);
     assert.equal(glitch.seam.verdict, "jump", at);
     assert.deepEqual(glitch.jumps, [9], at);
-    assert.deepEqual([glitch.best.start, glitch.best.end], [1, 8], at);
+    assert.ok(glitch.quality < VISIBLE, `${at}: ${glitch.quality}`);
 
     // Three frames past the loop point: they repeat the first three.
     const over = loopOf(range(0, 19), 16, background);
     assert.deepEqual([over.seam.verdict, over.seam.repeats], ["repeat", 3], at);
-    assert.deepEqual([over.best.start, over.best.end], [1, 16], at);
+    assert.ok(over.quality < VISIBLE, at);
 
-    // Half a cycle has no loop inside it.
+    // Half a cycle: it jumps back.
     const half = loopOf(range(0, 4), 8, background);
     assert.equal(half.seam.verdict, "jump", at);
-    assert.equal(half.best, undefined, at);
+    assert.ok(half.quality < VISIBLE, at);
   }
 });
 
-test("a sheet that already loops is left whole unless a loop inside it is clearly better", () => {
-  // Two whole cycles: it loops, and both cycles stay.
+test("whole cycles loop; frames past the loop point, or a mid-cycle start, do not", () => {
   const twice = loopOf(range(0, 16), 8);
   assert.equal(twice.seam.verdict, "smooth");
-  assert.deepEqual([twice.best.start, twice.best.end], [1, 16]);
+  assert.ok(twice.quality >= CLEAN, String(twice.quality));
   assert.equal(loopOf(range(0, 24), 8).seam.verdict, "smooth");
-  // Two cycles and two frames too many.
   assert.deepEqual(loopOf(range(0, 18), 8).seam.repeats, 2);
   // Two frames past the loop point: the seam is an ordinary-sized step, but
   // backwards, and two poses show twice.
   const drift = loopOf(range(0, 10), 8);
   assert.deepEqual([drift.seam.verdict, drift.seam.repeats], ["repeat", 2]);
-  assert.deepEqual([drift.best.start, drift.best.end, drift.best.cost], [1, 8, 0]);
-  // Starting mid-cycle: whichever loop it picks must close cleanly.
+  assert.ok(drift.quality < VISIBLE, String(drift.quality));
   const late = loopOf([5.3, 6.6, ...range(0, 8)], 8);
   assert.equal(late.seam.verdict, "jump");
-  assert.ok(late.best.cost <= 0.5 && late.best.frames >= 5, JSON.stringify(late.best));
+  assert.ok(late.quality < VISIBLE, String(late.quality));
 });
 
-test("a trimmed loop never keeps both of two near-twin frames, even next to big steps", () => {
-  // Frames at these phases of an 8-step cycle, D their distance round it.
-  // Bigger steps at both ends used to switch the taps off, and the seam from
-  // frame 11 (2.25) back to frame 2 (1.7) then passed on its size alone,
-  // though it steps half a step backwards and frame 3 shows that pose again.
-  // Frame 9 (8.35) is the one that matches frame 1, so 1..8 loops.
-  const phases = [0, 1.7, 2.65, 3.6, 4.55, 5.5, 6.45, 7.4, 8.35, 9.3, 10.25, 11.95];
-  const round = (a, b) => {
-    const x = (((a - b) % 8) + 8) % 8;
-    return Math.min(x, 8 - x);
+test("the quality is the seam's: a slow or big step mid-cycle is listed, not scored", () => {
+  // Distances round an 8-step cycle between frames at these phases.
+  const cyclic = phases => {
+    const d = (a, b) => {
+      const x = (((a - b) % 8) + 8) % 8;
+      return Math.min(x, 8 - x);
+    };
+    return analyseLoop(phases.map(a => Float64Array.from(phases, b => d(a, b))));
   };
-  const report = analyseLoop(phases.map(a => Float64Array.from(phases, b => round(a, b))));
-  assert.deepEqual([report.best.start, report.best.end], [1, 8], JSON.stringify(report.best));
+  const easing = cyclic([0, 1, 2, 2.6, 3.6, 4.6, 5.6, 6.6]);
+  assert.ok(easing.quality >= CLEAN, String(easing.quality));
+  // The same slow step at the wrap: the motion hovers where it loops.
+  const hover = cyclic([0, 1, 2, 3, 4, 5, 6, 7, 7.7]);
+  assert.ok(hover.quality < VISIBLE, String(hover.quality));
+  // Unless it is slow either side too: an idle at the still end of its cycle.
+  const still = cyclic([0, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.1, 7.6]);
+  assert.ok(still.quality >= CLEAN, String(still.quality));
+  // A step two and a half times the others, mid-cycle: a jump, listed.
+  const pop = cyclic([0, 1, 2, 4.5, 5.5, 6.5, 7]);
+  assert.ok(pop.quality >= CLEAN, String(pop.quality));
+  assert.deepEqual(pop.jumps, [4]);
 });
 
 test("held frames are not steps, a ping-pong is mirrored, and a still sheet is static", () => {
@@ -543,7 +548,7 @@ function strip(frames, cols = frames.length) {
   return sheet;
 }
 
-test("loop reports a sheet's seam and its best loop, writes nothing, and points a bad one at Ludo", async () => {
+test("loop reports a sheet's quality and worst step, writes nothing, and points a bad one at Ludo", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-loop-"));
   const frames = range(0, 9).map(t => orbitFrame(t, 8));
   const file = writeSheet(dir, "spin.png", strip(frames, 3), { cols: 3, rows: 3, frames: 9, fps: 12 });
@@ -553,31 +558,21 @@ test("loop reports a sheet's seam and its best loop, writes nothing, and points 
   assert.equal(checked.code, EXIT.OK, checked.stderr);
   const report = JSON.parse(checked.stdout);
   assert.equal(report.seam.verdict, "repeat");
-  assert.deepEqual([report.best.start, report.best.end], [1, 8]);
+  assert.ok(report.quality < VISIBLE, String(report.quality));
+  assert.equal(report.best, undefined);
   assert.equal(report.matrix.length, 9);
-  // A loop inside: Ludo's free re-cut from the source video finds it.
-  assert.match(report.hint.command, /^ludo sprite adjust .* --loop$/);
+  assert.match(report.hint.command, /^ludo sprite edit .* --edit-mode fix_loop$/);
   assert.ok(!fs.existsSync(out), "checking writes nothing");
   assert.equal((await run(["toolbox", "sprite", "loop", file, "--apply"])).code, EXIT.USAGE);
+  assert.equal((await run(["toolbox", "sprite", "loop", file, "--min-frames", "4"])).code, EXIT.USAGE);
 
   const whole = writeSheet(dir, "whole.png", strip(frames.slice(0, 8), 4), { cols: 4, rows: 2, frames: 8, fps: 12 });
   const smooth = JSON.parse((await run(["toolbox", "sprite", "loop", whole])).stdout);
-  assert.equal(smooth.seam.verdict, "smooth");
+  assert.ok(smooth.quality >= CLEAN, String(smooth.quality));
   assert.equal(smooth.hint.command.startsWith("ludo preview"), true);
 });
 
-test("loop on a sheet with no loop inside points at Ludo's loop repair", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-loop-"));
-  const half = writeSheet(dir, "half.png", strip(range(0, 4).map(t => orbitFrame(t, 8))), { cols: 4, rows: 1, frames: 4, fps: 10 });
-  const told = await run(["toolbox", "sprite", "loop", half]);
-  assert.equal(told.code, EXIT.OK, told.stderr);
-  const report = JSON.parse(told.stdout);
-  assert.deepEqual([report.seam.verdict, report.best], ["jump", null]);
-  assert.match(report.hint.command, /^ludo sprite edit .* --edit-mode fix_loop$/);
-  assert.match((await run(["toolbox", "sprite", "loop", half, "--min-frames", "5"])).stderr, /more than .*'s 4 frames/);
-});
-
-test("loop on several takes ranks them: a smooth seam first, then the smallest biggest step", async () => {
+test("loop on several takes ranks them, the best loop first", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-loop-"));
   const whole = writeSheet(dir, "whole.png", strip(range(0, 8).map(t => orbitFrame(t, 8)), 4), { cols: 4, rows: 2, frames: 8, fps: 12 });
   const twice = writeSheet(dir, "twice.png", strip(range(0, 9).map(t => orbitFrame(t, 8)), 3), { cols: 3, rows: 3, frames: 9, fps: 12 });
@@ -585,15 +580,10 @@ test("loop on several takes ranks them: a smooth seam first, then the smallest b
   const r = await run(["toolbox", "sprite", "loop", half, twice, whole]);
   assert.equal(r.code, EXIT.OK, r.stderr);
   const out = JSON.parse(r.stdout);
-  assert.deepEqual(out.sheets[0].verdict, "smooth");
-  assert.deepEqual(out.sheets.slice(1).map(x => [path.basename(x.sheet), x.verdict]).sort(), [["half.png", "jump"], ["twice.png", "repeat"]]);
   assert.equal(out.sheets[0].sheet, whole);
-  assert.equal(out.cleanest, whole);
+  assert.ok(out.sheets.every((x, i) => !i || x.quality <= out.sheets[i - 1].quality), JSON.stringify(out.sheets.map(x => x.quality)));
+  assert.equal(out.best, whole);
   assert.equal(out.hint.command, `ludo preview ${whole}`);
-  // None smooth: no cleanest, no hint.
-  const bad = JSON.parse((await run(["toolbox", "sprite", "loop", half, twice])).stdout);
-  assert.equal(bad.cleanest, null);
-  assert.equal(bad.hint, undefined);
 });
 
 test("the jobs Ludo does are not toolbox tools: their names point at Ludo's", async () => {
