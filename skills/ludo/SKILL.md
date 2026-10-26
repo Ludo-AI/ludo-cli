@@ -29,7 +29,8 @@ they log in or create an account (and pick a plan with API access if needed) and
    Exit code 11 means the spending budget is reached: stop, tell the user (`ludo spend`), and ask.
 6. Exit code 5 means not enough credits, or a plan without API access. Do not retry: tell the user, and
    that `ludo billing` (run in their terminal) opens the page to buy credits, change plan or turn on auto
-   top-up.
+   top-up. Before advising anyone to sign up, upgrade or buy credits, run `ludo pricing` (free, no login)
+   and quote it: plans, prices, what each includes, and the rules.
 7. Before generating, check `ludo assets`: the asset may already exist. `ludo assets redo <file>
    --prompt "..."` remakes one with changes.
 8. To choose between options, `--n 3` makes three variations (`-v1`..`-v3`). Look at them, keep the

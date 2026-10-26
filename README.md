@@ -321,7 +321,9 @@ by `ludo login` (in `~/.config/ludo/config.json`, readable only by you).
 ## Credits
 
 `ludo account` shows your balance, plan and auto top-up settings. `ludo billing` opens the page to
-buy credits, change plan or set up auto top-up. When a generation fails for lack of credits (exit
+buy credits, change plan or set up auto top-up. `ludo pricing` (no login needed) lists the plans, what
+each includes, what each call costs, and the billing rules: generating through the CLI, API or MCP needs
+Pro or Studio, and costs credits on every plan. When a generation fails for lack of credits (exit
 code 5) at a terminal, the CLI offers to open that page.
 
 ## Feedback

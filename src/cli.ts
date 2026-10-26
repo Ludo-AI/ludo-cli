@@ -23,6 +23,7 @@ import { installSkill, isInstalled, skillTarget, uninstallSkill } from "./skill.
 import { accountLine, accountSummary, agentName, billingUrlFor, browserLogin, canOpenBrowser, isAgent, openBrowser } from "./login.js";
 import { assets, BATCH_HELP, init, loadBatch, spend } from "./workspace.js";
 import { toolbox } from "./toolbox/index.js";
+import { pricing } from "./pricing-guide.js";
 
 async function promptSecret(question: string): Promise<string> {
   if (!process.stdin.isTTY) return fs.readFileSync(0, "utf8").trim();
@@ -298,7 +299,7 @@ async function main(argv: string[]): Promise<number> {
   const { globals, words } = parsed;
   const ctx = makeCtx(globals);
   const [first, second] = words;
-  if (["version", "login", "logout", "billing", "update", "spec", "help", "agent-help", "preview", "skill", "feedback", "init", "assets", "spend", "batch"].includes(first)) commandLabel = first;
+  if (["version", "login", "logout", "billing", "pricing", "update", "spec", "help", "agent-help", "preview", "skill", "feedback", "init", "assets", "spend", "batch"].includes(first)) commandLabel = first;
 
   if (globals.help && BUILTIN_HELP[first]) {
     process.stdout.write(BUILTIN_HELP[first]);
@@ -311,6 +312,7 @@ async function main(argv: string[]): Promise<number> {
   if (first === "login") return login(ctx, parsed, words.slice(1));
   if (first === "logout") return logout(ctx);
   if (first === "billing") return billing(ctx);
+  if (first === "pricing") return pricing(ctx);
   if (first === "feedback") return feedback(ctx, parsed, words.slice(1));
   if (first === "update") return update(ctx);
   if (first === "init") return init(ctx, parsed);

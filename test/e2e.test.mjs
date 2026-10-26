@@ -38,6 +38,19 @@ const ACCOUNT = {
   billing_url: "http://web.test/account/billing"
 };
 
+const PRICING = {
+  currency: "usd",
+  summary: "Ludo generates game assets.",
+  plans: [
+    { id: "free-trial", name: "Free Trial", api_access: false, credits_per_month: null, credits_at_signup: 30, seats: 1, active_projects: "1", queue_concurrency: 1, prices: [], included: ["1 seat"], not_included: [] },
+    { id: "pro", name: "Pro", api_access: true, credits_per_month: 1000, credits_at_signup: null, seats: 1, active_projects: "unlimited", queue_concurrency: 2, prices: [{ interval: "month", amount: 50, credits_granted: 1000 }, { interval: "year", amount: 420, per_month: 35, credits_granted: 12000 }], included: ["API, MCP and CLI access"], not_included: [] }
+  ],
+  top_ups: { currency: "usd", min_credits: 250, max_credits: 17000, step_credits: 50, brackets: [{ credits: 250, cents: 1500 }], eligible: "any active paid plan" },
+  rules: [{ id: "api_always_pays", text: "Every generation through the API, MCP or CLI costs credits." }],
+  costs: [{ operation: "createImage", credits: "0.5 credits per result" }],
+  links: { pricing: "https://ludo.ai/pricing", billing: "http://web.test/account/billing" }
+};
+
 function json(res, status, body) {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify(body));
@@ -121,6 +134,10 @@ before(async () => {
       if (loginOutcome === "denied") return json(res, 200, { status: "denied" });
       if (loginPolls < 2) return json(res, 200, { status: "pending" });
       return json(res, 200, { status: "approved", api_key: "ludo_minted" });
+    }
+    if (req.method === "GET" && url.pathname === "/api/pricing") {
+      // Open with or without a key, like the server.
+      return json(res, 200, PRICING);
     }
     if (req.method === "GET" && url.pathname === "/api/assets/account") {
       if (!["ApiKey ludo_minted", "ApiKey test-key"].includes(req.headers.authorization)) return json(res, 403, { message: "Unauthorized" });
@@ -584,6 +601,22 @@ test("billing prints the billing page without opening a browser for a non-termin
   const { code, stdout } = await run(["billing", "--json"]);
   assert.equal(code, 0);
   assert.equal(JSON.parse(stdout).billing_url, "http://web.test/account/billing");
+});
+
+test("pricing works logged out and passes the server's guide through", async () => {
+  const before = seen.length;
+  const { code, stdout, stderr } = await run(["pricing", "--json"], { LUDO_API_KEY: "" });
+  assert.equal(code, 0, stderr);
+  assert.deepEqual(JSON.parse(stdout), PRICING);
+  const call = seen.slice(before).find(r => r.path === "/api/pricing");
+  assert.equal(call.headers.authorization, undefined);
+});
+
+test("no API key points at ludo login and ludo pricing", async () => {
+  const { code, stderr } = await run(["image", "create", "--prompt", "x", "--image-type", "sprite"], { LUDO_API_KEY: "" });
+  assert.equal(code, 3);
+  assert.match(stderr, /ludo login/);
+  assert.match(stderr, /ludo pricing/);
 });
 
 test("out of credits points at ludo billing", async () => {

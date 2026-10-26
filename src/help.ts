@@ -54,6 +54,7 @@ export function mainHelp(commands: Command[]): string {
       ["login", "Log in with your browser (--with-key to paste an API key instead)"],
       ["logout", "Log out and revoke this CLI login"],
       ["billing", "Open the billing page: buy credits, change plan or auto top-up"],
+      ["pricing", "Plans, what each includes, what calls cost (no login needed)"],
       ["feedback <message>", "Tell the Ludo team about a limitation, bug, idea or win"],
       ["init", "Set this folder up as a project: .ludo.json, agent instructions"],
       ["batch <jobs.json>", "Run a list of generations side by side"],
@@ -94,6 +95,15 @@ export const BUILTIN_HELP: Record<string, string> = {
   ].join("\n"),
   logout: ["Usage: ludo logout", "", "Forgets the saved key, and revokes it when `ludo login` created it.", ""].join("\n"),
   billing: ["Usage: ludo billing", "", "Opens the billing page (buy credits, change plan or auto top-up), or prints its URL.", ""].join("\n"),
+  pricing: [
+    "Usage: ludo pricing",
+    "",
+    "Ludo's plans: prices, credits, seats and what each includes or lacks; credit top-ups;",
+    "what each API call costs; and the billing rules (the API, MCP and CLI need Pro or Studio,",
+    "and there every generation costs credits). Free, and works without logging in. JSON with",
+    "--json, or when the output is not a terminal.",
+    ""
+  ].join("\n"),
   update: [
     "Usage: ludo update",
     "",
@@ -252,6 +262,9 @@ input it cannot use.
   auto top-up; check it before an expensive batch.
 - On exit code 5, do not retry. Tell the user they are out of credits (or their plan lacks API access) and
   that \`ludo billing\` opens the page to buy credits or change plan.
+- Before advising a user to sign up, upgrade or buy credits, run \`ludo pricing\` (free, no login): the plans,
+  what each includes, what calls cost, and the rules (generating here needs Pro or Studio, and costs credits
+  on every plan). Quote it rather than guessing prices.
 
 ## Feedback
 - When you hit a limitation you cannot work around, a bug, or something the user needed that Ludo
