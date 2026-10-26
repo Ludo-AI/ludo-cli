@@ -89,6 +89,20 @@ test("rows count from the bottom; trims get the untrimmed centre as pivot; extru
   assert.throws(() => unityTextureMeta("hero", GUID, 8, 8, { cols: 2, rows: 1, frames: 2, fps: 8 }, { extrude: 2 }), /leaves nothing/);
 });
 
+test("a pivot from sprite export is each sprite's custom pivot, in its own rect; --ppu sets the pixels per unit", () => {
+  assert.deepEqual(field(unityTextureMeta("hero", GUID, 64, 64, { cols: 2, rows: 2, frames: 3, fps: 8 }), "  spritePixelsToUnits"), ["100"]);
+  const meta = unityTextureMeta("hero", GUID, 64, 64, { cols: 2, rows: 2, frames: 3, fps: 8 }, {}, undefined, undefined, { pivot: { x: 16, y: 30 }, ppu: 32 });
+  assert.deepEqual(field(meta, "      alignment"), ["9", "9", "9"]);
+  assert.deepEqual(field(meta, "      pivot"), Array(3).fill(`{x: 0.5, y: ${unityFloat(2 / 32)}}`));
+  assert.deepEqual(field(meta, "  spritePixelsToUnits"), ["32"]);
+  // In a trimmed sheet the pivot is given in the untrimmed frame: (14, 28)
+  // is the middle of the 20 px rect starting at x 4, on its bottom edge (18 + 10).
+  const trim = { x: 4, y: 18, w: 20, h: 10, source_w: 32, source_h: 32 };
+  const trimmed = unityTextureMeta("hero", GUID, 40, 20, { cols: 2, rows: 2, frames: 4, fps: 8 }, { trim }, undefined, undefined, { pivot: { x: 14, y: 28 } });
+  assert.deepEqual(field(trimmed, "      pivot")[0], "{x: 0.5, y: 0}");
+  assert.throws(() => unityTextureMeta("hero", GUID, 64, 64, { cols: 2, rows: 2, frames: 3, fps: 8 }, {}, undefined, undefined, { ppu: 0 }), /pixels per unit/);
+});
+
 test("names YAML would misread are quoted, and read back", () => {
   const meta = unityTextureMeta("boss: phase 2", GUID, 16, 8, { cols: 2, rows: 1, frames: 2, fps: 8 });
   assert.match(meta, /^ {6}name: 'boss: phase 2_0'$/m);
@@ -138,6 +152,21 @@ test("ludo toolbox sprite export --engine unity, and ludo init in a Unity projec
   const out = JSON.parse((await exec(process.execPath, [cli, "toolbox", "sprite", "export", "walk.png", "--grid", "2x1", "--fps", "8", "--engine", "unity", "--json"], { env, cwd: dir })).stdout);
   assert.deepEqual(out.engine_files, ["walk.png.meta", "walk.anim"]);
   assert.match(fs.readFileSync(path.join(dir, "walk.anim"), "utf8"), /m_SampleRate: 8\n/);
+
+  // Two 32x32 frames of a 16x24 figure standing on row 27: --pivot feet puts
+  // every sprite's pivot under it, on the ground line (16, 28).
+  const fig = { width: 64, height: 32, rgba: new Uint8Array(64 * 32 * 4) };
+  for (let y = 4; y < 28; y++) for (let x = 0; x < 64; x++) if (x % 32 >= 8 && x % 32 < 24) fig.rgba.set([200, 60, 40, 255], (y * 64 + x) * 4);
+  fs.writeFileSync(path.join(dir, "stand.png"), encodePng(fig));
+  const piv = JSON.parse((await exec(process.execPath, [cli, "toolbox", "sprite", "export", "stand.png", "--grid", "2x1", "--engine", "unity", "--pivot", "feet", "--ppu", "24", "--json"], { env, cwd: dir })).stdout);
+  assert.deepEqual([piv.pivot.x, piv.pivot.y, piv.pivot.kind, piv.pixels_per_unit], [16, 28, "feet", 24]);
+  const standMeta = fs.readFileSync(path.join(dir, "stand.png.meta"), "utf8");
+  assert.deepEqual(field(standMeta, "      pivot"), Array(2).fill("{x: 0.5, y: 0.125}"));
+  assert.deepEqual(field(standMeta, "  spritePixelsToUnits"), ["24"]);
+  const ppuGodot = await exec(process.execPath, [cli, "toolbox", "sprite", "export", "stand.png", "--grid", "2x1", "--engine", "godot", "--ppu", "24", "--json"], { env, cwd: dir }).catch(e => e);
+  assert.equal(ppuGodot.code, 2);
+  const tp = await exec(process.execPath, [cli, "toolbox", "sprite", "export", "stand.png", "--grid", "2x1", "--engine", "texturepacker", "--pivot", "feet", "--json"], { env, cwd: dir }).catch(e => e);
+  assert.equal(tp.code, 2);
 
   const project = path.join(dir, "game");
   fs.mkdirSync(path.join(project, "ProjectSettings"), { recursive: true });

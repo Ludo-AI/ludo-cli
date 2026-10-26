@@ -14,6 +14,8 @@ import { makeGif, MAX_GIF_FPS } from "./gif.js";
 import { scaleUp } from "./pixels.js";
 import { MAX_TOOLBOX_PIXELS } from "../tty/png.js";
 import { hint, TOOLS, type ToolCall } from "./registry.js";
+// Used when a tool runs, never as the modules load: the two import each other.
+import { metricsOrFail, pivotChoice, sheetFrames } from "./sprite-analysis.js";
 
 // A sheet's grid: --grid, else its Ludo stamp (or a GIF's frames), else detected.
 // A detection that is not sure refuses (exit code 12) with its best guess.
@@ -404,11 +406,20 @@ TOOLS.push({
     "                          export a sheet under Assets/; an existing .meta keeps its guid)",
     "Frames are keyed 0, 1, 2... in playing order. A sheet trimmed or extruded by `ludo toolbox image`",
     "exports each frame's original size and offset, and keeps the repeated border out of the frames.",
-    "Any toolbox tool that writes a sheet also takes --engine."
+    "Any toolbox tool that writes a sheet also takes --engine.",
+    "",
+    "Without --pivot every frame pivots on its centre. --pivot feet puts it on the ground line between",
+    "the feet, as `ludo toolbox sprite metrics` measures it (a sheet that does not stand on a ground line",
+    "gets its centre of mass, and the output says so); mass or X,Y (frame pixels) also work. Unity gets",
+    "it as each sprite's custom pivot; Godot, whose SpriteFrames has none, also gets a .tscn scene: an",
+    "AnimatedSprite2D with the offset that puts the pivot at the node's origin. --ppu sets Unity's",
+    "pixels per unit (default 100): use the one `ludo toolbox sprite compare` gives the character."
   ],
   flags: [
     { flag: "--animation", value: "name", description: "The animation's name (default: the file's name; \"default\" for Godot)" },
     { flag: "--fps", value: "n", description: "Frame rate (default: the sheet's, else 10)" },
+    { flag: "--pivot", value: "feet|mass|X,Y", description: "Godot and Unity: pivot on the ground line between the feet, the centre of mass, or X,Y in frame pixels (default: the frame's centre)" },
+    { flag: "--ppu", value: "n", description: "Unity's pixels per unit (default 100)" },
     { flag: "--grid", value: "CxR", description: "The sheet's grid, when it has no Ludo stamp and detection is unsure" }
   ],
   async run(ctx: Ctx, call: ToolCall) {
@@ -421,7 +432,18 @@ TOOLS.push({
     const raw = call.flags.get("--animation");
     if (raw === true || (typeof raw === "string" && !raw.trim())) throw new CliError("--animation needs a name", EXIT.USAGE);
     const out = { ...grid, fps };
-    const files = engineFiles(ctx, src.file, src.image, out, layoutOf(src), typeof raw === "string" ? raw.trim() : undefined);
+    const engine = ctx.globals.engine;
+    const ppu = positiveNumber(call, "--ppu");
+    if (ppu !== undefined && engine !== "unity") throw new CliError("--ppu is Unity's pixels per unit: use it with --engine unity", EXIT.USAGE);
+    // The pivot as `sprite metrics` measures it, in the untrimmed frame.
+    let pivot: { x: number; y: number; kind: string; why: string } | undefined;
+    if (call.flags.has("--pivot")) {
+      const choice = pivotChoice(call);
+      if (engine === "texturepacker") throw new CliError("--pivot is written for Godot and Unity", EXIT.USAGE, `For Phaser or PixiJS, set the origin (anchor) that \`ludo toolbox sprite metrics ${shown(src.file)}\` gives.`);
+      const { masks, fw, fh } = sheetFrames(src, grid, 128);
+      pivot = metricsOrFail(masks, fw, fh, choice, src.file, 128).pivot;
+    }
+    const files = engineFiles(ctx, src.file, src.image, out, layoutOf(src), typeof raw === "string" ? raw.trim() : undefined, { ...(pivot ? { pivot } : {}), ...(ppu ? { ppu } : {}) });
 
     const next = hint("Animate another move for the same character with Ludo", `ludo sprite animate --initial-image <a frame> --motion-prompt "<what it does>" --engine ${ctx.globals.engine}`);
     if (ctx.jsonOut) {
@@ -432,13 +454,17 @@ TOOLS.push({
           grid_from: from,
           ...(src.trim ? { trimmed: true } : {}),
           ...(src.extrude ? { extrude: src.extrude } : {}),
+          ...(pivot ? { pivot } : {}),
+          ...(engine === "unity" ? { pixels_per_unit: ppu ?? 100 } : {}),
           engine_files: files.map(shown),
           ...(ctx.globals.quiet ? {} : { hint: next })
         },
         false
       );
     } else {
-      process.stdout.write(`${grid.frames} frames (${grid.cols}x${grid.rows} grid) at ${fps} fps\n${savedLines(files)}`);
+      process.stdout.write(`${grid.frames} frames (${grid.cols}x${grid.rows} grid) at ${fps} fps\n`);
+      if (pivot) process.stdout.write(`Pivot ${pivot.x}, ${pivot.y} (${pivot.kind}): ${pivot.why}\n`);
+      process.stdout.write(savedLines(files));
       if (!ctx.globals.quiet) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
     }
     return EXIT.OK;

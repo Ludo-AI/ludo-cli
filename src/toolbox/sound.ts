@@ -25,7 +25,7 @@ export function samplePeak(a: Audio): number {
 export const truePeak = (a: Audio): number => truePeakAt(a).peak;
 
 // The sample peak and where it is (a frame index; the first, on a tie).
-export function samplePeakAt(a: Audio): { peak: number; at: number } {
+function samplePeakAt(a: Audio): { peak: number; at: number } {
   let peak = 0;
   let at = 0;
   for (const ch of a.channels) {
@@ -40,7 +40,7 @@ export function samplePeakAt(a: Audio): { peak: number; at: number } {
 // samples). The interpolator's output at input i, phase f, is the
 // oversampled signal at i * factor + f, which lags by its (taps - 1) / 2
 // taps: so it stands for frame i + f / factor - (taps - 1) / 2 / factor.
-export function truePeakAt(a: Audio): { peak: number; at: number } {
+function truePeakAt(a: Audio): { peak: number; at: number } {
   const factor = a.rate < 96000 ? 4 : a.rate < 192000 ? 2 : 1;
   let { peak, at } = samplePeakAt(a);
   if (factor === 1) return { peak, at };
@@ -123,30 +123,6 @@ function kWeightedPower(ch: Float32Array, rate: number, step: number): { steps: 
     }
   }
   return { steps, total: total + sum };
-}
-
-// Momentary loudness (EBU R 128's M: 400 ms of K-weighted power, ungated)
-// every 100 ms: lufs[k] is the block starting at k * step frames. A sound
-// shorter than one block is one block of its own length.
-export function momentaryLoudness(a: Audio): { step: number; block: number; lufs: number[] } {
-  const n = frames(a);
-  const w = weights(a.channels.length);
-  const step = Math.round(a.rate / 10);
-  const lufsOf = (p: number) => (p > 0 ? -0.691 + 10 * Math.log10(p) : -Infinity);
-  const powers = a.channels.map((ch, c) => (w[c] ? kWeightedPower(ch, a.rate, step) : undefined));
-  if (n < 4 * step) {
-    let p = 0;
-    powers.forEach((pw, c) => pw && (p += (w[c] * pw.total) / Math.max(1, n)));
-    return { step, block: n, lufs: [lufsOf(p)] };
-  }
-  const steps = Math.floor(n / step);
-  const stepPower = new Float64Array(steps);
-  powers.forEach((pw, c) => {
-    if (pw) for (let s = 0; s < steps; s++) stepPower[s] += (w[c] * pw.steps[s]) / (4 * step);
-  });
-  const lufs: number[] = [];
-  for (let s = 0; s + 4 <= steps; s++) lufs.push(lufsOf(stepPower[s] + stepPower[s + 1] + stepPower[s + 2] + stepPower[s + 3]));
-  return { step, block: 4 * step, lufs };
 }
 
 export interface Loudness {

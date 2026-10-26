@@ -12,6 +12,9 @@
 //    `margin`: Rect2(offset, untrimmed size - frame size), which is how Godot
 //    puts a cut-down region back at its original size and place. An extruded
 //    one keeps the repeated border out of each region.
+//  - SpriteFrames has no pivot: with `sprite export --pivot` a `.tscn` scene
+//    also comes, an AnimatedSprite2D playing the .tres whose `offset` (with
+//    `centered` on, the default) puts the pivot at the node's origin.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -94,6 +97,66 @@ export function spriteFramesTres(
       `"name": &${quote(animationName)},\n"speed": ${godotFloat(grid.fps)}\n}]`,
   );
   return out.join("\n") + "\n";
+}
+
+/** Pure: the `.tscn` text, an AnimatedSprite2D playing `framesPath` with the pivot at its origin. */
+export function animatedSpriteScene(
+  framesPath: string,
+  nodeName: string,
+  sheetWidth: number,
+  sheetHeight: number,
+  grid: SheetGrid,
+  pivot: { x: number; y: number },
+  animationName = "default",
+  layout: FrameLayout = {},
+): string {
+  const { w, h } = frameSize(sheetWidth, sheetHeight, grid);
+  const e = layout.extrude ?? 0;
+  const [fw, fh] = [w - 2 * e, h - 2 * e];
+  // The frame Godot draws: the untrimmed one when the AtlasTexture has a margin.
+  const t = layout.trim && layout.trim.w === fw && layout.trim.h === fh ? layout.trim : undefined;
+  const [dw, dh] = t ? [t.source_w, t.source_h] : [fw, fh];
+  const name = nodeName.replace(/[.:@/"%]/g, "_") || "Sprite";
+  return [
+    `[gd_scene format=3]`,
+    ``,
+    `[ext_resource type="SpriteFrames" path=${quote(framesPath)} id="1_frames"]`,
+    ``,
+    `[node name=${quote(name)} type="AnimatedSprite2D"]`,
+    `sprite_frames = ExtResource("1_frames")`,
+    `animation = &${quote(animationName)}`,
+    `autoplay = ${quote(animationName)}`,
+    `offset = Vector2(${dw / 2 - pivot.x}, ${dh / 2 - pivot.y})`,
+    ``,
+  ].join("\n");
+}
+
+/**
+ * Writes `<.tres basename>.tscn` next to the SpriteFrames `tresPath` (never
+ * overwriting: adds -2, -3, ...) and returns its path.
+ */
+export function writeGodotScene(
+  tresPath: string,
+  sheetWidth: number,
+  sheetHeight: number,
+  grid: SheetGrid,
+  pivot: { x: number; y: number },
+  animationName?: string,
+  layout?: FrameLayout,
+): string {
+  const dir = path.dirname(path.resolve(tresPath));
+  const base = path.basename(tresPath, path.extname(tresPath));
+  const text = animatedSpriteScene(godotTexturePath(tresPath), animationName || base, sheetWidth, sheetHeight, grid, pivot, animationName, layout);
+  for (let n = 1; ; n++) {
+    const target = path.join(dir, `${base}${n > 1 ? `-${n}` : ""}.tscn`);
+    try {
+      fs.writeFileSync(target, text, { flag: "wx" });
+      return target;
+    } catch (err: any) {
+      if (err?.code === "EEXIST") continue;
+      throw new Error(`Could not write Godot scene ${target}: ${err?.code || err?.message || err}`);
+    }
+  }
 }
 
 /** The nearest directory at or above `dir` holding a project.godot, if any. */

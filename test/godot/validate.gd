@@ -20,6 +20,12 @@ func _initialize() -> void:
 		return
 	for c in cases:
 		check_case(c)
+	var scenes = JSON.parse_string(FileAccess.get_file_as_string("res://out/scenes.json"))
+	if typeof(scenes) != TYPE_ARRAY or scenes.is_empty():
+		fail("scenes", "could not read res://out/scenes.json")
+		scenes = []
+	for s in scenes:
+		check_scene(s)
 	var tilesets = JSON.parse_string(FileAccess.get_file_as_string("res://out/tilesets.json"))
 	if typeof(tilesets) != TYPE_ARRAY or tilesets.is_empty():
 		fail("tilesets", "could not read res://out/tilesets.json")
@@ -33,7 +39,7 @@ func _initialize() -> void:
 	for s in sounds:
 		check_sound(s)
 	if failures == 0:
-		print("ALL %d CASES PASSED" % (cases.size() + tilesets.size() + sounds.size()))
+		print("ALL %d CASES PASSED" % (cases.size() + scenes.size() + tilesets.size() + sounds.size()))
 	quit(1 if failures > 0 else 0)
 
 
@@ -107,6 +113,36 @@ func check_case(c: Dictionary) -> void:
 				break
 	if failures == failures_before:
 		print("ok [%s] %d frames, %s @ %s fps, loop=%s" % [name, expected_frames.size(), anim, c.fps, c.loop])
+
+
+# A scene from writeGodotScene: an AnimatedSprite2D on the .tres, centered,
+# whose offset puts the frame's pivot at the node's origin: the frame is
+# drawn from offset - size / 2, so that corner must be minus the pivot.
+func check_scene(s: Dictionary) -> void:
+	var name: String = s.name
+	var packed = ResourceLoader.load(s.tscn, "", ResourceLoader.CACHE_MODE_IGNORE)
+	if not (packed is PackedScene):
+		fail(name, "%s did not load as a PackedScene" % s.tscn)
+		return
+	var node = packed.instantiate()
+	if not (node is AnimatedSprite2D):
+		fail(name, "the scene's root is %s, not AnimatedSprite2D" % node.get_class())
+		node.free()
+		return
+	var sprite: AnimatedSprite2D = node
+	var anim := StringName(s.animation)
+	if sprite.sprite_frames == null or sprite.sprite_frames.get_frame_count(anim) != int(s.frames):
+		fail(name, "sprite_frames missing or without %d frames of %s" % [s.frames, anim])
+	elif sprite.animation != anim or sprite.autoplay != String(anim) or not sprite.centered:
+		fail(name, "animation %s, autoplay %s, centered %s" % [sprite.animation, sprite.autoplay, sprite.centered])
+	else:
+		var size := sprite.sprite_frames.get_frame_texture(anim, 0).get_size()
+		var corner := sprite.offset - size / 2
+		if corner != -Vector2(s.pivot[0], s.pivot[1]):
+			fail(name, "frame drawn from %s, not minus the pivot %s" % [corner, s.pivot])
+		else:
+			print("ok [%s] pivot %s at the node's origin" % [name, s.pivot])
+	sprite.free()
 
 
 func _far(a: Color, b: Color) -> bool:

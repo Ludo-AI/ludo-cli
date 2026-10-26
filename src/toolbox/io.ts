@@ -10,7 +10,7 @@ import { convertToPng } from "../tty/image.js";
 import { decodeWebp, isWebp, WebpError } from "../tty/webp.js";
 import { readGrid, GRID_KEY, type Grid } from "../tty/preview.js";
 import { EXTRUDE_KEY, parseExtrude, parseTrim, TRIM_KEY, type Trim } from "./pixels.js";
-import { ENGINE_FILE, writeEngineFile } from "../tty/engines.js";
+import { ENGINE_FILE, writeEngineFile, type EngineOptions } from "../tty/engines.js";
 import type { Ctx } from "../generate.js";
 import { noteInput } from "../telemetry.js";
 
@@ -157,11 +157,11 @@ export function carriedChunks(src: Loaded, grid?: Grid, layout: Layout = {}): Ra
 
 // The --engine file for a sheet just written, next to it. Empty without
 // --engine (or a project's "engine").
-export function engineFiles(ctx: Ctx, sheet: string, image: { width: number; height: number }, grid: Grid, layout: Layout = {}, animation?: string): string[] {
+export function engineFiles(ctx: Ctx, sheet: string, image: { width: number; height: number }, grid: Grid, layout: Layout = {}, animation?: string, options?: EngineOptions): string[] {
   const engine = ctx.globals.engine;
   if (!engine) return [];
   try {
-    return writeEngineFile(engine, sheet, image.width, image.height, grid, layout, animation);
+    return writeEngineFile(engine, sheet, image.width, image.height, grid, layout, animation, options);
   } catch (err) {
     throw new CliError(`Could not write the ${ENGINE_FILE[engine]} for ${shown(sheet)}: ${(err as Error).message}`, EXIT.BAD_INPUT);
   }
