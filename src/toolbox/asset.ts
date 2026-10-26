@@ -741,11 +741,21 @@ const publicAsset = ({ file, phash, clipTargets, made, ...rest }: Asset) => ({
 
 // A key from the path, stable as long as the path is: lower-case words
 // joined by "_", starting with a letter. A file Ludo named on download
-// (animateSprite-29402c81-1.png) takes its folder's name instead. Files
-// that only differ by extension take it on.
+// (animateSprite-29402c81-1.png) takes its folder's name instead when the
+// folder holds that one generation only, as the CLI saves it; in a models/
+// that holds other files too, the folder names none of them. Files that
+// only differ by extension take it on.
 export function assetKeys(paths: string[]): string[] {
+  const stem = (rel: string) => path.posix.basename(rel).replace(/\.[^.]+$/, "");
+  const job = (rel: string) => (LUDO_DOWNLOAD.test(stem(rel)) ? stem(rel).replace(/-\d+$/, "") : stem(rel));
+  const jobsIn = new Map<string, Set<string>>();
+  for (const rel of paths) {
+    const dir = path.posix.dirname(rel);
+    jobsIn.set(dir, (jobsIn.get(dir) ?? new Set()).add(job(rel)));
+  }
   const keyOf = (rel: string) => {
-    const key = withoutDownloadName(rel)
+    const onlyJob = jobsIn.get(path.posix.dirname(rel))!.size === 1;
+    const key = (onlyJob ? withoutDownloadName(rel) : rel.replace(/\.[^./]+$/, ""))
       .replace(/\//g, "_")
       .replace(/([a-z])([A-Z])/g, "$1_$2")
       .toLowerCase()

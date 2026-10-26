@@ -242,6 +242,13 @@ test("unit: keys, characters, sound kinds and the difference hash", () => {
     "a_png",
     "a_png_2"
   ]);
+  // A folder of one generation names it; a models/ with other files in it does not.
+  assert.deepEqual(assetKeys(["knight_walk/animateSprite-29402c81-1.png", "knight_walk/animateSprite-29402c81-1.gif", "models/create3DModel-2f4066c5-1.glb", "models/goblin.glb"]), [
+    "knight_walk_png",
+    "knight_walk_gif",
+    "models_create3dmodel_2f4066c5_1",
+    "models_goblin"
+  ]);
   assert.deepEqual(characterOf("fp_hero_walk2/animateSprite-61b55cee-1.png"), { character: "fp_hero", action: "walk", take: 2 });
   assert.deepEqual(characterOf("knight/attack_heavy.png"), { character: "knight", action: "attack_heavy" });
   assert.equal(soundKind("audio/voice-wizard.mp3", 4, false, 1, { low: 0.1, pauses: 0 }).kind, "voice");
