@@ -16,6 +16,7 @@ import { modelInfo, ModelError, readGltf } from "./model.js";
 import { haveFfmpeg, probeVideo } from "./video.js";
 import { textFlag } from "./flags.js";
 import { hint, TOOLS, type Hint, type ToolCall } from "./registry.js";
+import { LOG_NAME, readAssets, type AssetEntry } from "../assets.js";
 
 // `ludo toolbox asset ...`: a folder of assets at once. The manifest only
 // looks: it says what each file is, what the folder visibly lacks next to
@@ -85,6 +86,7 @@ export interface Asset {
   video?: { codec: string; alpha: boolean };
   mismatch?: string; // its extension says one format and its bytes another
   error?: string; // a file of a known type it could not read
+  made?: Made; // how Ludo made it, when the folder keeps the record
   phash?: Uint8Array; // not in the JSON: the perceptual hash duplicates compare
   clipTargets?: string[]; // not in the JSON: the nodes a model's clips move, by name
 }
@@ -250,13 +252,13 @@ export function framesOf(img: Image, grid: SheetGrid | undefined, limit = Infini
 
 // Words a file's path uses for what it is. Only a tie-breaker: what the
 // pixels or samples show decides first.
-const words = (rel: string) =>
-  rel
-    .replace(/\.[^./]+$/, "")
+const wordsIn = (text: string) =>
+  text
     .replace(/([a-z])([A-Z])/g, "$1 $2")
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter(Boolean);
+const words = (rel: string) => wordsIn(rel.replace(/\.[^./]+$/, ""));
 
 const TILE_WORDS = new Set(["tile", "tiles", "tileset", "tilemap", "texture", "textures", "tex", "seamless", "terrain", "ground", "floor", "wall", "pattern"]);
 
@@ -357,7 +359,12 @@ export function soundKind(rel: string, duration: number, loops: boolean, copies:
     const hit = w.find(x => set.has(x));
     if (hit) return { kind, reason: `named like ${kind === "sfx" ? "a sound effect" : kind === "voice" ? "a voice line" : kind === "music" ? "music" : "an ambience"} ("${hit}")` };
   }
-  if (copies > 1) return { kind: duration >= 20 ? "music" : "ambience", reason: `${copies} copies of one loop written out` };
+  // A loop written out more than once (Ludo's ambiences are a 10 s loop
+  // written twice, 20 s): its length is the loop's, not the file's.
+  if (copies > 1) {
+    const loop = duration / copies;
+    return { kind: loop >= 20 ? "music" : "ambience", reason: `${copies} copies of one ${round(loop, 1)} s loop written out` };
+  }
   if (duration < 1.5) return { kind: "sfx", reason: "under 1.5 s" };
   const speechLike = duration <= 15 && speech.low >= 0.3 && speech.low <= 0.6 && speech.pauses >= 0.12 && speech.pauses <= 0.45;
   if (speechLike) return { kind: "voice", reason: `speech-like: ${Math.round(speech.low * 100)}% low-energy frames, ${Math.round(speech.pauses * 100)}% pauses` };
@@ -444,6 +451,134 @@ function readVideo(a: Asset) {
   a.reason = `${v.codec}${v.alpha ? " with alpha" : ""}`;
 }
 
+// ---- How Ludo made them ----
+
+// What the folder records of how a file was made, and only what it states:
+// the CLI's asset log (ludo-assets.json, in the folder, in a folder in it or
+// in one above it), or an API job saved as JSON beside its files
+// (<name>_job.json, the job getApiJob returns, its files saved as
+// <name>_<n>.<ext> in the order of the result's URLs), or what the CLI
+// printed with --json for a job (its `files`, each with its absolute_path).
+export interface Made {
+  operation: string; // the API operation: animateSprite, adjustSpritesheet, rigModel...
+  job?: string;
+  created?: number; // ms since 1970
+  model?: string; // the AI model the request named
+  audio: boolean; // the job's result has a sound: a sound file of its job in the log, or an audio_url
+  video?: { url: string; record: string }; // the job's video_url, and the record that keeps it
+  inputs: string[]; // local files the request named, absolute
+  record: string; // the record, relative to the folder
+}
+
+const SOUND_OF: Record<string, Kind> = {
+  createSoundEffect: "sfx",
+  createSpriteAudio: "sfx",
+  animateSprite: "sfx",
+  animateSpriteKeyframes: "sfx",
+  transferMotion: "sfx",
+  editSpritesheet: "sfx",
+  adjustSpritesheet: "sfx",
+  createMusic: "music",
+  createAmbiance: "ambience",
+  createVoice: "voice",
+  createSpeech: "voice",
+  createSpeechPreset: "voice"
+};
+const SPRITE_OPS = new Set(["animateSprite", "animateSpriteKeyframes", "transferMotion", "editSpritesheet", "adjustSpritesheet", "rotateSpritesheet"]);
+
+function fromLog(file: string, record: string, out: Map<string, Made>) {
+  let entries: AssetEntry[];
+  try {
+    entries = readAssets(file);
+  } catch {
+    return; // not JSON: nothing it says can be trusted
+  }
+  const dir = path.dirname(file);
+  const byJob = new Map<string, AssetEntry[]>();
+  for (const e of entries) if (e?.job_id && typeof e.file === "string") byJob.set(e.job_id, [...(byJob.get(e.job_id) ?? []), e]);
+  for (const e of entries) {
+    if (typeof e?.file !== "string" || typeof e.operation_id !== "string") continue;
+    const body = e.body && typeof e.body === "object" ? e.body : {};
+    const inputs = Object.values(body)
+      .flatMap(v => (Array.isArray(v) ? v : [v]))
+      .filter((v): v is string => typeof v === "string" && !/^(https?:|data:)/i.test(v) && v.length < 1024)
+      .map(v => path.resolve(dir, v))
+      .filter(v => fs.statSync(v, { throwIfNoEntry: false })?.isFile());
+    const created = Date.parse(e.created_at);
+    const at = path.resolve(dir, e.file);
+    const job = out.get(at); // a job record of the same file keeps what the log does not
+    out.set(at, {
+      ...(job?.video ? { video: job.video } : {}),
+      operation: e.operation_id,
+      ...(e.job_id ? { job: e.job_id } : {}),
+      ...(Number.isFinite(created) ? { created } : {}),
+      ...(typeof body.model === "string" && /^[a-z0-9-]+$/i.test(body.model) ? { model: body.model } : {}),
+      audio: !!job?.audio || (e.job_id ? (byJob.get(e.job_id) ?? []) : [e]).some(x => AUDIO_EXT.has(path.extname(x.file).toLowerCase())),
+      inputs,
+      record
+    });
+  }
+}
+
+function fromJob(file: string, record: string, out: Map<string, Made>) {
+  let job: { id?: unknown; job_id?: unknown; task_type?: unknown; created_at?: unknown; result?: unknown; files?: unknown };
+  try {
+    if (fs.statSync(file).size > 4 << 20) return;
+    job = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return;
+  }
+  if (typeof job?.task_type !== "string" || !job.result || typeof job.result !== "object") return;
+  const results = (Array.isArray(job.result) ? job.result : [job.result]).filter(x => x && typeof x === "object") as Record<string, unknown>[];
+  const urls = results.flatMap(x => (typeof x.url === "string" ? [x.url] : Object.values(x).filter((v): v is string => typeof v === "string" && /^https?:/.test(v))));
+  const created = typeof job.created_at === "number" ? job.created_at : typeof job.created_at === "string" ? Date.parse(job.created_at) : NaN;
+  const video = results.find(x => typeof x.video_url === "string")?.video_url as string | undefined;
+  const id = typeof job.id === "string" ? job.id : typeof job.job_id === "string" ? job.job_id : undefined;
+  const made: Made = {
+    operation: job.task_type,
+    ...(id ? { job: id } : {}),
+    ...(Number.isFinite(created) ? { created } : {}),
+    audio: results.some(x => typeof x.audio_url === "string" || typeof x.audio_b64 === "string"),
+    ...(video ? { video: { url: video, record } } : {}),
+    inputs: [],
+    record
+  };
+  const files = Array.isArray(job.files) ? job.files.map(f => f?.absolute_path).filter((f): f is string => typeof f === "string" && path.isAbsolute(f)) : [];
+  if (files.length) for (const f of files) out.set(path.resolve(f), made);
+  else if (file.endsWith("_job.json")) {
+    const prefix = file.slice(0, -"_job.json".length);
+    urls.forEach((u, i) => {
+      const ext = /\.(\w+)$/.exec(u.split("?")[0])?.[1];
+      if (ext) out.set(path.resolve(`${prefix}_${i}.${ext}`), made);
+    });
+  }
+}
+
+// Each file's record, from the logs and jobs found and the logs above the folder.
+export function madeOf(found: Found, assets: Asset[]) {
+  const out = new Map<string, Made>();
+  const logs = new Set<string>();
+  for (let dir = path.dirname(found.root), n = 0; n < 16 && dir !== path.dirname(dir); dir = path.dirname(dir), n++) logs.add(path.join(dir, LOG_NAME));
+  for (const rel of found.skipped) {
+    const abs = path.resolve(found.root, rel);
+    if (path.basename(rel) === LOG_NAME) logs.add(abs);
+    else if (rel.endsWith(".json")) fromJob(abs, rel, out);
+  }
+  logs.add(path.join(found.root, LOG_NAME));
+  // Above the folder first, so a log closer to the files has the last word.
+  for (const log of [...logs].sort((x, y) => x.length - y.length)) if (fs.existsSync(log)) fromLog(log, path.relative(found.root, log).split(path.sep).join("/"), out);
+  for (const a of assets) {
+    const made = out.get(path.resolve(a.file));
+    if (!made) continue;
+    a.made = made;
+    const kind = a.type === "audio" && !a.error ? SOUND_OF[made.operation] : undefined;
+    if (kind) {
+      a.kind = kind;
+      a.reason = SPRITE_OPS.has(made.operation) ? `the sound Ludo's ${made.operation} made with its sheet (${made.record})` : `made by Ludo's ${made.operation} (${made.record})`;
+    }
+  }
+}
+
 // ---- Groups and duplicates ----
 
 // Words that say which move a sheet is, and words that say nothing about
@@ -452,44 +587,76 @@ const ACTIONS = new Set(
   (
     "idle walk run jump attack hit hurt die death dead fall land climb crouch dash roll block cast shoot throw punch kick slash swing spin fly " +
     "swim talk emote dance victory win lose spawn sleep sit push pull pickup use interact reload aim fire charge guard dodge stun turn move " +
-    "strafe sprint crawl slide wave laugh cry eat drink celebrate taunt special skill combo heavy light"
+    "strafe sprint crawl slide wave laugh cry eat drink celebrate taunt special skill combo heavy light roar smash slam stomp bite howl growl hop"
   ).split(" ")
 );
-const GENERIC = new Set(["animatesprite", "adjustspritesheet", "editspritesheet", "spritesheet", "spritesheets", "sheet", "sheets", "sprite", "sprites", "anim", "anims", "animation", "animations", "frames", "take", "v"]);
+const GENERIC = new Set(["animatesprite", "adjustspritesheet", "editspritesheet", "transfermotion", "spritesheet", "spritesheets", "sheet", "sheets", "sprite", "sprites", "anim", "anims", "animation", "animations", "frames", "take", "v"]);
+// Words that say which way or how a move plays, not who makes it:
+// hero_walk_left and hero_walk_right are one hero, mt_walk_loop and
+// mt_walk_forward one character. "ts" is a True Size copy (sprite adjust).
+const VARIANTS = new Set(
+  "left right up down front back side forward forwards backward backwards north south east west n s e w ne nw se sw loop loops looped looping cycle once start end ts".split(" ")
+);
 
 // The character a sheet shows and the move: hero_walk2.png -> hero, walk
-// (take 2). Hashes and numbers say nothing and are dropped.
-export function characterOf(rel: string): { character: string; action?: string; take?: number } {
-  const keep: string[] = [];
+// (take 2); hero_walk_left.png -> hero, walk (left). Hashes and numbers say
+// nothing and are dropped. Once a name has said who, the words after its
+// move say how the move plays (mt_idle_neutral is mt's idle); a name that
+// starts with the move says who after it (attack_goblin). The deepest part
+// of the path that names someone names the character: collide/knight-walk
+// and compare/knight-walk are one knight; knight/attack.png is the knight's.
+export function characterOf(rel: string): { character: string; action?: string; take?: number; variant?: string } {
+  let keep: string[] = [];
+  const variant: string[] = [];
   let action: string | undefined;
   let take: number | undefined;
-  for (const w of words(withoutDownloadName(rel))) {
-    if (/^\d+$/.test(w) || (/^[0-9a-f]{8,}$/.test(w) && /\d/.test(w)) || GENERIC.has(w)) continue;
-    const m = /^([a-z]+?)(\d+)?$/.exec(w);
-    if (m && ACTIONS.has(m[1])) {
-      action = action ? `${action}_${m[1]}` : m[1];
-      if (m[2]) take = Number(m[2]);
-      continue;
+  const tokens = withoutDownloadName(rel)
+    .split("/")
+    .map(segment => wordsIn(segment).filter(w => !(/^\d+$/.test(w) || (/^[0-9a-f]{8,}$/.test(w) && /\d/.test(w)) || GENERIC.has(w))));
+  const moving = tokens.some(seg => seg.some(w => ACTIONS.has(/^([a-z]+?)\d*$/.exec(w)?.[1] ?? "")));
+  for (const segment of tokens) {
+    let moved = false;
+    const own: string[] = [];
+    const after: string[] = [];
+    for (const w of segment) {
+      const m = /^([a-z]+?)(\d+)?$/.exec(w);
+      if (m && ACTIONS.has(m[1])) {
+        action = action ? `${action}_${m[1]}` : m[1];
+        if (m[2]) take = Number(m[2]);
+        moved = true;
+      } else if (moving && VARIANTS.has(w)) variant.push(w);
+      else (moved ? after : own).push(w);
     }
-    keep.push(w);
+    if (own.length || keep.length) variant.push(...after);
+    else own.push(...after);
+    if (own.length) keep = own;
   }
-  return { character: keep.join("_"), ...(action ? { action } : {}), ...(take ? { take } : {}) };
+  return {
+    character: [...new Set(keep)].join("_"),
+    ...(action ? { action } : {}),
+    ...(take ? { take } : {}),
+    ...(variant.length ? { variant: variant.join("_") } : {})
+  };
 }
+
+// The move without its kind: attack_heavy is an attack.
+const baseMove = (action: string) => action.split("_")[0];
 
 export interface Group {
   character: string;
-  frame_width: number;
+  frame_width: number; // the median of the sheets'
   frame_height: number;
-  animations: { path: string; action: string | null; take?: number; frames: number }[];
+  animations: { path: string; action: string | null; take?: number; variant?: string; frames: number; frame_width: number; frame_height: number }[];
 }
 
 // Sheets of one character: the same words once the move is taken out, and
 // frames of about the same height (within 25%: a take redrawn larger is
-// still the character; a sheet twice as tall is something else).
-export function groupsOf(assets: Asset[]): Group[] {
+// still the character; a sheet twice as tall is something else). A PNG and
+// the WebP of one download count once, as the PNG.
+export function groupsOf(assets: Asset[], plan?: LoadPlan): Group[] {
   const by = new Map<string, Asset[]>();
   for (const a of assets) {
-    if (a.kind !== "spritesheet" || !a.grid) continue;
+    if (a.kind !== "spritesheet" || !a.grid || (plan && !isShown(a, plan))) continue;
     const { character } = characterOf(a.path);
     if (!character) continue;
     by.set(character, [...(by.get(character) ?? []), a]);
@@ -513,8 +680,8 @@ export function groupsOf(assets: Asset[]): Group[] {
         animations: c
           .sort((x, y) => natural.compare(x.path, y.path))
           .map(a => {
-            const { action, take } = characterOf(a.path);
-            return { path: a.path, action: action ?? null, ...(take ? { take } : {}), frames: a.grid!.frames };
+            const { action, take, variant } = characterOf(a.path);
+            return { path: a.path, action: action ?? null, ...(take ? { take } : {}), ...(variant ? { variant } : {}), frames: a.grid!.frames, frame_width: a.grid!.frame_width, frame_height: a.grid!.frame_height };
           })
       });
     }
@@ -565,7 +732,10 @@ export function duplicatesOf(assets: Asset[]): Duplicate[] {
 
 // What the JSON carries of an asset: everything but where it is on disk and
 // its hash bits.
-const publicAsset = ({ file, phash, clipTargets, ...rest }: Asset) => rest;
+const publicAsset = ({ file, phash, clipTargets, made, ...rest }: Asset) => ({
+  ...rest,
+  ...(made ? { made: { operation: made.operation, ...(made.job ? { job: made.job } : {}), ...(made.created ? { created_at: new Date(made.created).toISOString() } : {}), ...(made.model ? { model: made.model } : {}), record: made.record } } : {})
+});
 
 // ---- Loader code for engines ----
 
@@ -627,45 +797,58 @@ function baseFor(root: string, flag: string | undefined): { base: string; guesse
   return { base: inside ? rel.split(path.sep).join("/") : path.basename(path.resolve(root)), guessed: !inside };
 }
 
-// What the loaders queue of the duplicates: one file of each set of one
-// size, the smallest (so the WebP Ludo sent over the PNG copy the CLI writes
-// beside it), with its twin's grid when only the twin carries the Ludo
-// stamp. A look-alike at another size (a 2x take) stays: it may be meant.
+// What the loaders queue of the duplicates: one file of each set of the
+// same file, either byte for byte, or one picture under one name in two
+// formats (the WebP Ludo sends and the PNG copy the CLI writes beside it,
+// animateSprite-29402c81-1.webp and -1.png), at one size: the smallest, with
+// its twin's grid when only the twin carries the Ludo stamp. Pictures that
+// only look alike stay, whatever the hash says: two moves of one small
+// character can hash alike, and a 2x take may be meant.
 export interface LoadPlan {
   left: Map<Asset, Asset>; // left out -> the file queued instead
   grid: Map<Asset, SheetGrid>; // a queued sheet's grid, from its twin's stamp
+  shown: Map<Asset, Asset>; // each file of such a set -> the one reports name: the stamped PNG, else the first
 }
+
+const stem = (a: Asset) => a.path.replace(/\.[^./]+$/, "");
 
 export function loadPlan(assets: Asset[], duplicates: Duplicate[]): LoadPlan {
   const byPath = new Map(assets.map(a => [a.path, a]));
+  const index = new Map(assets.map((a, i) => [a, i]));
+  const parent = assets.map((_, i) => i);
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  const join = (a: Asset, b: Asset) => (parent[find(index.get(b)!)] = find(index.get(a)!));
+  for (const d of duplicates) {
+    const files = d.files.map(f => byPath.get(f)!);
+    for (const a of files) {
+      for (const b of files) {
+        if (a === b) continue;
+        if (d.match === "identical" || (a.type === "image" && b.type === "image" && stem(a) === stem(b) && a.width === b.width && a.height === b.height)) join(a, b);
+      }
+    }
+  }
+  const sets = new Map<number, Asset[]>();
+  assets.forEach((a, i) => sets.set(find(i), [...(sets.get(find(i)) ?? []), a]));
   const left = new Map<Asset, Asset>();
   const grid = new Map<Asset, SheetGrid>();
-  for (const d of duplicates) {
-    const sizes = new Map<string, Asset[]>();
-    for (const a of d.files.map(f => byPath.get(f)!)) {
-      if (left.has(a)) continue;
-      const size = `${a.type} ${a.width}x${a.height}`;
-      sizes.set(size, [...(sizes.get(size) ?? []), a]);
-    }
-    for (const same of sizes.values()) {
-      if (same.length < 2) continue;
-      const keep = same.reduce((x, y) => (y.bytes < x.bytes ? y : x));
-      for (const a of same) if (a !== keep) left.set(a, keep);
-      const stamp = same.find(a => a.grid?.from === "stamp")?.grid;
-      const own = keep.grid;
-      if (stamp && own && own.from !== "stamp" && own.cols === stamp.cols && own.rows === stamp.rows && own.frames === stamp.frames) grid.set(keep, stamp);
-    }
+  const shown = new Map<Asset, Asset>();
+  for (const same of sets.values()) {
+    if (same.length < 2) continue;
+    const keep = same.reduce((x, y) => (y.bytes < x.bytes ? y : x));
+    for (const a of same) if (a !== keep) left.set(a, keep);
+    const stamp = same.find(a => a.grid?.from === "stamp")?.grid;
+    const own = keep.grid;
+    if (stamp && own && own.from !== "stamp" && own.cols === stamp.cols && own.rows === stamp.rows && own.frames === stamp.frames) grid.set(keep, stamp);
+    const named = same.find(a => a.grid?.from === "stamp") ?? same.find(a => a.format === "png") ?? same[0];
+    for (const a of same) shown.set(a, named);
   }
-  // A file kept in one set and left out in a later one points at the last.
-  for (const [a, k] of left) {
-    let to = k;
-    while (left.has(to)) to = left.get(to)!;
-    left.set(a, to);
-  }
-  return { left, grid };
+  return { left, grid, shown };
 }
 
-const leftNote = (a: Asset, kept: Asset) => `${a.path}: left out, the same picture as ${kept.path} (loaders take the smallest of duplicates)`;
+// Whether reports name this file: one file of each set the loaders take once.
+const isShown = (a: Asset, plan: LoadPlan) => (plan.shown.get(a) ?? a) === a;
+
+const leftNote = (a: Asset, kept: Asset) => `${a.path}: left out, the same ${a.sha256 === kept.sha256 ? "file" : "picture"} as ${kept.path} (loaders take the smallest of duplicates)`;
 
 // Phaser gets both forms of one list: the asset pack, which any Phaser 3 or 4
 // project loads in one line (this.load.pack), JavaScript or TypeScript; and a
@@ -808,7 +991,8 @@ interface Emitted {
 
 // What a folder visibly lacks next to what the rest of it has, each with the
 // Ludo command that makes it. Every gap needs evidence in the folder: other
-// characters with the move, sheets that have their sounds, models that are
+// characters with the move, sheets of the character that have their sounds,
+// Ludo's own record or video of a sheet made without one, models that are
 // rigged or animated. A folder with one of each thing shows none.
 export interface Gap {
   kind: "animation" | "sound" | "rig" | "3d-animation";
@@ -816,6 +1000,7 @@ export interface Gap {
   missing: string; // the move, or "sound", "rig", "animation"
   detail: string;
   evidence: string[]; // the files that show it is expected
+  also?: string[]; // other files the gap is for: the other sheets of one move
   hint: Hint; // built plainly: only the one printed as Next counts as shown
 }
 
@@ -827,97 +1012,197 @@ const jobOf = (a: Asset) => {
   const name = path.posix.basename(a.path).replace(/\.[^.]+$/, "");
   return LUDO_DOWNLOAD.test(name) ? `${path.posix.dirname(a.path)}/${name.replace(/-\d+$/, "")}-` : undefined;
 };
+// A file's name without a trailing number: what a job's files share when
+// saved as <name>_<n> (anim_attack_0.webp, anim_attack_1.mp4, anim_attack_2.mp3).
+const unnumbered = (a: Asset) => stem(a).replace(/[-_]\d+$/, "");
+// Two files of one generation: one job in the folder's records, or by the
+// CLI's download names, or one name in one folder but for a trailing number
+// (hero_walk.png and hero_walk-2.mp3).
 const sameJob = (sheet: Asset, other: Asset) => {
+  if (sheet.made?.job && sheet.made.job === other.made?.job) return true;
   const job = jobOf(sheet);
-  return !!job && `${path.posix.dirname(other.path)}/${path.posix.basename(other.path)}`.startsWith(job);
+  if (job) return `${path.posix.dirname(other.path)}/${path.posix.basename(other.path)}`.startsWith(job);
+  return path.posix.dirname(sheet.path) === path.posix.dirname(other.path) && [stem(sheet), unnumbered(sheet)].includes(unnumbered(other));
 };
 
 // A sound for a sheet: one of its job's files, or one named for its
 // character and move (hero_walk.png and sfx/hero_walk_steps.wav).
 function soundFor(sheet: Asset, sounds: Asset[]): Asset | undefined {
   const s = characterOf(sheet.path);
-  return sounds.find(a => {
-    if (sameJob(sheet, a)) return true;
-    const c = characterOf(a.path);
-    const words = new Set(c.character.split("_"));
-    return !!s.action && !!s.character && c.action?.split("_")[0] === s.action.split("_")[0] && s.character.split("_").every(w => words.has(w));
+  return (
+    sounds.find(a => sameJob(sheet, a)) ??
+    sounds.find(a => {
+      const c = characterOf(a.path);
+      const words = new Set(c.character.split("_"));
+      return !!s.action && !!s.character && !!c.action && baseMove(c.action) === baseMove(s.action) && s.character.split("_").every(w => words.has(w));
+    })
+  );
+}
+
+// Characters whose names nest (hero and hero_ts, mt and mt_neutral) may be
+// one character under two names: neither counts for or against the other.
+const nested = (a: string, b: string) => {
+  const [x, y] = [a.split("_"), b.split("_")];
+  return x.every(w => y.includes(w)) || y.every(w => x.includes(w));
+};
+
+// create-audio, by its own help: the video_url of a sheet from one of these,
+// made in the last 7 days.
+const CREATE_AUDIO_TAKES = ["animateSprite", "animateSpriteKeyframes", "transferMotion", "editSpritesheet"];
+const CREATE_AUDIO_DAYS = 7;
+const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+
+// The way to a sound for sheets of one move: create-audio when it takes
+// every one of them, else a sound effect, saying why.
+function soundHint(group: Asset[], ludo: boolean, sheets = group.length): Hint {
+  const { character, action } = characterOf(group[0].path);
+  const many = group.length > 1;
+  const effect = (why: string): Hint => ({
+    text: many ? `Make the sound of ${character}'s ${baseMove(action!)} with Ludo, one for its ${sheets} sheets${why}` : `Make its sound with Ludo${why}`,
+    command: `ludo audio sound-effect --description ${quote(`<what ${character || "it"}${action ? ` doing ${action.replace(/_/g, " ")}` : ""} sounds like>`)}`
   });
+  if (!ludo) return effect("");
+  const from = `create-audio takes the video_url of a sheet from ${CREATE_AUDIO_TAKES.slice(0, -1).join(", ")} or ${CREATE_AUDIO_TAKES[CREATE_AUDIO_TAKES.length - 1]}`;
+  const recent = `create-audio takes only sheets made in the last ${CREATE_AUDIO_DAYS} days`;
+  const ops = [...new Set(group.map(a => a.made?.operation).filter((o): o is string => !!o && !CREATE_AUDIO_TAKES.includes(o)))];
+  const old = group.map(a => a.made?.created).filter((c): c is number => !!c && Date.now() - c > CREATE_AUDIO_DAYS * 86400e3);
+  if (ops.length && group.every(a => a.made && !CREATE_AUDIO_TAKES.includes(a.made.operation))) return effect(`: ${from}, and ${many ? "these are" : "this one is"} from ${list(ops)}`);
+  if (old.length === group.length) return effect(`: ${recent}, and ${many ? `these were made by ${day(Math.max(...old))}` : `this one was made on ${day(old[0])}`}`);
+  if (ops.length || old.length) return effect(ops.length ? `: ${from}, and some are from ${list(ops)}` : `: ${recent}, and some were made before ${day(Date.now() - CREATE_AUDIO_DAYS * 86400e3)}`);
+  const made = group[0].made;
+  if (!many && made?.video && made.created) return { text: `Give it a sound with Ludo, from the video_url its job record keeps (${made.video.record}; made on ${day(made.created)})`, command: `ludo sprite create-audio --spritesheet-video-url ${made.video.url}` };
+  const dates = group.map(a => a.made?.created).filter((c): c is number => !!c);
+  return {
+    text: `Give ${many ? "each" : "it"} a sound with Ludo: create-audio takes ${many ? "a" : "the"} sheet's video_url, for a sheet made in the last ${CREATE_AUDIO_DAYS} days${dates.length ? ` (${many ? "these" : "this one"}: ${[...new Set(dates.map(day))].join(", ")})` : ""} (ludo generations list --type spritesheet lists them)`,
+    command: "ludo sprite create-audio --spritesheet-video-url <its video_url>"
+  };
+}
+
+// A GLB's rig is here when a rigged mesh has its geometry (ludo model rig's
+// help: rigging is non-destructive to geometry), or the log says a rigged
+// file was made from it.
+function riggedTwin(m: Asset, rigged: Asset[]): Asset | undefined {
+  const near = (x: number[] | undefined, y: number[] | undefined) => !!x && !!y && x.every((v, i) => Math.abs(v - y[i]) <= 0.01 * Math.max(...x.map(Math.abs), ...y.map(Math.abs)));
+  return rigged.find(r => (r.made?.operation === "rigModel" && r.made.inputs.includes(path.resolve(m.file))) || (r.model!.triangles === m.model!.triangles && r.model!.vertices === m.model!.vertices && near(r.model!.size, m.model!.size)));
 }
 
 export function gapsOf(assets: Asset[], plan: LoadPlan): Gap[] {
   const gaps: Gap[] = [];
-  const kept = assets.filter(a => !a.error && !plan.left.has(a));
+  // One file of each set the loaders take once, the PNG of a download's PNG and WebP.
+  const kept = assets.filter(a => !a.error && isShown(a, plan));
   const sheets = kept.filter(a => a.kind === "spritesheet");
 
-  // Moves: each character's first sheet of each, by name.
+  // Moves: each character's first sheet of each, by name. Directions, loops
+  // and takes are the move played another way, not another move.
   const chars = new Map<string, Map<string, Asset>>();
   for (const a of sheets) {
     const { character, action } = characterOf(a.path);
     if (!character || !action) continue;
     const moves = chars.get(character) ?? new Map<string, Asset>();
-    if (!moves.has(action)) moves.set(action, a);
+    if (!moves.has(baseMove(action))) moves.set(baseMove(action), a);
     chars.set(character, moves);
   }
   for (const [c, have] of chars) {
-    const others = [...chars].filter(([o]) => o !== c);
+    const others = [...chars].filter(([o]) => !nested(o, c));
     const wanted = [...new Set(others.flatMap(([, m]) => [...m.keys()]))].sort(natural.compare);
     for (const move of wanted) {
       const holders = others.filter(([, m]) => m.has(move));
-      // More than half of the other characters: one hero's dance is not a gap.
-      if (have.has(move) || holders.length * 2 <= others.length) continue;
+      // Two other characters at least, and more than half of them: one
+      // hero's attack says nothing of what an NPC needs.
+      if (have.has(move) || holders.length < 2 || holders.length * 2 <= others.length) continue;
       const sheet = [...have.values()][0];
       gaps.push({
         kind: "animation",
         subject: c,
         missing: move,
-        detail: `${c} has ${list([...have.keys()])} but no ${move}, which ${list(holders.map(([o]) => o))} ${holders.length === 1 ? "has" : "have"}`,
+        detail: `${c} has ${list([...have.keys()])} but no ${move}, which ${list(holders.map(([o]) => o))} have`,
         evidence: holders.map(([, m]) => m.get(move)!.path),
-        hint: { text: `Animate ${c}'s ${move} with Ludo, from one of its frames (ludo toolbox sprite slice ${quoted(shown(sheet.file))} cuts them)`, command: `ludo sprite animate --initial-image <a frame of ${c}> --motion-prompt ${quote(move.replace(/_/g, " "))}` }
+        hint: { text: `Animate ${c}'s ${move} with Ludo, from one of its frames (ludo toolbox sprite slice ${quoted(shown(sheet.file))} cuts them)`, command: `ludo sprite animate --initial-image <a frame of ${c}> --motion-prompt ${quote(move)}` }
       });
     }
   }
 
-  // Sounds: a sheet without one, when other sheets have theirs, or when its
-  // Ludo download kept the video but no audio.
+  // Sounds: a sheet without one, when sheets of its character have theirs,
+  // or when Ludo made it without one (its record names forge or forge-pixel,
+  // or its download kept the video but no audio). A sheet made by sprite
+  // adjust has its source's sound when the source has one (its help says
+  // so), and goes with its source when that is here by name. The sheets of
+  // one move (its directions, loops and takes) that lack one for one reason
+  // are one gap: one sound serves the move.
   const sounds = assets.filter(a => a.type === "audio");
   const videos = assets.filter(a => a.type === "video");
-  const voiced = sheets.filter(a => soundFor(a, sounds));
+  const adjusted = (a: Asset) => a.made?.operation === "adjustSpritesheet";
+  const move = (a: Asset) => {
+    const c = characterOf(a.path);
+    return c.character && c.action ? `${c.character} ${c.action} ${c.take ?? 1}` : undefined;
+  };
+  const sourceOf = (a: Asset) => (adjusted(a) && move(a) ? sheets.find(s => s !== a && !adjusted(s) && move(s) === move(a)) : undefined);
+  const own = (a: Asset): string | undefined => soundFor(a, sounds)?.path ?? (a.made?.audio ? a.made.record : undefined);
+  const soundOf = (a: Asset): string | undefined => {
+    const src = sourceOf(a);
+    return own(a) ?? (src ? own(src) : undefined);
+  };
+  type Why = { kind: string; why: (many: boolean) => string; evidence: string[] };
+  const lacking = new Map<string, { sheets: Asset[]; whys: Why[]; ludo: boolean; character: string; move?: string }>();
   for (const sheet of sheets) {
-    if (voiced.includes(sheet)) continue;
-    const video = videos.find(v => sameJob(sheet, v));
-    if (!video && !voiced.length) continue;
+    if (soundOf(sheet) || sourceOf(sheet)) continue;
     const { character, action } = characterOf(sheet.path);
-    const ludo = (plan.grid.get(sheet) ?? sheet.grid)?.from === "stamp" || !!jobOf(sheet);
+    const kin = character ? sheets.filter(s => s !== sheet && characterOf(s.path).character === character && soundOf(s)) : [];
+    const video = videos.find(v => sameJob(sheet, v));
+    const model = sheet.made?.model && /^forge/.test(sheet.made.model) ? sheet.made.model : undefined;
+    const ludo = (plan.grid.get(sheet) ?? sheet.grid)?.from === "stamp" || !!jobOf(sheet) || !!sheet.made;
+    const why: Why | undefined = adjusted(sheet)
+      ? { kind: "adjust", why: many => `: sprite adjust made ${many ? "them" : "it"}, and a copy carries its source's sound only when the source has one`, evidence: [sheet.made!.record] }
+      : ludo && model
+        ? { kind: `model ${model}`, why: many => `: ${many ? "they were" : "it was"} made with ${model}, which makes none`, evidence: [sheet.made!.record] }
+        : ludo && video
+          ? { kind: "video", why: many => (many ? ": their Ludo downloads have their videos but no audio" : `: its Ludo download has its video (${video.path}) but no audio`), evidence: [video.path] }
+          : kin.length
+            ? { kind: "kin", why: () => `, while ${kin.length} other sheet${kin.length === 1 ? ` of ${character} has its` : `s of ${character} have theirs`}`, evidence: kin.slice(0, 3).map(s => soundOf(s)!) }
+            : undefined;
+    if (!why) continue;
+    const key = character && action ? `${character}\u0000${baseMove(action)}\u0000${ludo}` : sheet.path;
+    const at = lacking.get(key);
+    if (at) {
+      at.sheets.push(sheet);
+      at.whys.push(why);
+    } else lacking.set(key, { sheets: [sheet], whys: [why], ludo, character, ...(action ? { move: baseMove(action) } : {}) });
+  }
+  for (const { sheets: same, whys, ludo, character, move: m } of lacking.values()) {
+    const [first, ...rest] = same;
+    const kinds = [...new Set(whys.map(w => w.kind))];
+    const why = kinds.length === 1 ? whys[0].why(rest.length > 0) : kinds.every(k => k !== "kin") ? ": Ludo made them, and their records and downloads have no audio" : ": none of them has one here";
+    const copies = sheets.filter(s => same.includes(sourceOf(s)!)).map(s => s.path);
+    const also = [...rest.map(s => s.path), ...copies];
+    const who = rest.length ? `${first.path} and ${rest.length} other sheet${rest.length === 1 ? "" : "s"} of ${character}'s ${m}` : first.path;
     gaps.push({
       kind: "sound",
-      subject: sheet.path,
+      subject: first.path,
       missing: "sound",
-      detail: video
-        ? `${sheet.path} has no sound, though its Ludo video (${video.path}) is here: forge and forge-pixel make none`
-        : `${sheet.path} has no sound, while ${voiced.length} other sheet${voiced.length === 1 ? " has its" : "s have theirs"}`,
-      evidence: video ? [video.path] : voiced.slice(0, 3).map(a => soundFor(a, sounds)!.path),
-      hint: ludo
-        ? { text: "Give it a sound with Ludo: create-audio takes the sheet's video_url, for a sheet made in the last 7 days (ludo generations list --type spritesheet lists them)", command: "ludo sprite create-audio --spritesheet-video-url <its video_url>" }
-        : { text: "Make its sound with Ludo", command: `ludo audio sound-effect --description ${quote(`<what ${character || "it"}${action ? ` doing ${action.replace(/_/g, " ")}` : ""} sounds like>`)}` }
+      detail: `${who} ${rest.length ? "have" : "has"} no sound${why}${copies.length ? ` (nor ${copies.length === 1 ? "has" : "have"} ${copies.length === 1 ? copies[0] : `${copies.length} sheets`}, ${copies.length === 1 ? "its sprite adjust copy" : "their sprite adjust copies"} by name)` : ""}`,
+      evidence: [...new Set(whys.flatMap(w => w.evidence))],
+      ...(also.length ? { also } : {}),
+      hint: soundHint(same, ludo, same.length + copies.length)
     });
   }
 
   // Models: a mesh without a skeleton, when others here are rigged or
-  // animated; a rigged mesh with no clip, in it or in an animation file
-  // whose bones are its own (Ludo's animations come as such files).
+  // animated and none of them is its own rig; a rigged mesh with no clip,
+  // in it or in an animation file whose bones are its own (Ludo's
+  // animations come as such files).
   const models = kept.filter(a => a.model);
   const meshes = models.filter(a => a.model!.triangles > 0);
   const clipFiles = models.filter(a => a.model!.triangles === 0 && a.model!.clips.length);
   const rigged = meshes.filter(a => a.model!.rigged);
   for (const m of meshes) {
-    if (m.model!.rigged || m.model!.clips.length || m.format !== "glb") continue;
+    if (m.model!.rigged || m.model!.clips.length || m.format !== "glb" || riggedTwin(m, rigged)) continue;
     const evidence = [...rigged, ...clipFiles].map(a => a.path);
     if (!evidence.length) continue;
     gaps.push({
       kind: "rig",
       subject: m.path,
       missing: "rig",
-      detail: `${m.path} has no skeleton, while ${list(evidence.slice(0, 3))} ${evidence.length === 1 ? "is" : "are"} rigged or animated`,
+      detail: `${m.path} has no skeleton, while ${list(evidence.slice(0, 3))} ${evidence.length === 1 ? "is" : "are"} rigged or animated (and no rigged mesh here has its geometry)`,
       evidence,
       hint: { text: "Rig it with Ludo, so it can be animated", command: `ludo model rig --model ${quoted(shown(m.file))}` }
     });
@@ -967,23 +1252,29 @@ TOOLS.push({
   details: [
     "Each file gets a kind, with the reason: spritesheet (its grid from the Ludo stamp, a GIF's or WebP's",
     "frames, or detection when it is sure), image, texture (opaque, and its edges meet when it repeats),",
-    "sfx, music, voice or ambience (by length, whether it wraps without a click, and how speech-like it",
-    "is; words in the path decide first), model or video. With its size, frames, fps, length, bytes and",
-    "sha256, and a note when its bytes are another format than its extension says. Groups are sheets",
-    "of one character (the same name once the move, like walk2, is taken out, and frames of about one",
-    "height); duplicates are byte-identical files, or pictures whose frames all look the same.",
+    "sfx, music, voice or ambience (the Ludo job that made it when the folder records it; else words in",
+    "the path; else by length, whether it wraps without a click, and how speech-like it is), model or",
+    "video. With its size, frames, fps, length, bytes and sha256, and a note when its bytes are another",
+    "format than its extension says. How Ludo made a file comes from the CLI's asset log",
+    "(ludo-assets.json, in or above the folder) and job records beside the files (<name>_job.json, or",
+    "the CLI's --json output). Groups are sheets of one character (the same name once the move, its",
+    "direction, loop or take, like walk2 or walk_left, is taken out, and frames of about one height);",
+    "duplicates are byte-identical files, or pictures whose frames all look the same.",
     "Gaps are what the folder lacks next to what the rest of it has, each with the Ludo command that",
     "makes it (nothing is generated here):",
-    "  animation     a move most other characters have: ludo sprite animate",
-    "  sound         a sheet without its sound, when other sheets have theirs or its Ludo video is here",
-    "                without audio: ludo sprite create-audio (Ludo's sheets), else ludo audio sound-effect",
-    "  rig           a GLB without a skeleton, when other models here are rigged or animated: ludo model rig",
+    "  animation     a move that two or more, and most, of the other characters have: ludo sprite animate",
+    "  sound         a move's sheets without their sound, when sheets of the character have theirs or",
+    "                Ludo made them without one: ludo sprite create-audio (for the sheets it takes: from",
+    "                animate, keyframes, transfer-motion or edit, made in the last 7 days), else ludo",
+    "                audio sound-effect",
+    "  rig           a GLB without a skeleton, when other models here are rigged or animated and none has",
+    "                its geometry (rigging keeps it): ludo model rig",
     "  3d-animation  a rigged model with no clip, in it or in an animation file that moves its bones:",
     "                ludo model animate-preset, or ludo model animate",
     "A folder with one of each thing shows no gaps. Sound kinds are a first sort: check the reasons.",
     "--emit writes loaders to --out, overwriting their earlier copy, with keys from the paths. They take",
-    "one file of each set of duplicates of one size (the smallest), and leave out what the engine",
-    "cannot load:",
+    "one file of each set of byte-identical files, or of one picture's PNG and WebP under one name (the",
+    "smallest); pictures that only look alike are all loaded. They leave out what the engine cannot load:",
     "  phaser  assets-pack.json for this.load.pack(key, url), and assets.ts: typed AssetKey keys,",
     "          preload(scene), and SHEETS with each sheet's frames and fps for anims.create",
     "  pixi    assets-manifest.json: a PixiJS 8 manifest for Assets.init({ manifest })",
@@ -1003,11 +1294,12 @@ TOOLS.push({
     }
     const found = findAssets(call.args, "ludo toolbox asset manifest <folder> [--emit phaser|pixi|json]");
     const assets = readAll(found);
+    madeOf(found, assets);
     const kinds: Record<string, number> = {};
     for (const a of assets) kinds[a.kind] = (kinds[a.kind] ?? 0) + 1;
-    const groups = groupsOf(assets);
     const duplicates = duplicatesOf(assets);
     const plan = loadPlan(assets, duplicates);
+    const groups = groupsOf(assets, plan);
     const gaps = gapsOf(assets, plan);
     const manifest = {
       folder: shown(found.root),
@@ -1036,7 +1328,12 @@ TOOLS.push({
     const out = (line: string) => process.stdout.write(line + "\n");
     out(`${assets.length} assets in ${shown(found.root)} (${kb(manifest.bytes)}): ${Object.entries(kinds).map(([k, n]) => `${n} ${k}`).join(", ")}`);
     for (const a of assets) out(`  ${a.path.padEnd(width)}  ${a.kind.padEnd(11)}  ${describeAsset(a)}${a.reason ? `  (${a.reason})` : ""}`);
-    for (const g of groups) out(`Group ${g.character}: ${g.animations.map(x => `${x.action ?? "?"}${x.take ? ` take ${x.take}` : ""}`).join(", ")} (${g.frame_width}x${g.frame_height} frames)`);
+    // One frame size when the sheets share it, else each sheet's.
+    for (const g of groups) {
+      const one = g.animations.every(x => x.frame_width === g.animations[0].frame_width && x.frame_height === g.animations[0].frame_height);
+      const name = (x: Group["animations"][number]) => `${x.action ?? "?"}${x.variant ? ` (${x.variant.replace(/_/g, " ")})` : ""}${x.take ? ` take ${x.take}` : ""}${one ? "" : ` ${x.frame_width}x${x.frame_height}`}`;
+      out(`Group ${g.character}: ${g.animations.map(name).join(", ")}${one ? ` (${g.frame_width}x${g.frame_height} frames)` : ""}`);
+    }
     for (const d of duplicates) out(`${d.match === "identical" ? "Identical" : "Look the same"}: ${d.files.join(", ")}`);
     if (gaps.length) out(`Missing, next to the rest of the folder (${gaps.length}):`);
     for (const g of gaps) out(`  ${g.detail}\n    ${g.hint.text}: ${g.hint.command}`);
