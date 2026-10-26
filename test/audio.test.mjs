@@ -13,7 +13,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { decodeWav, encodeWav, isWav, WavError } from "../dist/toolbox/wav.js";
 import { audibleRange, fade, fromDb, loopClicks, loudness, repeats, samplePeak, toDb, truePeak } from "../dist/toolbox/sound.js";
-import { spectralFlux, tempo } from "../dist/toolbox/audio.js";
+import { octaveOf, readingsOf, spectralFlux, supported, tempo } from "../dist/toolbox/audio.js";
 import { EXIT } from "../dist/errors.js";
 
 const CLI = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
@@ -378,6 +378,22 @@ test("tempo: 150 BPM kick and snare (where the prior leans to 75) and 90 BPM wit
   // An odd tempo is measured, not rounded to a lag: 1 frame is 1.2% at 120 BPM.
   const odd = tempoOf(rate, beat(rate, 127.3, 20, b => [[0, kick(rate), 1]]));
   assert.ok(Math.abs(odd.bpm / 127.3 - 1) < 0.003, `${odd.bpm}`);
+});
+
+test("tempo readings: an octave with no support is not named; a near tie at 3:2 is", () => {
+  const reading = (bpm, ...alts) => ({ bpm, confidence: 0.5, steady: 0.9, alternatives: alts.map(([b, score]) => ({ bpm: b, score })) });
+  // 60 BPM clicks: double scores 0, half is under 40 BPM. Nothing to name.
+  const clicks = reading(60, [30, 0.21], [120, 0]);
+  assert.equal(octaveOf(clicks), undefined);
+  assert.deepEqual(readingsOf(clicks), []);
+  assert.deepEqual(supported(clicks).map(a => a.bpm), [30]);
+  // 128 with 85.3 at 0.93 of it: the octave first, then the near tie.
+  const tripHop = reading(128, [64, 0.65], [85.33, 0.93], [192, 0.02], [256, 0.54]);
+  assert.deepEqual(readingsOf(tripHop).map(a => a.bpm), [64, 85.33]);
+  assert.deepEqual(supported(tripHop).map(a => a.bpm), [85.33, 64, 256]);
+  // A near tie between octaves stays named whichever way it is picked.
+  assert.deepEqual(readingsOf(reading(80, [40, 0.32], [53.3, 0.48], [160, 0.85])).map(a => a.bpm), [160]);
+  assert.deepEqual(readingsOf(reading(160, [80, 0.97], [106.7, 0.96])).map(a => a.bpm), [80, 106.7]);
 });
 
 // ---- The CLI ----

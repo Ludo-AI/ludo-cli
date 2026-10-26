@@ -144,7 +144,7 @@ test("broken models are refused with a reason", async () => {
 
 const DIR = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-model-clips-"));
 const TYPES = { 1: "SCALAR", 2: "VEC2", 3: "VEC3", 4: "VEC4", 16: "MAT4" };
-const KIND = { Float32Array: 5126, Uint16Array: 5123, Uint8Array: 5121 };
+const KIND = { Float32Array: 5126, Uint16Array: 5123, Int16Array: 5122, Uint8Array: 5121 };
 const near = (a, b, tol, what) => assert.ok(Math.abs(a - b) <= tol, `${what}: ${a} is not within ${tol} of ${b}`);
 
 // A GLB from glTF JSON and its data: `data` lists [typedArray, components,
@@ -265,8 +265,8 @@ test("a rigged model faces where its toes and its left side say; an unrigged one
 });
 
 // A two-key clip on the stick figure, no mesh: the hips glide `travel` along
-// +Z in 2 s and the head turns `endTurn` degrees by the end.
-function glide(endTurn, travel = 2, name = "glide") {
+// +Z in 2 s (and sink `drop`) and the head turns `endTurn` degrees by the end.
+function glide(endTurn, travel = 2, name = "glide", drop = 0) {
   const s = Math.sin(((endTurn / 2) * Math.PI) / 180);
   const c = Math.cos(((endTurn / 2) * Math.PI) / 180);
   const animations = [
@@ -284,7 +284,7 @@ function glide(endTurn, travel = 2, name = "glide") {
   ];
   return build({ scene: 0, scenes: [{ nodes: [0] }], nodes: stick(), animations }, [
     [new Float32Array([0, 2]), 1],
-    [new Float32Array([0, 1, 0, 0, 1, travel]), 3],
+    [new Float32Array([0, 1, 0, 0, 1 - drop, travel]), 3],
     [new Float32Array([0, 0, 0, 1, 0, s, 0, c]), 4]
   ]);
 }
@@ -358,4 +358,121 @@ test("clips: a walk in place gets the speed its planted feet slide back at; a da
   assert.equal(out.animations[0].move_speed.axis, "+Z");
   assert.equal(out.rigged, false);
   assert.equal(out.facing, undefined, "an animation-only file has no model to face");
+});
+
+test("clips: the seam counts where the hips end, less the ground the clip travels; drift is not travel", () => {
+  // Gliding 2 along +Z, its first pose comes back where root motion takes it.
+  assert.equal(facts(save("glide.glb", glide(0))).clips[0].returns_to_first_pose, true);
+  // Sinking 0.3 with every joint's turn unchanged, it does not.
+  const [crouch] = facts(save("crouch.glb", glide(0, 0, "crouch", 0.3))).clips;
+  assert.equal(crouch.returns_to_first_pose, false);
+  assert.equal(crouch.end_jump, undefined);
+  assert.deepEqual(crouch.end_offset, { joint: "Hips", distance: 0.3 });
+  // Ending turned, it says how far the hips end from their start too, the
+  // ground it travels included.
+  const [turned] = facts(save("glide-turn.glb", glide(90))).clips;
+  assert.deepEqual([turned.end_jump, turned.end_offset], [{ joint: "Head", deg: 90 }, { joint: "Hips", distance: 2 }]);
+  // Under a tenth of the skeleton's height (1.75 here) is drift, not travel.
+  assert.equal(facts(save("drift.glb", glide(0, 0.1))).clips[0].root_motion, undefined);
+  assert.deepEqual(facts(save("short.glb", glide(0, 0.2))).clips[0].root_motion, { distance: 0.2, axis: "+Z", speed: 0.1 });
+});
+
+// A sprint in place, keyed at 30 a second: each ankle lands for two keys,
+// sliding back 0.3 between them, then swings forward over 16 keys, lifting
+// 0.25; the right foot 9 keys behind the left. Two cycles, 1.2 s.
+function sprintInPlace(name) {
+  const keys = 37;
+  const times = Float32Array.from({ length: keys }, (_, k) => k / 30);
+  const foot = (phase, x) => {
+    const out = [];
+    for (let k = 0; k < keys; k++) {
+      const c = (k + phase) % 18;
+      if (c <= 1) out.push(x, -0.9, 0.15 - 0.3 * c);
+      else {
+        const u = (c - 1) / 17;
+        out.push(x, -0.9 + 0.25 * Math.sin(u * Math.PI), -0.15 + 0.3 * u);
+      }
+    }
+    return new Float32Array(out);
+  };
+  const still = new Float32Array(keys * 4).map((_, i) => (i % 4 === 3 ? 1 : 0));
+  const animations = [
+    {
+      name,
+      channels: [0, 1, 2].map(i => ({ sampler: i, target: { node: [2, 4, 0][i], path: i < 2 ? "translation" : "rotation" } })),
+      samplers: [1, 2, 3].map(output => ({ input: 0, output }))
+    }
+  ];
+  return build({ scene: 0, scenes: [{ nodes: [0] }], nodes: stick([0, 0, 0.15]), animations }, [[times, 1], [foot(0, 0.1), 3], [foot(9, -0.1), 3], [still, 4]]);
+}
+
+test("clips: a sprint whose feet are down for a key or two still gets its speed", () => {
+  // Sampled a key either side, a landing foot moves fast up or down; down
+  // for two keys, it is still toward the other one.
+  const [sprint] = facts(save("sprint.glb", sprintInPlace("sprint"))).clips;
+  assert.equal(sprint.move_speed?.axis, "+Z");
+  assert.equal(sprint.move_speed.from, "planted feet");
+  assert.ok(sprint.move_speed.speed > 2, `${sprint.move_speed.speed} units/s`);
+});
+
+// A box 1 x 2 x 0.5 stored as normalized shorts (KHR_mesh_quantization):
+// +-32767 reads +-1, and its node's scale (or, skinned, its joint's inverse
+// bind matrix, as gltfpack writes it) brings it back to size.
+function packed(skinned) {
+  const p = [];
+  for (let k = 0; k < 8; k++) p.push(k & 1 ? 32767 : -32767, k & 2 ? 32767 : -32767, k & 4 ? 32767 : -32767);
+  const scale = [0.5, 1, 0.25];
+  const ibm = new Float32Array([scale[0], 0, 0, 0, 0, scale[1], 0, 0, 0, 0, scale[2], 0, 0, 0, 0, 1]);
+  const extensionsRequired = ["KHR_mesh_quantization"];
+  const quantized = [new Int16Array(p), 3, { normalized: true, min: [-32767, -32767, -32767], max: [32767, 32767, 32767] }];
+  if (!skinned) return build({ scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0, scale }], meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }], extensionsRequired }, [quantized]);
+  // The skinned mesh's own node is scaled 10 times, which glTF ignores.
+  const nodes = [{ mesh: 0, skin: 0, scale: [10, 10, 10] }, { name: "Root" }];
+  return build({ scene: 0, scenes: [{ nodes: [0, 1] }], nodes, meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }], skins: [{ joints: [1], inverseBindMatrices: 1 }], extensionsRequired }, [quantized, [ibm, 16]]);
+}
+
+// A GLB's JSON edited, its binary chunk kept.
+function edit(bytes, change) {
+  const m = readGltf(bytes, "x.glb");
+  change(m.json);
+  const pad = n => (4 - (n % 4)) % 4;
+  let text = Buffer.from(JSON.stringify(m.json));
+  text = Buffer.concat([text, Buffer.alloc(pad(text.length), 0x20)]);
+  const bin = Buffer.from(m.bin);
+  const head = (n, type) => {
+    const h = Buffer.alloc(8);
+    h.writeUInt32LE(n, 0);
+    h.writeUInt32LE(type, 4);
+    return h;
+  };
+  const header = Buffer.alloc(12);
+  header.write("glTF", 0);
+  header.writeUInt32LE(2, 4);
+  header.writeUInt32LE(12 + 8 + text.length + 8 + bin.length, 8);
+  return Buffer.concat([header, head(text.length, 0x4e4f534a), text, head(bin.length, 0x004e4942), bin]);
+}
+
+// As gltfpack writes it: buffer views compressed into buffer 0, pointing
+// at a fallback buffer that holds no data.
+const meshopt = (...views) => json => {
+  json.buffers.push({ byteLength: 1 << 20, extensions: { EXT_meshopt_compression: { fallback: true } } });
+  for (const v of views) Object.assign(json.bufferViews[v], { buffer: 1, extensions: { EXT_meshopt_compression: { buffer: 0, byteLength: 4, byteStride: 4, count: 1, mode: "ATTRIBUTES" } } });
+  json.extensionsRequired = [...(json.extensionsRequired ?? []), "EXT_meshopt_compression"];
+};
+
+test("quantized positions are read at their size, through the node or the skin", () => {
+  assert.deepEqual(info(save("packed.glb", packed(false))).bounds.size, [1, 2, 0.5]);
+  assert.deepEqual(info(save("packed-skin.glb", packed(true))).bounds.size, [1, 2, 0.5]);
+});
+
+test("data compressed with EXT_meshopt_compression is said to be unread, not passed over", async () => {
+  const clip = save("walk-meshopt.glb", edit(walkInPlace("walk"), meshopt(0, 1, 2, 3)));
+  assert.deepEqual(facts(clip).clips, [{ not_read: "its keys are compressed (EXT_meshopt_compression)" }]);
+  const out = await cli(clip);
+  assert.deepEqual(out.animations, [{ name: "walk", seconds: 1, channels: 3, not_read: "its keys are compressed (EXT_meshopt_compression)" }]);
+  // A skinned mesh is placed by its inverse bind matrices: compressed, its size is not given.
+  const skin = info(save("packed-skin-meshopt.glb", edit(packed(true), meshopt(1))));
+  assert.equal(skin.bounds, undefined);
+  assert.equal(skin.bounds_not_read, "its skin's inverse bind matrices are compressed (EXT_meshopt_compression)");
+  assert.equal(skin.vertices, 8);
 });
