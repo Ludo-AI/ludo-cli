@@ -155,6 +155,8 @@ ludo toolbox sprite frames knight-walk.png --drop 7 --hold 4x3 --pingpong
 # When it jumps or repeats, it says where the best loop inside is. Ludo fixes the loop of a sheet
 # it made: `ludo sprite adjust --loop` re-cuts it (free), `ludo sprite edit --edit-mode fix_loop`.
 ludo toolbox sprite loop knight-walk.png
+# Several takes of one animation (like --n 4): which loops cleanest, the cleanest first.
+ludo toolbox sprite loop walk-1.png walk-2.png walk-3.png walk-4.png
 
 # Image edits. On a sheet (its Ludo stamp, or --grid) every frame gets the same edit, so the
 # frames stay aligned.
@@ -207,7 +209,7 @@ ludo toolbox sprite video knight-walk.png --format webm --loops 3
 # Sound. WAV and MP3 are read in-process; OGG, FLAC and the rest, and writing OGG or MP3, need
 # ffmpeg. Loudness is LUFS (ITU-R BS.1770).
 ludo toolbox audio info zap.mp3                     # length, loudness, true peak, silence, loop seam
-ludo toolbox audio trim zap.mp3                     # silence off both ends, with short fades
+ludo toolbox audio trim zap.mp3                     # silence off both ends (Ludo's come trimmed)
 ludo toolbox audio convert theme.mp3 --to ogg       # Ogg Vorbis for Godot and Unity; --mono, --bits
 
 # What is in a 3D model: meshes, triangles, size, textures, skeleton and animations.

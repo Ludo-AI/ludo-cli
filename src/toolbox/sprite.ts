@@ -8,7 +8,7 @@ import { baseOf, carriedChunks, engineFiles, freeName, loadImageFile, shown, wri
 import { noteFact } from "../telemetry.js";
 import { crop, joinFrames, sliceSheet } from "./sheet.js";
 import { applyFrameOps, parseFrameList, parseHolds, type FrameOps } from "./frames.js";
-import { analyseLoop, frameDifferences } from "./loop.js";
+import { analyseLoop, frameDifferences, SAME } from "./loop.js";
 import { gridFlag, hexColour, positiveInt, positiveNumber, textFlag } from "./flags.js";
 import { makeGif, MAX_GIF_FPS } from "./gif.js";
 import { scaleUp } from "./pixels.js";
@@ -282,35 +282,83 @@ TOOLS.push({
   }
 });
 
+// One sheet's loop report. A sheet of one frame has nothing to loop.
+function inspectLoop(call: ToolCall, file: string, minFrames: number | undefined) {
+  const src = loadImageFile(file);
+  const { grid, from } = sheetGrid(src, call);
+  const n = grid.frames;
+  if (n < 2) throw new CliError(`${src.file} has a single frame; there is nothing to loop`, EXIT.BAD_INPUT);
+  if (minFrames !== undefined && minFrames > n) throw new CliError(`--min-frames ${minFrames} is more than ${src.file}'s ${n} frames`, EXIT.USAGE);
+  const cells = sliceSheet(src.image, grid.cols, grid.rows, n);
+  return { src, grid, from, cells, report: analyseLoop(frameDifferences(cells, backgroundOf(src.image)), minFrames) };
+}
+
+const VERDICT_RANK = { smooth: 0, jump: 1, repeat: 1, static: 2 } as const;
+
+// Several takes of one animation, the cleanest loop first: a smooth seam
+// before a jump or a repeat, then the smaller biggest step anywhere in the
+// loop (seam included), the hitch a player sees. Held frames are left out.
+function compareLoops(ctx: Ctx, call: ToolCall, minFrames: number | undefined): number {
+  const rows = call.args.map(file => {
+    const { src, grid, report } = inspectLoop(call, file, minFrames);
+    const moving = report.steps.filter(v => v >= SAME);
+    return {
+      sheet: shown(src.file),
+      frames: grid.frames,
+      verdict: report.seam.verdict,
+      seam: report.seam.ratio,
+      biggest_step: moving.length ? Math.max(...moving) : 0,
+      jumps: report.jumps,
+      holds: report.holds,
+      mirrored: report.mirrored
+    };
+  });
+  rows.sort((a, b) => VERDICT_RANK[a.verdict] - VERDICT_RANK[b.verdict] || a.biggest_step - b.biggest_step);
+  const top = rows[0];
+  const next = top.verdict === "smooth" ? hint("Preview the cleanest one", `ludo preview ${top.sheet}`) : undefined;
+  if (ctx.jsonOut) {
+    printJson({ sheets: rows, cleanest: top.verdict === "smooth" ? top.sheet : null, ...(ctx.globals.quiet || !next ? {} : { hint: next }) }, false);
+    return EXIT.OK;
+  }
+  const width = Math.max(...rows.map(r => r.sheet.length));
+  process.stdout.write(`${rows.length} sheets, the cleanest loop first:\n`);
+  rows.forEach((r, i) =>
+    process.stdout.write(
+      `  ${String(i + 1).padStart(2)}. ${r.sheet.padEnd(width)}  ${r.verdict.padEnd(6)}  seam ${r.seam}x a step, biggest step ${r.biggest_step}x` +
+        `${r.jumps.length ? `, jumps into ${r.jumps.join(", ")}` : ""}${r.mirrored ? ", a ping-pong" : ""}\n`
+    )
+  );
+  if (top.verdict !== "smooth") process.stdout.write("None of them loops smoothly.\n");
+  if (!ctx.globals.quiet && next) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
+  return EXIT.OK;
+}
+
 TOOLS.push({
   group: "sprite",
   name: "loop",
-  args: "<sheet>",
-  summary: "Check that an animation loops, and find the best loop inside it",
+  args: "<sheet> [<sheet>...]",
+  summary: "Check that an animation loops, or which of several takes loops cleanest",
   details: [
     "Compares every frame with every other (the frame-difference matrix of Video Textures,",
     "Schödl et al. 2000) and reads the seam from the last frame back to the first against the",
     "animation's typical step: about one step is smooth, much more is a jump, almost none means the",
     "last frame repeats the first (the loop stutters). When the seam is bad it finds the longest",
     "run of frames that loops cleanly. Held frames (--hold) do not count as steps, and a ping-pong is",
-    "reported as mirrored. It only checks: Ludo fixes the loop of a sheet it made (`ludo sprite adjust",
-    "--loop` re-cuts it from its video, free; `ludo sprite edit --edit-mode fix_loop` repairs it)."
+    "reported as mirrored. Given several sheets (takes of one animation, like `--n 4`), it ranks",
+    "them: a smooth seam first, then the smallest biggest step, the hitch a player would see.",
+    "It only checks, and Ludo's sheets come cut to their loop already. If one of Ludo's does not",
+    "loop: `ludo sprite edit --edit-mode fix_loop` repairs it."
   ],
   flags: [
     { flag: "--min-frames", value: "n", description: "Shortest loop worth finding (default: half the frames)" },
     { flag: "--grid", value: "CxR", description: "The sheet's grid, when it has no Ludo stamp and detection is unsure" }
   ],
   async run(ctx: Ctx, call: ToolCall) {
-    if (call.args.length !== 1) throw new CliError("Usage: ludo toolbox sprite loop <sheet>", EXIT.USAGE);
-    const src = loadImageFile(call.args[0]);
-    const { grid, from } = sheetGrid(src, call);
-    const n = grid.frames;
-    if (n < 2) throw new CliError(`${src.file} has a single frame; there is nothing to loop`, EXIT.BAD_INPUT);
+    if (!call.args.length) throw new CliError("Usage: ludo toolbox sprite loop <sheet> [<sheet>...]", EXIT.USAGE);
     const minFrames = positiveInt(call, "--min-frames");
-    if (minFrames !== undefined && minFrames > n) throw new CliError(`--min-frames ${minFrames} is more than the sheet's ${n} frames`, EXIT.USAGE);
-
-    const cells = sliceSheet(src.image, grid.cols, grid.rows, n);
-    const report = analyseLoop(frameDifferences(cells, backgroundOf(src.image)), minFrames);
+    if (call.args.length > 1) return compareLoops(ctx, call, minFrames);
+    const { src, grid, from, cells, report } = inspectLoop(call, call.args[0], minFrames);
+    const n = grid.frames;
     const { best, seam } = report;
 
     // A loop inside it: Ludo's re-cut from the source video finds it, free.

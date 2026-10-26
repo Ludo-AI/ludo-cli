@@ -160,7 +160,8 @@ TOOLS.push({
   details: [
     "Silence is everything quieter than --threshold before the first louder sample and after the last.",
     "--pad keeps a little of it, and --fade eases the cut edges so they do not click. --start and --end",
-    "cut at given times instead of where the silence ends, and --only keeps one end as it is."
+    "cut at given times instead of where the silence ends, and --only keeps one end as it is.",
+    "Ludo's sound effects come trimmed already: this is for sounds from elsewhere."
   ],
   flags: [
     THRESHOLD,

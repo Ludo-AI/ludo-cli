@@ -49,8 +49,9 @@ they log in or create an account (and pick a plan with API access if needed) and
    `--help`). Use them instead of writing your own image script:
    - Sheets: `ludo toolbox sprite slice <sheet>` cuts one into frames, `sprite join <frames...>` puts
      frames back, `sprite frames <sheet> --drop 7 --hold 4x3` edits frames, `sprite loop <sheet>`
-     checks the loop (a bad one on a Ludo sheet: `ludo sprite adjust --loop` re-cuts it, free, or
-     `ludo sprite edit --edit-mode fix_loop` repairs it), `sprite gif <sheet>` makes a GIF,
+     checks the loop, and `sprite loop <take1> <take2>...` ranks several takes of one animation
+     (after `--n 4`, keep the one that loops cleanest; a bad loop on a Ludo sheet: `ludo sprite
+     edit --edit-mode fix_loop`), `sprite gif <sheet>` makes a GIF,
      `sprite pack <sheets...>` brings a character's animations to one size and ground line
      (`--manifest` re-runs its `pack.json`), and `sprite sequence <sheets...>` chains animations so
      each continues from the one before (check the transitions it reports). A GIF or animated WebP
@@ -62,7 +63,7 @@ they log in or create an account (and pick a plan with API access if needed) and
      changes them. `image tiles <tileset> --size 16x16` cuts tiles or writes Tiled/Godot/Unity
      tileset files; `image repeat <tile>` checks a tile is seamless. `image convert --to webp`.
    - Audio: `audio info <sound>` gives length, loudness (LUFS), true peak, silence at the ends and
-     whether it clicks when looped; `audio trim` cuts that silence, `audio convert --to
+     whether it clicks when looped; `audio trim` cuts that silence (Ludo's sounds come trimmed), `audio convert --to
      ogg|mp3|flac|wav` (OGG for Godot and Unity). WAV and MP3 need nothing; the rest needs ffmpeg.
    - 3D: `ludo toolbox model info <model.glb>` says what a model holds (triangles, size, textures,
      rig, animations) before you rig or animate it.

@@ -574,7 +574,26 @@ test("loop on a sheet with no loop inside points at Ludo's loop repair", async (
   const report = JSON.parse(told.stdout);
   assert.deepEqual([report.seam.verdict, report.best], ["jump", null]);
   assert.match(report.hint.command, /^ludo sprite edit .* --edit-mode fix_loop$/);
-  assert.match((await run(["toolbox", "sprite", "loop", half, "--min-frames", "5"])).stderr, /more than the sheet's 4 frames/);
+  assert.match((await run(["toolbox", "sprite", "loop", half, "--min-frames", "5"])).stderr, /more than .*'s 4 frames/);
+});
+
+test("loop on several takes ranks them: a smooth seam first, then the smallest biggest step", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-loop-"));
+  const whole = writeSheet(dir, "whole.png", strip(range(0, 8).map(t => orbitFrame(t, 8)), 4), { cols: 4, rows: 2, frames: 8, fps: 12 });
+  const twice = writeSheet(dir, "twice.png", strip(range(0, 9).map(t => orbitFrame(t, 8)), 3), { cols: 3, rows: 3, frames: 9, fps: 12 });
+  const half = writeSheet(dir, "half.png", strip(range(0, 4).map(t => orbitFrame(t, 8))), { cols: 4, rows: 1, frames: 4, fps: 10 });
+  const r = await run(["toolbox", "sprite", "loop", half, twice, whole]);
+  assert.equal(r.code, EXIT.OK, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.deepEqual(out.sheets[0].verdict, "smooth");
+  assert.deepEqual(out.sheets.slice(1).map(x => [path.basename(x.sheet), x.verdict]).sort(), [["half.png", "jump"], ["twice.png", "repeat"]]);
+  assert.equal(out.sheets[0].sheet, whole);
+  assert.equal(out.cleanest, whole);
+  assert.equal(out.hint.command, `ludo preview ${whole}`);
+  // None smooth: no cleanest, no hint.
+  const bad = JSON.parse((await run(["toolbox", "sprite", "loop", half, twice])).stdout);
+  assert.equal(bad.cleanest, null);
+  assert.equal(bad.hint, undefined);
 });
 
 test("the jobs Ludo does are not toolbox tools: their names point at Ludo's", async () => {
