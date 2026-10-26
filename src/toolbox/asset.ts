@@ -1878,7 +1878,7 @@ TOOLS.push({
       out(`${shown(a)} -> ${shown(b)}: ${compatible ? "compatible" : "not compatible"}`);
       for (const x of result.breaking) out(`  breaking: ${x}`);
       for (const x of result.changes) out(`  changed:  ${x}`);
-      if (result.type === "image") out(`  looks ${Math.round(result.similarity * 100)}% alike; palette ${Math.round(result.palette.similarity * 100)}% alike`);
+      if (result.type === "image") out(`  looks ${Math.round(result.similarity * 100)}% alike${result.palette.similarity >= 0.9 ? `; palette ${Math.round(result.palette.similarity * 100)}% alike` : ""}`);
       if (!result.breaking.length && !result.changes.length) out("  nothing else changed");
       if (picture) out(`Saved ${shown(picture)}`);
       if (!ctx.globals.quiet) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
