@@ -1,5 +1,6 @@
 // The 2-D discrete Fourier transform, for cross-correlating images
-// (cv.ts's matchTemplate). Iterative radix-2 Cooley-Tukey (Cooley & Tukey
+// (cv.ts's matchTemplate), and the 1-D one, for the audio tools' spectra
+// (audio-analysis.ts). Iterative radix-2 Cooley-Tukey (Cooley & Tukey
 // 1965; the in-place, bit-reversed form of Numerical Recipes 12.2) on
 // separate real and imaginary arrays, rows then columns. Sizes must be powers
 // of two. inverse computes the unnormalized inverse; divide by w * h.
@@ -93,4 +94,9 @@ export function fft2d(re: Float64Array, im: Float64Array, w: number, h: number, 
   rows(tr, ti, h, w, inverse);
   transpose(tr, re, h, w);
   transpose(ti, im, h, w);
+}
+
+/** In place over one complex signal of power-of-two length (the audio tools' spectra). */
+export function fft(re: Float64Array, im: Float64Array, inverse = false) {
+  fft1d(re, im, re.length, inverse);
 }
