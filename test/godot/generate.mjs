@@ -193,8 +193,8 @@ for (const [name, tw, th, spacing, margin, cols, rows] of [["plain", 16, 16, 0, 
 fs.writeFileSync(path.join(out, "tilesets.json"), JSON.stringify(tilesets, null, 2));
 console.log(`generated ${tilesets.length} tilesets`);
 
-// Sounds (src/toolbox/wav.ts encodeWav): WAVs with and without the smpl
-// loop that `ludo toolbox audio loop` writes, which Godot's importer should
+// Sounds (src/toolbox/wav.ts encodeWav): WAVs with and without a smpl
+// loop, which Godot's importer should
 // turn into a forward loop ("Detect From WAV", its default).
 const { encodeWav } = await import("../../dist/toolbox/wav.js");
 const sounds = [];

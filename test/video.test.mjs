@@ -81,21 +81,17 @@ test("MP4 is padded to even sizes on its background and loops; MOV is ProRes 444
   assert.deepEqual([m.width, m.height], [66, 42]);
 });
 
-test("from-video --key takes a solid background away; --fps and --width resample", { skip }, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-video-key-"));
+test("from-video resamples with --fps and --width", { skip }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-video-from-"));
   const { file } = sheet(dir);
   const mp4 = await ludo(dir, ["video", file, "--format", "mp4", "--background", "#c8c8c8", "--loops", "2"]);
   const clip = path.resolve(dir, path.basename(mp4.out.video));
-  const keyed = await ludo(dir, ["from-video", clip, "--key", "--fps", "4", "--width", "68", "--name", "keyed"]);
-  assert.equal(keyed.code, 0, keyed.stderr);
+  const back = await ludo(dir, ["from-video", clip, "--fps", "4", "--width", "68", "--name", "back"]);
+  assert.equal(back.code, 0, back.stderr);
   // 8 frames at 8 fps is 1 s: 4 frames at 4 fps.
-  assert.equal(keyed.out.grid.frames, 4);
-  assert.deepEqual([keyed.out.grid.frame_width, keyed.out.grid.frame_height, keyed.out.grid.fps], [68, 44, 4]);
-  assert.ok(/^#c[5-9a-b]c[5-9a-b]c[5-9a-b]$/.test(keyed.out.keyed), keyed.out.keyed);
-  const f = sliceSheet(readPng(fs.readFileSync(path.resolve(dir, path.basename(keyed.out.sheet)))).image, keyed.out.grid.cols, keyed.out.grid.rows, 4)[0];
-  assert.equal(f.rgba[3], 0, "corner keyed away");
-  const centre = ((20 * 68) + 16) * 4;
-  assert.equal(f.rgba[centre + 3], 255, "the disc stays");
+  assert.equal(back.out.grid.frames, 4);
+  assert.deepEqual([back.out.grid.frame_width, back.out.grid.frame_height, back.out.grid.fps], [68, 44, 4]);
+  assert.equal((await ludo(dir, ["from-video", clip, "--key"])).code, 2);
 });
 
 test("without ffmpeg the video tools say how to get it", async () => {

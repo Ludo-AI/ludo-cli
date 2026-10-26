@@ -11,7 +11,7 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { decodeWav, encodeWav, isWav, WavError } from "../dist/toolbox/wav.js";
-import { audibleRange, crossfadeLoop, fade, fromDb, loopClicks, loudness, repeats, samplePeak, toDb, truePeak } from "../dist/toolbox/sound.js";
+import { audibleRange, fade, fromDb, loopClicks, loudness, repeats, samplePeak, toDb, truePeak } from "../dist/toolbox/sound.js";
 import { EXIT } from "../dist/errors.js";
 
 const CLI = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
@@ -278,7 +278,7 @@ test("a fade goes all the way without a jump", () => {
   for (let i = 1; i < 800; i++) assert.ok(Math.abs(ch[i] - ch[i - 1]) < 0.005, `step at ${i}`);
 });
 
-test("a crossfaded loop wraps around without a click; one written several times is found", () => {
+test("a sound that does not end where it starts clicks on a loop; one written several times is found", () => {
   const rate = 22050;
   // Noise with a slow swell and a tone: it does not end where it started.
   const n = rate * 2;
@@ -288,12 +288,8 @@ test("a crossfaded loop wraps around without a click; one written several times 
   assert.equal(loopClicks(a), true);
   // Loud noise hides the same jump.
   assert.equal(loopClicks(stereo(rate, ch.map((v, i) => v + 0.3 * Math.sin(i * 1.7) * (r() * 2 - 1)))), false);
-  const looped = crossfadeLoop(a, rate / 2);
-  assert.equal(looped.channels[0].length, n - rate / 2);
-  assert.equal(loopClicks(looped), false);
-  // The seam: the loop's last sample runs into its first as the source ran on.
-  assert.equal(looped.channels[0][0], ch[n - rate / 2]);
-  assert.equal(looped.channels[0][rate], ch[rate]);
+  // A whole number of cycles of a tone runs on where it wraps.
+  assert.equal(loopClicks(stereo(rate, Float32Array.from({ length: rate }, (_, i) => 0.4 * Math.sin((2 * Math.PI * i) / 100)))), false);
   for (const k of [2, 3, 4]) assert.equal(repeats(stereo(rate, concat(...new Array(k).fill(ch)))), k);
   assert.equal(repeats(a), 1);
   assert.equal(repeats(stereo(rate, concat(ch, noise(n, 0.5, 4)))), 1);
@@ -366,56 +362,10 @@ test("audio trim cuts the silence, keeps --pad of it and fades the cuts", async 
   assert.equal(hush.code, EXIT.BAD_INPUT);
   assert.match(hush.stderr, /is silent: nothing in it is louder than -50 dBFS/);
   assert.equal((await run(["toolbox", "audio", "trim", file, "--start", "2"], { cwd: dir })).code, EXIT.USAGE);
-});
-
-test("audio normalize reaches the loudness, stops at the ceiling, or sets the peak", async () => {
-  const dir = tmp();
-  const file = path.join(dir, "bed.wav");
-  fs.writeFileSync(file, encodeWav(stereo(48000, concat(noise(48000 * 3, 0.05, 2), sine(48000, 2, 220, -30))), { bits: 24 }));
-  const a = (await run(["toolbox", "audio", "normalize", file, "--json"], { cwd: dir })).json();
-  const out = decodeWav(fs.readFileSync(path.join(dir, a.audio)), { maxSamples: MAX });
-  assert.equal(out.bits, 24);
-  assert.ok(Math.abs(loudness(out).lufs + 16) < 0.05, String(loudness(out).lufs));
-  assert.equal(a.loudness_after, -16);
-  assert.equal(a.limited_by_ceiling, undefined);
-  // A sound whose peaks are far above its loudness stops at the ceiling.
-  const spiky = path.join(dir, "spiky.wav");
-  const ch = noise(48000 * 2, 0.01, 3);
-  for (let i = 0; i < ch.length; i += 9600) ch[i] = 0.9;
-  fs.writeFileSync(spiky, encodeWav(stereo(48000, ch), { bits: 32 }));
-  const b = (await run(["toolbox", "audio", "normalize", spiky, "--lufs", "-14", "--json"], { cwd: dir })).json();
-  assert.equal(b.limited_by_ceiling, true);
-  assert.equal(b.true_peak_after, -1);
-  assert.ok(b.loudness_after < -14);
-  const c = (await run(["toolbox", "audio", "normalize", spiky, "--peak", "-3", "--json"], { cwd: dir })).json();
-  assert.equal(c.true_peak_after, -3);
-  assert.equal((await run(["toolbox", "audio", "normalize", spiky, "--peak", "-3", "--lufs", "-16"], { cwd: dir })).code, EXIT.USAGE);
-});
-
-test("audio loop crossfades, keeps one copy of a repeated loop, and marks the WAV loop", async () => {
-  const dir = tmp();
-  const rate = 32000;
-  const r = rnd(5);
-  const ch = Float32Array.from({ length: rate * 3 }, (_, i) => 0.3 * Math.sin((2 * Math.PI * 61 * i) / rate) + (0.2 * i) / (rate * 3) * (r() * 2 - 1) + 0.1);
-  fs.writeFileSync(path.join(dir, "hum.wav"), encodeWav(stereo(rate, ch)));
-  const a = (await run(["toolbox", "audio", "loop", "hum.wav", "--json"], { cwd: dir })).json();
-  // A 1 s crossfade, at most a quarter of the sound.
-  assert.equal(a.loop_duration, 2.25);
-  assert.equal(a.crossfade, 0.75);
-  assert.equal(a.loop_clicks, false);
-  const wav = decodeWav(fs.readFileSync(path.join(dir, a.audio)), { maxSamples: MAX });
-  assert.deepEqual(wav.loop, { start: 0, end: rate * 2.25 });
-  // Ludo has served loops written out twice: one copy is the loop.
-  fs.writeFileSync(path.join(dir, "twice.wav"), encodeWav(stereo(rate, concat(ch, ch))));
-  const b = (await run(["toolbox", "audio", "loop", "twice.wav", "--json", "--count", "3"], { cwd: dir })).json();
-  assert.equal(b.repeats, 2);
-  assert.equal(b.crossfade, 0);
-  assert.equal(b.loop_duration, 3);
-  assert.equal(b.duration, 9);
   // --in-place keeps the format.
-  const c = await run(["toolbox", "audio", "loop", "hum.wav", "--in-place", "--to", "ogg"], { cwd: dir });
-  assert.equal(c.code, EXIT.USAGE);
-  assert.match(c.stderr, /--in-place keeps the format/);
+  const other = await run(["toolbox", "audio", "trim", file, "--in-place", "--to", "ogg"], { cwd: dir });
+  assert.equal(other.code, EXIT.USAGE);
+  assert.match(other.stderr, /--in-place keeps the format/);
 });
 
 test("a WAV named .mp3 is read as the WAV it is, with no ffmpeg", async () => {
@@ -437,11 +387,11 @@ test("an MP3 is read in-process: no ffmpeg needed until something has to be writ
   assert.equal(info.code, EXIT.OK, info.stderr);
   assert.equal(info.json().format, "mp3");
   assert.equal(info.json().codec, "MP3 192 kbit/s");
-  const wav = await run(["toolbox", "audio", "normalize", "jingle.mp3", "--to", "wav", "--json"], { cwd: dir, noPath: true });
+  const wav = await run(["toolbox", "audio", "convert", "jingle.mp3", "--to", "wav", "--json"], { cwd: dir, noPath: true });
   assert.equal(wav.code, EXIT.OK, wav.stderr);
-  assert.equal(decodeWav(fs.readFileSync(path.join(dir, wav.json().audio)), { maxSamples: MAX }).channels[0].length, info.json().samples);
-  // The default keeps the format, and writing MP3 is ffmpeg's job.
-  const mp3 = await run(["toolbox", "audio", "normalize", "jingle.mp3"], { cwd: dir, noPath: true });
+  assert.equal(decodeWav(fs.readFileSync(path.join(dir, wav.json().saved)), { maxSamples: MAX }).channels[0].length, info.json().samples);
+  // trim keeps the format by default, and writing MP3 is ffmpeg's job.
+  const mp3 = await run(["toolbox", "audio", "trim", "jingle.mp3"], { cwd: dir, noPath: true });
   assert.equal(mp3.code, EXIT.BAD_INPUT);
   assert.match(mp3.stderr, /Writing MP3 needs ffmpeg[\s\S]*--to wav/);
   // A file that only says it is an MP3 is refused as one.

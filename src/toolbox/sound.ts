@@ -177,10 +177,6 @@ export function fade(a: Audio, at: number, length: number, direction: "in" | "ou
   }
 }
 
-export function scale(a: Audio, gain: number) {
-  for (const ch of a.channels) for (let i = 0; i < ch.length; i++) ch[i] *= gain;
-}
-
 export function toMono(a: Audio): Audio {
   if (a.channels.length === 1) return a;
   const out = new Float32Array(frames(a));
@@ -235,34 +231,4 @@ export function repeats(a: Audio): number {
     if (level > 0 && error < level / 100) return k;
   }
   return 1;
-}
-
-// A loop that plays without a seam: the last `length` samples mixed over
-// the first ones (equal power, for material that is not one steady tone)
-// and then dropped, so the end runs into the start as it ran into its own
-// tail. The result is `length` samples shorter.
-export function crossfadeLoop(a: Audio, length: number): Audio {
-  const n = frames(a);
-  const len = Math.min(length, Math.floor(n / 2));
-  const out = a.channels.map(ch => ch.slice(0, n - len));
-  for (let c = 0; c < out.length; c++) {
-    const ch = a.channels[c];
-    for (let i = 0; i < len; i++) {
-      const t = i / len;
-      out[c][i] = ch[i] * Math.sin((t * Math.PI) / 2) + ch[n - len + i] * Math.cos((t * Math.PI) / 2);
-    }
-  }
-  return { rate: a.rate, channels: out };
-}
-
-export function repeat(a: Audio, count: number): Audio {
-  const n = frames(a);
-  return {
-    rate: a.rate,
-    channels: a.channels.map(ch => {
-      const out = new Float32Array(n * count);
-      for (let r = 0; r < count; r++) out.set(ch, r * n);
-      return out;
-    })
-  };
 }

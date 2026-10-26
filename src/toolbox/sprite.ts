@@ -292,62 +292,38 @@ TOOLS.push({
     "Schödl et al. 2000) and reads the seam from the last frame back to the first against the",
     "animation's typical step: about one step is smooth, much more is a jump, almost none means the",
     "last frame repeats the first (the loop stutters). When the seam is bad it finds the longest",
-    "run of frames that loops cleanly; --apply saves the sheet trimmed to it. Held frames",
-    "(--hold) do not count as steps, and a ping-pong is reported as mirrored."
+    "run of frames that loops cleanly. Held frames (--hold) do not count as steps, and a ping-pong is",
+    "reported as mirrored. It only checks: Ludo fixes the loop of a sheet it made (`ludo sprite adjust",
+    "--loop` re-cuts it from its video, free; `ludo sprite edit --edit-mode fix_loop` repairs it)."
   ],
   flags: [
-    { flag: "--apply", description: "Save the sheet trimmed to the best loop" },
-    { flag: "--min-frames", value: "n", description: "Shortest loop worth keeping (default: half the frames)" },
-    { flag: "--cols", value: "n", description: "Frames per row in the trimmed sheet (default: the sheet's)" },
-    { flag: "--grid", value: "CxR", description: "The sheet's grid, when it has no Ludo stamp and detection is unsure" },
-    { flag: "--in-place", description: "With --apply, replace the input sheet instead of saving a new one" }
+    { flag: "--min-frames", value: "n", description: "Shortest loop worth finding (default: half the frames)" },
+    { flag: "--grid", value: "CxR", description: "The sheet's grid, when it has no Ludo stamp and detection is unsure" }
   ],
   async run(ctx: Ctx, call: ToolCall) {
-    if (call.args.length !== 1) throw new CliError("Usage: ludo toolbox sprite loop <sheet> [--apply]", EXIT.USAGE);
+    if (call.args.length !== 1) throw new CliError("Usage: ludo toolbox sprite loop <sheet>", EXIT.USAGE);
     const src = loadImageFile(call.args[0]);
     const { grid, from } = sheetGrid(src, call);
     const n = grid.frames;
     if (n < 2) throw new CliError(`${src.file} has a single frame; there is nothing to loop`, EXIT.BAD_INPUT);
     const minFrames = positiveInt(call, "--min-frames");
     if (minFrames !== undefined && minFrames > n) throw new CliError(`--min-frames ${minFrames} is more than the sheet's ${n} frames`, EXIT.USAGE);
-    const apply = call.flags.has("--apply");
-    const inPlace = call.flags.has("--in-place");
-    if (inPlace && !apply) throw new CliError("--in-place only goes with --apply", EXIT.USAGE);
 
     const cells = sliceSheet(src.image, grid.cols, grid.rows, n);
     const report = analyseLoop(frameDifferences(cells, backgroundOf(src.image)), minFrames);
     const { best, seam } = report;
-    const trims = !!best && best.frames < n;
 
-    if (apply && !best && seam.verdict !== "static") {
-      throw new CliError(
-        `No run of frames in ${src.file} loops cleanly, so nothing was trimmed`,
-        EXIT.BAD_INPUT,
-        "If Ludo made it, Ludo can re-cut the loop from its source video, free: ludo sprite adjust --spritesheet-url <its spritesheet_url> --loop",
-        { seam, steps: report.steps }
-      );
-    }
-    let saved: string | undefined;
-    let engine: string[] = [];
-    if (apply && trims) {
-      if (inPlace && !/\.png$/i.test(src.file)) throw new CliError("--in-place only replaces PNG files", EXIT.USAGE);
-      const cols = Math.min(positiveInt(call, "--cols") ?? grid.cols, best.frames);
-      const { sheet, rows } = joinFrames(cells.slice(best.start - 1, best.end), cols);
-      saved = inPlace ? src.file : freeName(ctx.outDir, ctx.globals.name || baseOf(src.file), ".png");
-      const outGrid: Grid = { cols, rows, frames: best.frames, fps: grid.fps };
-      writePng(saved, sheet, carriedChunks(src, outGrid, layoutOf(src)));
-      engine = engineFiles(ctx, saved, sheet, outGrid, layoutOf(src));
-    }
-
+    // A loop inside it: Ludo's re-cut from the source video finds it, free.
+    // None: only a repair (a new pass over the animation) makes it loop.
     const sheetArg = shown(src.file);
     const next =
       seam.verdict === "static"
         ? undefined
-        : !best
-          ? hint("If Ludo made it, Ludo can re-cut the loop from its source video, free", "ludo sprite adjust --spritesheet-url <its spritesheet_url> --loop")
-          : trims && !apply
-            ? hint("Trim it to that loop", `ludo toolbox sprite loop ${sheetArg} --apply`)
-            : hint("Preview it playing", `ludo preview ${shown(saved ?? src.file)}`);
+        : seam.verdict === "smooth"
+          ? hint("Preview it playing", `ludo preview ${sheetArg}`)
+          : best
+            ? hint("If Ludo made it, Ludo re-cuts the loop from its source video, free", "ludo sprite adjust --spritesheet-url <its spritesheet_url> --loop")
+            : hint("If Ludo made it, Ludo can repair the loop (1 credit a second)", "ludo sprite edit --spritesheet-url <its spritesheet_url> --edit-mode fix_loop");
 
     if (ctx.jsonOut) {
       printJson(
@@ -361,8 +337,6 @@ TOOLS.push({
           jumps: report.jumps,
           mirrored: report.mirrored,
           best: best ?? null,
-          ...(apply ? { applied: saved ? shown(saved) : null } : {}),
-          ...(engine.length ? { engine_files: engine.map(shown) } : {}),
           // n x n numbers stop being useful to anyone well before 64 frames.
           ...(n <= 64 ? { matrix: report.matrix } : {}),
           ...(ctx.globals.quiet || !next ? {} : { hint: next })
@@ -386,8 +360,6 @@ TOOLS.push({
         out(best ? `Best loop: frames ${best.start}-${best.end} (${best.frames} frames, seam ${best.seam}x a step).` : "No run of frames inside it loops cleanly.");
       }
       if (seam.verdict !== "static") out(`Steps: ${report.steps.slice(0, -1).join(" ")} | seam ${seam.ratio}`);
-      if (apply) out(saved ? `${inPlace ? "Replaced" : "Saved"} ${shown(saved)} (frames ${best!.start}-${best!.end})` : "Nothing written.");
-      if (engine.length) process.stdout.write(savedLines(engine));
       if (!ctx.globals.quiet && next) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
     }
     return EXIT.OK;

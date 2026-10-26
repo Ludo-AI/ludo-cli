@@ -152,8 +152,9 @@ ludo toolbox sprite join ludo-output/knight-walk/ --cols 4 --fps 12
 ludo toolbox sprite frames knight-walk.png --drop 7 --hold 4x3 --pingpong
 
 # Check that it loops: the seam from the last frame back to the first, against a typical step.
-# When it jumps or repeats, it finds the best loop inside; --apply saves the sheet trimmed to it.
-ludo toolbox sprite loop knight-walk.png --apply
+# When it jumps or repeats, it says where the best loop inside is. Ludo fixes the loop of a sheet
+# it made: `ludo sprite adjust --loop` re-cuts it (free), `ludo sprite edit --edit-mode fix_loop`.
+ludo toolbox sprite loop knight-walk.png
 
 # Image edits. On a sheet (its Ludo stamp, or --grid) every frame gets the same edit, so the
 # frames stay aligned.
@@ -169,20 +170,9 @@ ludo toolbox image outline hero.png --color "#1a1c2c" # 1 px, no corners; --shap
 ludo toolbox image shadow hero.png --offset 2,2 --opacity 40
 ludo toolbox image convert hero.png --to webp       # lossless WebP
 
-# AI pixel art back on its own grid: finds the art pixel's size (an exact upscale comes back
-# losslessly; soft, resampled or hand-drawn grids go through unfake.js's detectors) and gives
-# each cell one colour. The JSON's `fit` says how much of the image the result explains.
-ludo toolbox image snap knight.png                  # 768x768 at 3x -> 256x256
-ludo toolbox image snap knight.png --colors 32 --keep-size
-
-# Take a solid background away (a colour key): the colour around the art, not the same colour
-# inside it (--everywhere takes that too). For painted backgrounds: ludo image remove-background.
-ludo toolbox image key sprite-on-white.png --fuzz 10
-
-# Palettes: list and save one (.hex, .gpl, .pal, .txt, .png), reduce to N colours, map onto a
-# Lospec palette or another sprite's colours, or swap colours (a red enemy becomes a blue one).
+# Palettes: list and save one (.hex, .gpl, .pal, .txt, .png), map onto a Lospec palette or
+# another sprite's colours, or swap colours (a red enemy becomes a blue one).
 ludo toolbox image palette hero.png --save hero.gpl
-ludo toolbox image recolor knight-walk.png --colors 16
 ludo toolbox image recolor knight-walk.png --palette pico-8.hex
 ludo toolbox image recolor slime.png --swap "#3fa34d,#2a6e33" --to "#3b6fd1,#24478a"
 
@@ -210,17 +200,14 @@ ludo toolbox sprite sequence idle.png jump.png --mode separate --engine godot
 # A GIF or animated WebP reads as a sheet of its frames, so every sprite and image tool takes one.
 ludo toolbox sprite slice dance.gif
 
-# Video (needs ffmpeg): a clip to a sheet (--key takes a solid background away from every frame),
-# and a sheet to WebM or MOV with transparency, or MP4.
-ludo toolbox sprite from-video knight-walk.mp4 --fps 12 --key
+# Video (needs ffmpeg): a clip to a sheet, and a sheet to WebM or MOV with transparency, or MP4.
+ludo toolbox sprite from-video knight-walk.mp4 --fps 12
 ludo toolbox sprite video knight-walk.png --format webm --loops 3
 
 # Sound. WAV and MP3 are read in-process; OGG, FLAC and the rest, and writing OGG or MP3, need
-# ffmpeg. Loudness is LUFS (ITU-R BS.1770), so sounds normalized alike play equally loud.
+# ffmpeg. Loudness is LUFS (ITU-R BS.1770).
 ludo toolbox audio info zap.mp3                     # length, loudness, true peak, silence, loop seam
 ludo toolbox audio trim zap.mp3                     # silence off both ends, with short fades
-ludo toolbox audio normalize zap.mp3 --lufs -16     # never over -1 dBTP; --peak -1 sets the peak
-ludo toolbox audio loop forest.wav                  # no seam; a WAV gets the loop point Godot uses
 ludo toolbox audio convert theme.mp3 --to ogg       # Ogg Vorbis for Godot and Unity; --mono, --bits
 
 # What is in a 3D model: meshes, triangles, size, textures, skeleton and animations.

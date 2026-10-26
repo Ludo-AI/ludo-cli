@@ -3,25 +3,7 @@ import { printJson, type Ctx } from "../generate.js";
 import { baseOf, freeName, shown } from "./io.js";
 import { textFlag } from "./flags.js";
 import { loadAudioFile, outputBits, outputFormat, writeAudio, type LoadedAudio } from "./audio-io.js";
-import {
-  audibleRange,
-  clippedSamples,
-  crossfadeLoop,
-  fade,
-  frames,
-  fromDb,
-  loopClicks,
-  loudness,
-  repeat,
-  repeats,
-  samplePeak,
-  scale,
-  seconds,
-  slice,
-  toDb,
-  toMono,
-  truePeak
-} from "./sound.js";
+import { audibleRange, clippedSamples, fade, frames, fromDb, loopClicks, loudness, repeats, samplePeak, seconds, slice, toDb, toMono, truePeak } from "./sound.js";
 import type { Audio } from "./wav.js";
 import { hint, TOOLS, type Hint, type ToolCall, type ToolFlag } from "./registry.js";
 
@@ -54,7 +36,6 @@ const OUTPUT: ToolFlag[] = [
 
 interface Result {
   audio: Audio;
-  loop?: { start: number; end: number }; // WAV: write a smpl loop
   facts: Record<string, unknown>;
   says: string;
   next: (file: string) => Hint; // the "Next:" line, for the file written
@@ -67,7 +48,7 @@ function save(ctx: Ctx, call: ToolCall, src: LoadedAudio, done: Result): number 
   const inPlace = call.flags.has("--in-place");
   if (inPlace && format !== src.format) throw usage(`--in-place keeps the format: ${shown(src.file)} is ${src.format}, not ${format}`);
   const file = inPlace ? src.file : freeName(ctx.outDir, ctx.globals.name || baseOf(src.file), `.${format}`);
-  const { channels, notes } = writeAudio(file, done.audio, format, { bits: outputBits(src), loop: format === "wav" ? done.loop : undefined });
+  const { channels, notes } = writeAudio(file, done.audio, format, { bits: outputBits(src) });
   const a = done.audio;
   const next = done.next(shown(file));
   if (ctx.jsonOut) {
@@ -107,8 +88,9 @@ TOOLS.push({
   summary: "How long and how loud a sound is, and whether it loops cleanly",
   details: [
     "Its format, length, peak and true peak (dBTP, between the samples, as a player rebuilds the wave),",
-    "loudness (LUFS, ITU-R BS.1770: what normalize evens out), silence at either end, clipped samples,",
-    "and whether it clicks where it loops. A sound under 0.4 s is measured as one block of its own length.",
+    "loudness (LUFS, ITU-R BS.1770, as streaming services and consoles measure it), silence at either",
+    "end, clipped samples, and whether it clicks where it loops. A sound under 0.4 s is measured as one",
+    "block of its own length.",
     "Reads WAV and MP3 itself; OGG, FLAC and the rest through ffmpeg."
   ],
   flags: [THRESHOLD],
@@ -128,9 +110,7 @@ TOOLS.push({
     const clipped = clippedSamples(a);
     const next =
       !range || lead + tail < a.rate / 50
-        ? copies > 1 || clicks
-          ? hint("Make it loop without a seam", `ludo toolbox audio loop ${shown(src.file)}`)
-          : hint("Even out its loudness", `ludo toolbox audio normalize ${shown(src.file)}`)
+        ? hint("Save it for the engine", `ludo toolbox audio convert ${shown(src.file)} --to ogg`)
         : hint("Cut the silence off its ends", `ludo toolbox audio trim ${shown(src.file)}`);
     if (ctx.jsonOut) {
       printJson(
@@ -224,119 +204,7 @@ TOOLS.push({
       audio: out,
       facts: { source_duration: secs(n, rate), cut_start: secs(start, rate), cut_end: secs(n - end, rate) },
       says: cut.length ? `Cut ${cut.join(" and ")}: ${(n / rate).toFixed(2)} s to ${((end - start) / rate).toFixed(2)} s` : `Nothing to cut: no silence under ${threshold} dBFS at its ends`,
-      next: file => hint("Even out its loudness", `ludo toolbox audio normalize ${file}`)
-    });
-  }
-});
-
-TOOLS.push({
-  group: "audio",
-  name: "normalize",
-  args: "<sound>",
-  summary: "Make a sound as loud as others: to a loudness (LUFS) or a peak",
-  details: [
-    "Changes the volume only (no compression), so sounds normalized to the same --lufs play equally loud.",
-    "-16 LUFS suits games on phones and the web; -23 is broadcast level, for console-style mixes. If",
-    "reaching it would push the true peak over --ceiling, it stops there and says how loud it got.",
-    "--peak sets the true peak instead (-1 is common for sound effects)."
-  ],
-  flags: [
-    { flag: "--lufs", value: "n", description: "The loudness to reach (default -16)" },
-    { flag: "--peak", value: "dB", description: "Set the true peak to this instead, in dBTP" },
-    { flag: "--ceiling", value: "dB", description: "With --lufs: the true peak never goes over this (default -1)" },
-    ...OUTPUT
-  ],
-  async run(ctx, call) {
-    const src = one(call, "ludo toolbox audio normalize <sound> [--lufs -16]");
-    const lufs = numberFlag(call, "--lufs", "LUFS", -70, 0);
-    const peakTarget = numberFlag(call, "--peak", "dB", -60, 0);
-    const ceiling = numberFlag(call, "--ceiling", "dB", -60, 0) ?? -1;
-    if (lufs !== undefined && peakTarget !== undefined) throw usage("Give --lufs or --peak, not both");
-    const a = src.audio;
-    const tp = toDb(truePeak(a));
-    const loud = loudness(a);
-    if (!Number.isFinite(tp) || (peakTarget === undefined && !Number.isFinite(loud.lufs))) {
-      throw new CliError(`${shown(src.file)} is silent, so there is nothing to make louder`, EXIT.BAD_INPUT);
-    }
-    let gainDb: number;
-    let limited = false;
-    if (peakTarget !== undefined) gainDb = peakTarget - tp;
-    else {
-      const target = lufs ?? -16;
-      gainDb = target - loud.lufs;
-      if (tp + gainDb > ceiling) {
-        gainDb = ceiling - tp;
-        limited = true;
-      }
-    }
-    const out: Audio = { rate: a.rate, channels: a.channels.map(ch => ch.slice()) };
-    scale(out, fromDb(gainDb));
-    const after = { lufs: loud.lufs + gainDb, tp: tp + gainDb };
-    const says =
-      `${gainDb >= 0 ? "Raised" : "Lowered"} it ${Math.abs(gainDb).toFixed(1)} dB: ${dbText(loud.lufs, "LUFS")} to ${dbText(after.lufs, "LUFS")}, true peak ${tp.toFixed(1)} to ${after.tp.toFixed(1)} dBTP` +
-      (limited ? ` (stopped at the ${ceiling} dBTP ceiling, short of ${lufs ?? -16} LUFS)` : "");
-    return save(ctx, call, src, {
-      audio: out,
-      facts: {
-        gain_db: round(gainDb),
-        loudness_before: round(loud.lufs),
-        loudness_after: round(after.lufs),
-        true_peak_before: round(tp),
-        true_peak_after: round(after.tp),
-        ...(loud.short ? { loudness_short: true } : {}),
-        ...(limited ? { limited_by_ceiling: true } : {})
-      },
-      says,
-      next: file => hint("Check it", `ludo toolbox audio info ${file}`)
-    });
-  }
-});
-
-TOOLS.push({
-  group: "audio",
-  name: "loop",
-  args: "<sound>",
-  summary: "Make a sound loop without a seam (ambience, engines, music beds)",
-  details: [
-    "Mixes the end over the start (--crossfade long) and drops it, so when the sound wraps around it runs",
-    "on as it ran into its own tail: no click, no gap. A sound that is already several copies of one",
-    "stretch is cut to one copy instead, which loops as it is. A WAV gets a loop point that Godot's",
-    "importer loops on. --count writes the loop several times over, for players that cannot loop."
-  ],
-  flags: [
-    { flag: "--crossfade", value: "ms", description: "How much of the end to mix over the start (default 1000, at most a quarter of it; 0: none)" },
-    { flag: "--count", value: "n", description: "Write the loop this many times in a row (default 1)" },
-    ...OUTPUT
-  ],
-  async run(ctx, call) {
-    const src = one(call, "ludo toolbox audio loop <sound> [--crossfade 1000]");
-    const given = numberFlag(call, "--crossfade", "milliseconds", 0, 60000);
-    const count = numberFlag(call, "--count", "loops", 1, 100) ?? 1;
-    if (!Number.isInteger(count)) throw usage("--count must be a whole number");
-    const a = src.audio;
-    const n = frames(a);
-    const copies = given === undefined ? repeats(a) : 1;
-    let out: Audio;
-    let says: string;
-    let crossfade = 0;
-    if (copies > 1) {
-      out = slice(a, 0, Math.floor(n / copies));
-      says = `It is ${copies} copies of one ${(frames(out) / a.rate).toFixed(2)} s loop: kept one, which loops as it is`;
-    } else {
-      crossfade = Math.min(Math.round(((given ?? 1000) / 1000) * a.rate), Math.floor(n / 4));
-      out = crossfade ? crossfadeLoop(a, crossfade) : slice(a, 0, n);
-      says = crossfade
-        ? `Mixed its last ${(crossfade / a.rate).toFixed(2)} s over its start: a ${(frames(out) / a.rate).toFixed(2)} s loop`
-        : `Left as it is: ${loopClicks(a) ? "it clicks where it wraps around (try --crossfade)" : "it wraps around without a click"}`;
-    }
-    const period = frames(out);
-    if (count > 1) out = repeat(out, count);
-    return save(ctx, call, src, {
-      audio: out,
-      loop: { start: 0, end: frames(out) },
-      facts: { loop_duration: secs(period, a.rate), crossfade: secs(crossfade, a.rate), ...(copies > 1 ? { repeats: copies } : {}), count, loop_clicks: loopClicks(out) },
-      says: count > 1 ? `${says}, written ${count} times` : says,
-      next: file => hint("Check where it wraps around", `ludo toolbox audio info ${file}`)
+      next: file => hint("Save it for the engine", `ludo toolbox audio convert ${file} --to ogg`)
     });
   }
 });

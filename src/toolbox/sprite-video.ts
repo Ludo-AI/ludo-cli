@@ -8,7 +8,6 @@ import { baseOf, engineFiles, freeName, loadImageFile, shown, writePng } from ".
 import { crop, joinFrames, sliceSheet } from "./sheet.js";
 import { scaleUp } from "./pixels.js";
 import { gridFlag, hexColour, positiveInt, positiveNumber, textFlag } from "./flags.js";
-import { applyKey, borderColour, keyMask } from "./key.js";
 import { resolveGrid } from "./sprite.js";
 import { decodeVideo, encodeVideo, needFfmpeg, probeVideo, VIDEO_FORMATS, type VideoFormat } from "./video.js";
 import { hint, TOOLS, type ToolCall } from "./registry.js";
@@ -32,18 +31,15 @@ TOOLS.push({
   summary: "Turn a video clip into a spritesheet",
   details: [
     "Every frame of the clip (or of --start for --duration, at --fps) laid out in a grid and stamped",
-    "with it, so every sheet tool, preview and engine export takes the result. A clip on a solid",
-    "background (a Ludo sprite video) can lose it with --key, the background colour taken away from",
-    "every frame as `ludo toolbox image key` does. Needs ffmpeg; WebM with alpha keeps its alpha."
+    "with it, so every sheet tool, preview and engine export takes the result. Needs ffmpeg; WebM",
+    "with alpha keeps its alpha. A Ludo animation needs none of this: it comes as a spritesheet."
   ],
   flags: [
     { flag: "--fps", value: "n", description: "Frames per second to take (default: the video's)" },
     { flag: "--start", value: "seconds", description: "Where to begin (default 0)" },
     { flag: "--duration", value: "seconds", description: "How long to take (default: to the end)" },
     { flag: "--width", value: "px", description: "Resize frames to this width, keeping the aspect" },
-    { flag: "--cols", value: "n", description: "Frames per row (default: a near-square grid)" },
-    { flag: "--key", description: "Take away the background colour around the art in every frame" },
-    { flag: "--fuzz", value: "percent", description: "With --key: how far from it still counts (default 10)" }
+    { flag: "--cols", value: "n", description: "Frames per row (default: a near-square grid)" }
   ],
   async run(ctx: Ctx, call: ToolCall) {
     if (call.args.length !== 1) throw usage("Usage: ludo toolbox sprite from-video <video> [--fps n]");
@@ -54,18 +50,8 @@ TOOLS.push({
     if (fps !== undefined && fps > 120) throw usage("--fps goes up to 120");
     const width = positiveInt(call, "--width");
     if (width !== undefined && (width < 2 || width > 8192)) throw usage("--width takes 2 to 8192");
-    const rawFuzz = textFlag(call, "--fuzz");
-    const fuzz = rawFuzz === undefined ? 10 : Number(rawFuzz.replace(/%$/, ""));
-    if (!(fuzz >= 0 && fuzz <= 100)) throw usage(`--fuzz takes a percentage from 0 to 100 (got "${rawFuzz}")`);
     const info = probeVideo(file);
-    let frames = decodeVideo(file, info, { fps, start: seconds(call, "--start"), duration: seconds(call, "--duration"), width, maxPixels: MAX_TOOLBOX_PIXELS });
-    let keyed: string | undefined;
-    if (call.flags.has("--key")) {
-      const key = borderColour(frames[0], fuzz / 100);
-      if (!key) throw new CliError(`${file} has no solid background around its first frame to take away`, EXIT.BAD_INPUT, "Leave out --key, or key the sheet later with ludo toolbox image key --color.");
-      frames = frames.map(f => applyKey(f, keyMask(f, key, fuzz / 100, true)));
-      keyed = `#${key.slice(0, 3).map(v => v.toString(16).padStart(2, "0")).join("")}`;
-    }
+    const frames = decodeVideo(file, info, { fps, start: seconds(call, "--start"), duration: seconds(call, "--duration"), width, maxPixels: MAX_TOOLBOX_PIXELS });
     const n = frames.length;
     const cols = Math.min(n, positiveInt(call, "--cols") ?? Math.ceil(Math.sqrt(n)));
     const { sheet, rows } = joinFrames(frames, cols);
@@ -84,14 +70,13 @@ TOOLS.push({
           height: sheet.height,
           grid: { cols, rows, frames: n, frame_width: frames[0].width, frame_height: frames[0].height, fps: rate },
           source: { width: info.width, height: info.height, fps: Math.round(info.fps * 1000) / 1000, codec: info.codec, alpha: info.alpha },
-          ...(keyed ? { keyed, fuzz } : {}),
           ...(engine.length ? { engine_files: engine.map(shown) } : {}),
           ...(ctx.globals.quiet ? {} : { hint: next })
         },
         false
       );
     } else {
-      process.stdout.write(`${n} frames of ${frames[0].width}x${frames[0].height} at ${rate} fps${keyed ? `, ${keyed} background taken away` : ""}\n`);
+      process.stdout.write(`${n} frames of ${frames[0].width}x${frames[0].height} at ${rate} fps\n`);
       process.stdout.write(`Saved ${shown(out)} (${cols}x${rows} grid)\n`);
       for (const f of engine) process.stdout.write(`Saved ${shown(f)}\n`);
       if (!ctx.globals.quiet) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);

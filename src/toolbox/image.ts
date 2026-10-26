@@ -6,7 +6,7 @@ import { MAX_TOOLBOX_PIXELS, type Image } from "../tty/png.js";
 import type { Grid } from "../tty/preview.js";
 import { countFrames } from "./grid.js";
 import { baseOf, carriedChunks, engineFiles, freeName, loadImageFile, shown, writePng, type Loaded } from "./io.js";
-import { crop, frameRects, joinFrames, sliceSheet } from "./sheet.js";
+import { crop, joinFrames, sliceSheet } from "./sheet.js";
 import { gridFlag, hexColour, positiveInt, textFlag } from "./flags.js";
 import {
   contentBox,
@@ -28,10 +28,8 @@ import {
 } from "./pixels.js";
 import { hint, TOOLS, type ToolCall, type ToolFlag } from "./registry.js";
 import { resizeNearest, resizePillow } from "./resample.js";
-import { unfake, type ReduceMethod } from "./unfake.js";
-import { PaletteMap, quantizeFrames } from "./quantize.js";
+import { PaletteMap } from "./quantize.js";
 import { coloursOf, hexOf, loadPalette, PALETTE_EXTENSIONS, PaletteError, savePalette } from "./palette.js";
-import { applyKey, borderColour, keyMask } from "./key.js";
 import { dropShadow, margins, outline, type Shape } from "./effects.js";
 import { encodeWebp } from "../tty/webp-encode.js";
 
@@ -336,54 +334,6 @@ TOOLS.push({
 
 TOOLS.push({
   group: "image",
-  name: "key",
-  args: "<image>",
-  summary: "Make a solid background colour transparent (a colour key)",
-  details: [
-    "Takes away the background colour around the art: the pixels within --fuzz of it that connect to",
-    "the image's edges, so the same colour inside the sprite (eyes, highlights) stays. --everywhere takes",
-    "every pixel of that colour instead. The colour is the border's (its median) unless given.",
-    "--fuzz is ImageMagick's (-fuzz 10% -transparent <colour> takes the same pixels as --everywhere).",
-    "On a sheet every frame is keyed on its own edges. For painted or photographed backgrounds, use",
-    "ludo image remove-background."
-  ],
-  flags: [
-    { flag: "--color", value: "hex", description: "The background colour (default: the most common colour on the border)" },
-    { flag: "--fuzz", value: "percent", description: "How far from it still counts, 0 to 100 (default 10)" },
-    { flag: "--everywhere", description: "Take that colour everywhere, not only where it touches the edges" },
-    ...SHARED
-  ],
-  async run(ctx, call) {
-    const rawFuzz = textFlag(call, "--fuzz");
-    const fuzz = rawFuzz === undefined ? 10 : Number(rawFuzz.replace(/%$/, ""));
-    if (!(fuzz >= 0 && fuzz <= 100)) throw usageError(`--fuzz takes a percentage from 0 to 100 (got "${rawFuzz}")`);
-    const given = textFlag(call, "--color");
-    const everywhere = call.flags.has("--everywhere");
-    return runEdit(ctx, call, "ludo toolbox image key <image> [--color #ffffff]", (frames, src) => {
-      const key = given ? hexColour(given, "--color") : borderColour(src.image, fuzz / 100);
-      if (!key) {
-        throw new CliError(`${src.file} has no solid colour around its edges to take away`, EXIT.BAD_INPUT, "Name the colour with --color, or use ludo image remove-background.");
-      }
-      let taken = 0;
-      const out = frames.map(f => {
-        const mask = keyMask(f, key, fuzz / 100, !everywhere);
-        for (const m of mask) taken += m;
-        return applyKey(f, mask);
-      });
-      if (!taken) throw new CliError(`No pixel of ${src.file} is within ${fuzz}% of ${hex(key)}${everywhere ? "" : " at its edges"}`, EXIT.BAD_INPUT, "Raise --fuzz, or name the colour with --color.");
-      const total = frames.reduce((n, f) => n + f.width * f.height, 0);
-      return {
-        frames: out,
-        trim: src.trim,
-        facts: { color: hex(key), fuzz, everywhere, pixels_taken: taken, share_taken: Math.round((taken / total) * 1000) / 1000, ...trimJson(src.trim) },
-        says: `Took away ${hex(key)} (fuzz ${fuzz}%${everywhere ? ", everywhere" : ""}): ${taken} pixels, ${Math.round((taken / total) * 100)}% of the image`
-      };
-    });
-  }
-});
-
-TOOLS.push({
-  group: "image",
   name: "palette",
   args: "<image>",
   summary: "List an image's colours, most used first, and save them as a palette file",
@@ -407,7 +357,7 @@ TOOLS.push({
     const colours = coloursOf([src.image]).sort((a, b) => b.count - a.count);
     if (!colours.length) throw new CliError(`${src.file} is transparent all over: it has no colours`, EXIT.BAD_INPUT);
     if (save !== undefined && colours.length > 1024) {
-      throw new CliError(`${src.file} has ${colours.length} colours, too many for a palette file`, EXIT.BAD_INPUT, `Reduce them first: ludo toolbox image recolor ${shown(src.file)} --colors 32`);
+      throw new CliError(`${src.file} has ${colours.length} colours, too many for a palette file (at most 1024)`, EXIT.BAD_INPUT);
     }
     if (save !== undefined) savePalette(save, colours.map(c => c.colour));
     const pixels = colours.reduce((n, c) => n + c.count, 0);
@@ -438,18 +388,17 @@ TOOLS.push({
   group: "image",
   name: "recolor",
   args: "<image>",
-  summary: "Fewer colours, a given palette, or one palette swapped for another",
+  summary: "Map art onto a given palette, or swap one palette for another",
   details: [
-    "  --colors N               at most N colours, chosen for the image (Wu's quantizer, no dithering)",
     "  --palette <file|hexes>   every colour becomes its nearest in that palette (a Lospec palette, or",
     "                           another sprite's colours)",
     "  --swap <A> --to <B>      each colour of palette A becomes the colour at the same place in B",
     "                           (an enemy in red becomes one in blue); colours not in A stay",
     "Palettes are files (.hex, .gpl, .pal, .txt, or an image's colours from .png) or hex lists",
-    "(#1a1c2c,#5d275d). On a sheet the frames share one palette. Nearest is by RGB distance."
+    "(#1a1c2c,#5d275d). Nearest is by RGB distance. To turn a picture into pixel art with fewer",
+    "colours, Ludo converts it: ludo image pixel-art."
   ],
   flags: [
-    { flag: "--colors", value: "N", description: "At most N colours (2 to 256)" },
     { flag: "--palette", value: "file|hexes", description: "Map every colour to its nearest in this palette" },
     { flag: "--swap", value: "file|hexes", description: "The colours to replace (with --to)" },
     { flag: "--to", value: "file|hexes", description: "What they become, in the same order" },
@@ -457,8 +406,8 @@ TOOLS.push({
     ...SHARED
   ],
   async run(ctx, call) {
-    const modes = ["--colors", "--palette", "--swap"].filter(f => call.flags.has(f));
-    if (modes.length !== 1) throw usageError("Pass one of --colors, --palette or --swap (with --to)");
+    const modes = ["--palette", "--swap"].filter(f => call.flags.has(f));
+    if (modes.length !== 1) throw usageError("Pass one of --palette or --swap (with --to)");
     if (call.flags.has("--swap") !== call.flags.has("--to")) throw usageError("--swap and --to go together");
     const savePal = textFlag(call, "--save-palette");
     if (savePal !== undefined && !PALETTE_EXTENSIONS.includes(path.extname(savePal).toLowerCase())) {
@@ -474,37 +423,28 @@ TOOLS.push({
         throw err;
       }
     };
-    let colours: number | undefined;
-    if (call.flags.has("--colors")) {
-      colours = positiveInt(call, "--colors");
-      if (colours === undefined || colours < 2 || colours > 256) throw usageError("--colors takes 2 to 256");
-    }
     const target = call.flags.has("--palette") ? pal("--palette") : undefined;
     const swap = call.flags.has("--swap") ? { from: pal("--swap"), to: pal("--to") } : undefined;
     if (swap && swap.from.length !== swap.to.length) throw usageError(`--swap has ${swap.from.length} colours and --to ${swap.to.length}: they pair up in order`);
-    return runEdit(ctx, call, "ludo toolbox image recolor <image> --colors 16", (frames, src) => {
+    return runEdit(ctx, call, "ludo toolbox image recolor <image> --palette pico-8.hex", (frames, src) => {
       const before = coloursOf(frames).length;
-      let out: Image[];
       let changed = 0;
-      if (colours) out = quantizeFrames(frames, colours).frames;
-      else {
-        // Each colour once: its nearest (or its swap), remembered.
-        const map = target ? new PaletteMap(target) : undefined;
-        const swaps = new Map(swap?.from.map((c, i) => [(c[0] << 16) | (c[1] << 8) | c[2], swap.to[i]]));
-        out = frames.map(f => {
-          const rgba = f.rgba.slice();
-          for (let i = 0; i < rgba.length; i += 4) {
-            if (!rgba[i + 3]) continue;
-            const c = map ? target![map.index(rgba[i], rgba[i + 1], rgba[i + 2])] : swaps.get((rgba[i] << 16) | (rgba[i + 1] << 8) | rgba[i + 2]);
-            if (!c || (c[0] === rgba[i] && c[1] === rgba[i + 1] && c[2] === rgba[i + 2])) continue;
-            rgba[i] = c[0];
-            rgba[i + 1] = c[1];
-            rgba[i + 2] = c[2];
-            changed++;
-          }
-          return { width: f.width, height: f.height, rgba };
-        });
-      }
+      // Each colour once: its nearest (or its swap), remembered.
+      const map = target ? new PaletteMap(target) : undefined;
+      const swaps = new Map(swap?.from.map((c, i) => [(c[0] << 16) | (c[1] << 8) | c[2], swap.to[i]]));
+      const out: Image[] = frames.map(f => {
+        const rgba = f.rgba.slice();
+        for (let i = 0; i < rgba.length; i += 4) {
+          if (!rgba[i + 3]) continue;
+          const c = map ? target![map.index(rgba[i], rgba[i + 1], rgba[i + 2])] : swaps.get((rgba[i] << 16) | (rgba[i + 1] << 8) | rgba[i + 2]);
+          if (!c || (c[0] === rgba[i] && c[1] === rgba[i + 1] && c[2] === rgba[i + 2])) continue;
+          rgba[i] = c[0];
+          rgba[i + 1] = c[1];
+          rgba[i + 2] = c[2];
+          changed++;
+        }
+        return { width: f.width, height: f.height, rgba };
+      });
       const after = coloursOf(out);
       if (savePal !== undefined) savePalette(savePal, after.sort((a, b) => b.count - a.count).map(c => c.colour));
       return {
@@ -647,107 +587,6 @@ TOOLS.push({
 });
 
 const hex = (c: number[]) => `#${c.slice(0, 3).map(v => v.toString(16).padStart(2, "0")).join("")}${c[3] === 255 ? "" : c[3].toString(16).padStart(2, "0")}`;
-
-const METHODS = ["dominant", "median", "mode", "mean", "nearest"] as const;
-
-TOOLS.push({
-  group: "image",
-  name: "snap",
-  args: "<image>",
-  summary: "Put AI pixel art back on its own grid: one pixel per art pixel",
-  details: [
-    "Image models draw \"pixel art\" big (a 128 px sprite at 6x), soft at the edges, often off any whole",
-    "grid (200 cells resampled to 2048 px is 10.24 px a cell), or with cells that wander by a few pixels.",
-    "This finds the art pixel's size and phase and gives each cell one colour, its most common one.",
-    "An exact upscale (98% of colour edges on one grid) comes back losslessly; anything else goes",
-    "through the detectors of unfake.js (MIT): tiled edge periods, fractional grids and",
-    "cells fitted to hand-drawn edges (a lossy WebP or JPEG copy of an exact upscale cut on its own grid).",
-    "The JSON says how much of the image the result explains (fit); art already at one pixel per pixel",
-    "can still look periodic, so check a low fit, or pass --scale.",
-    "On a sheet the grid is found once for the whole sheet and every frame is cut the same way."
-  ],
-  flags: [
-    { flag: "--scale", value: "N", description: "The art pixel's size, when you know it (may be fractional: 10.24); found otherwise" },
-    { flag: "--method", value: "name", description: "How a cell becomes a pixel: dominant (default), median, mode, mean or nearest" },
-    { flag: "--colors", value: "N", description: "At most N colours in the result (default: keep them all)" },
-    { flag: "--keep-size", description: "Draw the result back at its whole-pixel scale: about the same size, on a clean grid" },
-    ...SHARED
-  ],
-  async run(ctx, call) {
-    const rawScale = textFlag(call, "--scale");
-    const scale = rawScale === undefined ? undefined : Number(rawScale);
-    if (scale !== undefined && !(scale >= 1 && scale <= 256)) throw usageError(`--scale takes a pixel size from 1 to 256 (got "${rawScale}")`);
-    const method = (textFlag(call, "--method") ?? "dominant").toLowerCase() as ReduceMethod;
-    if (!(METHODS as readonly string[]).includes(method)) throw usageError(`--method takes ${METHODS.join(", ")} (got "${method}")`);
-    const colours = call.flags.has("--colors") ? positiveInt(call, "--colors") : undefined;
-    if (colours !== undefined && (colours < 2 || colours > 4096)) throw usageError("--colors takes 2 to 4096");
-    return runEdit(ctx, call, "ludo toolbox image snap <image> [--scale N]", (frames, src) => {
-      const grid = gridOf(src, call);
-      // The whole sheet (or the image) decides the grid: more edges to go on.
-      const whole = unfake(src.image, { method, ...(scale ? { scale } : {}) });
-      if (whole.scale <= 1) {
-        throw new CliError(
-          `${src.file} has no pixel grid to snap to: it looks like one pixel per pixel already`,
-          EXIT.BAD_INPUT,
-          "If its pixels are a known size, pass it with --scale."
-        );
-      }
-      let out: Image[];
-      if (!grid) out = [whole.image];
-      else {
-        // Every frame cut on the sheet's own grid: a whole scale keeps the
-        // sheet's phase, so frames do not jump a cell against each other.
-        const rects = frameRects(src.image.width, src.image.height, grid.cols, grid.rows, grid.frames);
-        const s = whole.scale;
-        const phase = Number.isInteger(s) && whole.crop ? whole.crop : undefined;
-        const each = frames.map((f, i) =>
-          unfake(f, {
-            method,
-            scale: s,
-            ...(phase ? { phase: { x: (((phase.x - rects[i].x) % s) + s) % s, y: (((phase.y - rects[i].y) % s) + s) % s } } : {})
-          }).image
-        );
-        const w = Math.max(...each.map(f => f.width));
-        const h = Math.max(...each.map(f => f.height));
-        out = each.map(f => (f.width === w && f.height === h ? f : pad(f, { top: 0, left: 0, right: w - f.width, bottom: h - f.height })));
-      }
-      let reduced: number | undefined;
-      if (colours) {
-        const q = quantizeFrames(out, colours);
-        if (q.frames !== out) reduced = q.before;
-        out = q.frames;
-      }
-      const k = Math.max(1, Math.round(whole.scale));
-      if (call.flags.has("--keep-size") && k > 1) out = out.map(f => scaleUp(f, k));
-      const shown2 = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
-      const fit = Math.round(whole.fit * 1000) / 1000;
-      const warning =
-        !scale && !whole.exact && !whole.lossyExact && whole.fit < 0.7
-          ? `The result explains only ${Math.round(whole.fit * 100)}% of the image: it may already be one pixel per pixel, or its pixels another size. Check it, or pass --scale.`
-          : undefined;
-      return {
-        frames: out,
-        facts: {
-          pixel_size: Math.round(whole.scale * 10000) / 10000,
-          exact: !!whole.exact,
-          ...(whole.lossyExact ? { lossy_exact: true } : {}),
-          fit,
-          ...(whole.grid ? { fractional_grid: { period: whole.grid.period.map(v => Math.round(v * 10000) / 10000), cells: whole.grid.cells } } : {}),
-          ...(whole.elastic ? { fitted_to_edges: { x: whole.elastic[0], y: whole.elastic[1] } } : {}),
-          ...(reduced !== undefined ? { colors: { before: reduced, after: colours } } : {}),
-          ...(call.flags.has("--keep-size") ? { drawn_at: k } : {}),
-          ...(src.trim ? { trim_dropped: true } : {}),
-          ...(warning ? { warning } : {})
-        },
-        says:
-          `Snapped ${frames[0].width}x${frames[0].height} to ${out[0].width}x${out[0].height}: art pixels of ${shown2(whole.scale)} px` +
-          (whole.exact ? " (an exact upscale: nothing lost)" : whole.lossyExact ? ` (an exact upscale saved lossily, explaining ${Math.round(whole.fit * 100)}% of it)` : `, explaining ${Math.round(whole.fit * 100)}% of it`) +
-          (reduced !== undefined ? `, ${reduced} colours to ${colours}` : "") +
-          (warning ? `\nWarning: ${warning}` : "")
-      };
-    });
-  }
-});
 
 TOOLS.push({
   group: "image",

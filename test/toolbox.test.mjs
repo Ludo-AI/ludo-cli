@@ -17,7 +17,6 @@ import { backgroundOf } from "../dist/toolbox/grid.js";
 import { contentBox, emptiness, extrude, flip, pad, rotate, scaleDown, scaleUp } from "../dist/toolbox/pixels.js";
 import { crop } from "../dist/toolbox/sheet.js";
 import { textureAtlas } from "../dist/tty/texturepacker.js";
-import { keyMask } from "../dist/toolbox/key.js";
 import { formatPalette, parseHexList, parsePalette } from "../dist/toolbox/palette.js";
 import { alphaComposite, dilateAlpha } from "../dist/toolbox/effects.js";
 import { parseArgv } from "../dist/args.js";
@@ -544,7 +543,7 @@ function strip(frames, cols = frames.length) {
   return sheet;
 }
 
-test("loop reports a sheet's seam, and --apply saves it trimmed to its best loop", async () => {
+test("loop reports a sheet's seam and its best loop, writes nothing, and points a bad one at Ludo", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-loop-"));
   const frames = range(0, 9).map(t => orbitFrame(t, 8));
   const file = writeSheet(dir, "spin.png", strip(frames, 3), { cols: 3, rows: 3, frames: 9, fps: 12 });
@@ -556,44 +555,39 @@ test("loop reports a sheet's seam, and --apply saves it trimmed to its best loop
   assert.equal(report.seam.verdict, "repeat");
   assert.deepEqual([report.best.start, report.best.end], [1, 8]);
   assert.equal(report.matrix.length, 9);
-  assert.equal(report.hint.command, `ludo toolbox sprite loop ${file} --apply`);
+  // A loop inside: Ludo's free re-cut from the source video finds it.
+  assert.match(report.hint.command, /^ludo sprite adjust .* --loop$/);
   assert.ok(!fs.existsSync(out), "checking writes nothing");
+  assert.equal((await run(["toolbox", "sprite", "loop", file, "--apply"])).code, EXIT.USAGE);
 
-  const applied = await run(["toolbox", "sprite", "loop", file, "--apply", "--out", out]);
-  assert.equal(applied.code, EXIT.OK, applied.stderr);
-  const res = JSON.parse(applied.stdout);
-  const buf = fs.readFileSync(path.resolve(res.applied));
-  assert.deepEqual(readGrid(buf), { cols: 3, rows: 3, frames: 8, fps: 12 });
-  assert.deepEqual(Buffer.from(readPng(buf).image.rgba), canonical(strip(frames.slice(0, 8), 3).rgba));
-
-  // The trimmed sheet loops: --apply has nothing left to do.
-  const again = await run(["toolbox", "sprite", "loop", path.resolve(res.applied), "--apply", "--out", out]);
-  assert.equal(again.code, EXIT.OK, again.stderr);
-  const second = JSON.parse(again.stdout);
-  assert.equal(second.seam.verdict, "smooth");
-  assert.equal(second.applied, null);
-  assert.equal(second.hint.command.startsWith("ludo preview"), true);
+  const whole = writeSheet(dir, "whole.png", strip(frames.slice(0, 8), 4), { cols: 4, rows: 2, frames: 8, fps: 12 });
+  const smooth = JSON.parse((await run(["toolbox", "sprite", "loop", whole])).stdout);
+  assert.equal(smooth.seam.verdict, "smooth");
+  assert.equal(smooth.hint.command.startsWith("ludo preview"), true);
 });
 
-test("loop --apply on a sheet with no loop inside exits 12, and --in-place replaces the input", async () => {
+test("loop on a sheet with no loop inside points at Ludo's loop repair", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-loop-"));
   const half = writeSheet(dir, "half.png", strip(range(0, 4).map(t => orbitFrame(t, 8))), { cols: 4, rows: 1, frames: 4, fps: 10 });
-  const refused = await run(["toolbox", "sprite", "loop", half, "--apply", "--out", path.join(dir, "out")]);
-  assert.equal(refused.code, EXIT.BAD_INPUT);
-  assert.match(refused.stderr, /No run of frames .* loops cleanly/);
-  assert.match(refused.stderr, /sprite adjust/);
   const told = await run(["toolbox", "sprite", "loop", half]);
   assert.equal(told.code, EXIT.OK, told.stderr);
   const report = JSON.parse(told.stdout);
   assert.deepEqual([report.seam.verdict, report.best], ["jump", null]);
-  assert.match(report.hint.command, /^ludo sprite adjust .* --loop$/);
+  assert.match(report.hint.command, /^ludo sprite edit .* --edit-mode fix_loop$/);
+  assert.match((await run(["toolbox", "sprite", "loop", half, "--min-frames", "5"])).stderr, /more than the sheet's 4 frames/);
+});
 
-  const glitch = writeSheet(dir, "glitch.png", strip([...range(0, 8), 4].map(t => orbitFrame(t, 8)), 9), { cols: 9, rows: 1, frames: 9, fps: 10 });
-  assert.equal((await run(["toolbox", "sprite", "loop", glitch, "--in-place"])).code, EXIT.USAGE);
-  const inPlace = await run(["toolbox", "sprite", "loop", glitch, "--apply", "--in-place", "--cols", "4"]);
-  assert.equal(inPlace.code, EXIT.OK, inPlace.stderr);
-  assert.deepEqual(readGrid(fs.readFileSync(glitch)), { cols: 4, rows: 2, frames: 8, fps: 10 });
-  assert.match((await run(["toolbox", "sprite", "loop", glitch, "--min-frames", "9"])).stderr, /more than the sheet's 8 frames/);
+test("the jobs Ludo does are not toolbox tools: their names point at Ludo's", async () => {
+  for (const [group, name, command] of [
+    ["image", "snap", /ludo image pixel-art/],
+    ["image", "key", /ludo image remove-background/],
+    ["audio", "normalize", /ludo toolbox audio info/],
+    ["audio", "loop", /ludo toolbox audio info/]
+  ]) {
+    const r = await run(["toolbox", group, name, "x.png"]);
+    assert.equal(r.code, EXIT.USAGE, `${group} ${name}`);
+    assert.match(r.stderr, command, `${group} ${name}`);
+  }
 });
 
 test("a ping-pong made by sprite frames is reported as mirrored, with a smooth seam", async () => {
@@ -876,87 +870,6 @@ test("a fractional scale keeps a trimmed sheet's record in step", async () => {
   assert.equal(out.filter, "nearest");
 });
 
-test("image key takes what ImageMagick takes: -transparent everywhere, floodfill from the edges", t => {
-  // ImageMagick 7 only: 6 (Ubuntu's) floods with other fuzz rules.
-  let im;
-  try {
-    if (/^Version: ImageMagick 7\./.test(execFileSync("magick", ["-version"]).toString())) im = "magick";
-  } catch {}
-  if (!im) return t.skip("ImageMagick 7 is not installed");
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-key-im-"));
-  const rnd = (seed => () => ((seed = (seed * 16807) % 2147483647) / 2147483647))(3);
-  let cases = 0;
-  try {
-    for (let n = 0; n < 12; n++) {
-      const [w, h] = [16 + ((rnd() * 24) | 0), 16 + ((rnd() * 24) | 0)];
-      const key = [(rnd() * 256) | 0, (rnd() * 256) | 0, (rnd() * 256) | 0, 255];
-      const img = { width: w, height: h, rgba: new Uint8Array(w * h * 4) };
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          // A frame of the key colour (so every border match connects to the
-          // corner ImageMagick floods from), then colours near it and far.
-          const frame = x === 0 || y === 0 || x === w - 1 || y === h - 1;
-          const spread = 70 * rnd();
-          const near = key.map((v, k) => (k === 3 ? (rnd() < 0.2 ? (rnd() * 256) | 0 : 255) : Math.max(0, Math.min(255, Math.round(v + (rnd() - 0.5) * spread)))));
-          img.rgba.set(frame ? key : rnd() < 0.6 ? near : [(rnd() * 256) | 0, (rnd() * 256) | 0, (rnd() * 256) | 0, rnd() < 0.1 ? 0 : 255], (y * w + x) * 4);
-        }
-      }
-      const file = path.join(dir, `k${n}.png`);
-      fs.writeFileSync(file, encodePng(img));
-      const hexKey = "#" + key.slice(0, 3).map(v => v.toString(16).padStart(2, "0")).join("");
-      for (const pct of [0, 3, 10, 25]) {
-        const magick = (...ops) => execFileSync(im, [file, "-alpha", "set", "-fuzz", ...ops, "-depth", "8", "RGBA:-"]);
-        // ImageMagick's floodfill gives the seed a fuzz of its own, so it
-        // takes at F what --fuzz takes at F·√2.
-        for (const [edges, theirs, ours] of [
-          [false, magick(`${pct}%`, "-transparent", hexKey), keyMask(img, key, pct / 100, false)],
-          [true, magick(`${pct / Math.SQRT2}%`, "-fill", "none", "-draw", "color 0,0 floodfill"), keyMask(img, key, pct / 100, true)]
-        ]) {
-          for (let p = 0; p < w * h; p++) {
-            if (!img.rgba[p * 4 + 3]) continue;
-            assert.equal(!!ours[p], theirs[p * 4 + 3] === 0, `case ${n}, ${pct}%, ${edges ? "edges" : "everywhere"}, pixel ${p}`);
-          }
-          cases++;
-        }
-      }
-    }
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-  assert.equal(cases, 96);
-});
-
-test("image key keeps the background colour inside the sprite unless --everywhere; a sheet is keyed frame by frame", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-key-"));
-  // A red sprite with a white eye, on white.
-  const img = { width: 20, height: 20, rgba: new Uint8Array(20 * 20 * 4).fill(255) };
-  for (let y = 5; y < 15; y++) for (let x = 5; x < 15; x++) img.rgba.set([200, 30, 30, 255], (y * 20 + x) * 4);
-  for (let y = 8; y < 10; y++) for (let x = 8; x < 10; x++) img.rgba.set([250, 252, 255, 255], (y * 20 + x) * 4);
-  const file = writeSheet(dir, "sprite.png", img);
-  const edges = await run(["toolbox", "image", "key", file, "--out", dir, "--json"]);
-  assert.equal(edges.code, EXIT.OK, edges.stderr);
-  const e = JSON.parse(edges.stdout);
-  assert.deepEqual([e.color, e.fuzz, e.everywhere, e.pixels_taken], ["#ffffff", 10, false, 400 - 100]);
-  const kept = readPng(fs.readFileSync(path.resolve(dir, path.basename(e.image)))).image;
-  assert.equal(kept.rgba[(8 * 20 + 8) * 4 + 3], 255, "the eye stays");
-  assert.equal(kept.rgba[3], 0, "the corner goes");
-  const all = JSON.parse((await run(["toolbox", "image", "key", file, "--everywhere", "--out", dir, "--json"])).stdout);
-  assert.equal(all.pixels_taken, 400 - 100 + 4);
-
-  const sheet = writeSheet(dir, "sheet.png", joinTwo(img), { cols: 2, rows: 1, frames: 2, fps: 8 });
-  const keyed = JSON.parse((await run(["toolbox", "image", "key", sheet, "--out", dir, "--json"])).stdout);
-  assert.equal(keyed.pixels_taken, 2 * 300);
-  assert.deepEqual(keyed.grid, { cols: 2, rows: 1, frames: 2, frame_width: 20, frame_height: 20, fps: 8 });
-
-  const busy = writeSheet(dir, "busy.png", noise(20, 20));
-  const refused = await run(["toolbox", "image", "key", busy]);
-  assert.equal(refused.code, EXIT.BAD_INPUT);
-  assert.match(refused.stderr, /no solid colour around its edges/);
-  const far = await run(["toolbox", "image", "key", file, "--color", "#00ff00"]);
-  assert.equal(far.code, EXIT.BAD_INPUT);
-  assert.match(far.stderr, /No pixel .* is within 10% of #00ff00 at its edges/);
-});
-
 // PICO-8's 16 colours, as Lospec writes them.
 const PICO8 = ["000000", "1d2b53", "7e2553", "008751", "ab5236", "5f574f", "c2c3c7", "fff1e8", "ff004d", "ffa300", "ffec27", "00e436", "29adff", "83769c", "ff77a8", "ffccaa"];
 
@@ -985,7 +898,7 @@ test("palette files: each format reads back what it wrote, and Lospec's and GIMP
   assert.equal(read, colours.flat().join(","));
 });
 
-test("image palette lists colours most used first and saves them; recolor reduces, maps and swaps", async () => {
+test("image palette lists colours most used first and saves them; recolor maps and swaps", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-palette-"));
   // 3 colours: red 60%, green 30%, blue 10%, on transparency.
   const img = { width: 10, height: 10, rgba: new Uint8Array(400) };
@@ -1012,9 +925,9 @@ test("image palette lists colours most used first and saves them; recolor reduce
   }
   assert.ok(mapped.colors.after <= 16);
 
-  const reduced = JSON.parse((await run(["toolbox", "image", "recolor", busy, "--colors", "8", "--save-palette", path.join(dir, "eight.hex"), "--out", dir, "--json"])).stdout);
-  assert.ok(reduced.colors.after <= 8 && reduced.colors.before > 8, JSON.stringify(reduced.colors));
-  assert.equal(parsePalette(fs.readFileSync(path.join(dir, "eight.hex"), "utf8"), ".hex").length, reduced.colors.after);
+  const saved = JSON.parse((await run(["toolbox", "image", "recolor", busy, "--palette", pico, "--save-palette", path.join(dir, "mapped.hex"), "--out", dir, "--json"])).stdout);
+  assert.equal(parsePalette(fs.readFileSync(path.join(dir, "mapped.hex"), "utf8"), ".hex").length, saved.colors.after);
+  assert.equal((await run(["toolbox", "image", "recolor", busy, "--colors", "8"])).code, EXIT.USAGE);
 
   // --swap: red to gold, blue to black; green stays.
   const swapped = JSON.parse((await run(["toolbox", "image", "recolor", file, "--swap", "#dc141e,#1428d2", "--to", "#ffd700,#000000", "--out", dir, "--json"])).stdout);
@@ -1026,7 +939,7 @@ test("image palette lists colours most used first and saves them; recolor reduce
   assert.equal(uneven.code, EXIT.USAGE);
   assert.match(uneven.stderr, /pair up in order/);
   const none = await run(["toolbox", "image", "recolor", file]);
-  assert.match(none.stderr, /Pass one of --colors, --palette or --swap/);
+  assert.match(none.stderr, /Pass one of --palette or --swap/);
 });
 
 test("outline dilation is ImageMagick's morphology; compositing is Pillow's alpha_composite to the byte", t => {
@@ -1116,15 +1029,6 @@ test("image convert: to lossless WebP and back gives the same pixels; the WebP s
   const raw = execFileSync("dwebp", [path.resolve(dir, path.basename(w.saved)), "-pam", "-o", "-"]);
   assert.ok(canonical(raw.subarray(raw.length - img.rgba.length)).equals(canonical(img.rgba)), "dwebp reads the same pixels");
 });
-
-function joinTwo(img) {
-  const out = { width: img.width * 2, height: img.height, rgba: new Uint8Array(img.width * 2 * img.height * 4) };
-  for (let y = 0; y < img.height; y++) {
-    out.rgba.set(img.rgba.subarray(y * img.width * 4, (y + 1) * img.width * 4), y * out.width * 4);
-    out.rgba.set(img.rgba.subarray(y * img.width * 4, (y + 1) * img.width * 4), (y * out.width + img.width) * 4);
-  }
-  return out;
-}
 
 // ---- Engine exports ----
 

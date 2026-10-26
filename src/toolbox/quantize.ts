@@ -229,35 +229,3 @@ export class PaletteMap {
     return best;
   }
 }
-
-/**
- * Frames reduced to at most `max` colours together (one palette for all, from
- * their opaque pixels; alpha kept as it is). Frames that already use no more
- * than `max` colours come back unchanged.
- */
-export function quantizeFrames(frames: { width: number; height: number; rgba: Uint8Array }[], max: number): { frames: typeof frames; palette: Rgb[]; before: number } {
-  const seen = new Set<number>();
-  const wu = new WuQuantizer();
-  for (const f of frames) {
-    for (let i = 0; i < f.rgba.length; i += 4) {
-      if (!f.rgba[i + 3]) continue;
-      seen.add((f.rgba[i] << 16) | (f.rgba[i + 1] << 8) | f.rgba[i + 2]);
-      wu.add(f.rgba[i], f.rgba[i + 1], f.rgba[i + 2]);
-    }
-  }
-  if (seen.size <= max) return { frames, palette: [...seen].map(c => [(c >> 16) & 255, (c >> 8) & 255, c & 255] as Rgb), before: seen.size };
-  const palette = wu.palette(max).map(c => c.map(Math.round) as Rgb);
-  const map = new PaletteMap(palette);
-  const out = frames.map(f => {
-    const rgba = f.rgba.slice();
-    for (let i = 0; i < rgba.length; i += 4) {
-      if (!rgba[i + 3]) continue;
-      const p = palette[map.index(rgba[i], rgba[i + 1], rgba[i + 2])];
-      rgba[i] = p[0];
-      rgba[i + 1] = p[1];
-      rgba[i + 2] = p[2];
-    }
-    return { width: f.width, height: f.height, rgba };
-  });
-  return { frames: out, palette, before: seen.size };
-}

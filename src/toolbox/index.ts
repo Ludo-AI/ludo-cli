@@ -19,6 +19,16 @@ export { TOOLS } from "./registry.js";
 // The image work itself lives in pure functions next to this file; a tool
 // here only reads its arguments, calls them and writes files.
 
+// Jobs Ludo itself does, so the toolbox leaves them out: two ways to do one
+// thing, one worse, and the free one ends up "fixing" Ludo's results. An
+// agent that reaches for one of these names is sent to Ludo's.
+const AT_LUDO: Record<string, { job: string; command: string }> = {
+  "image snap": { job: "Turning a picture into pixel art is Ludo's job (free: in the web app, or here with a Pro or Studio login)", command: "ludo image pixel-art --image <file>" },
+  "image key": { job: "Taking a background away is Ludo's job (0.5 credits)", command: "ludo image remove-background --image <file>" },
+  "audio normalize": { job: "Ludo's sounds come loudness-matched already; to measure any sound's loudness", command: "ludo toolbox audio info <sound>" },
+  "audio loop": { job: "Ludo's music and ambiences loop already; to check any sound's loop seam", command: "ludo toolbox audio info <sound>" }
+};
+
 const groupsInUse = () => Object.keys(TOOL_GROUPS).filter(g => TOOLS.some(t => t.group === g));
 
 const table = (rows: [string, string][]) => {
@@ -43,6 +53,9 @@ function toolboxHelp(): string {
     groups.length
       ? table(groups.map(g => [g, `${TOOL_GROUPS[g]}: ${TOOLS.filter(t => t.group === g).map(t => t.name).join(", ")}`]))
       : "  No tools yet.",
+    "",
+    "Pixel art conversion and background removal are Ludo's: ludo image pixel-art, ludo image",
+    "remove-background (`ludo pricing` says which plans).",
     ""
   ].join("\n");
 }
@@ -136,6 +149,8 @@ export async function toolbox(ctx: Ctx, parsed: Parsed, argv: string[], setLabel
     return help ? EXIT.OK : EXIT.USAGE;
   }
   const tool = TOOLS.find(t => t.group === group && t.name === name);
+  const atLudo = AT_LUDO[`${group} ${name}`];
+  if (!tool && atLudo) throw new CliError(`ludo toolbox ${group} ${name} is not a toolbox tool`, EXIT.USAGE, `${atLudo.job}: ${atLudo.command}`);
   if (!tool) {
     const names = TOOLS.filter(t => t.group === group).map(t => t.name);
     throw new CliError(`Unknown tool: ludo toolbox ${group} ${name}`, EXIT.USAGE, `Tools: ${names.join(", ")}`);
