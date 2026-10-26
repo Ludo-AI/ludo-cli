@@ -17,25 +17,35 @@ import { hint, TOOLS, type ToolCall } from "./registry.js";
 
 export class ModelError extends Error {}
 
-interface Gltf {
+export interface Gltf {
   asset?: { version?: string; generator?: string };
   scene?: number;
   scenes?: { nodes?: number[] }[];
   nodes?: { children?: number[]; mesh?: number; skin?: number; matrix?: number[]; translation?: number[]; rotation?: number[]; scale?: number[]; name?: string }[];
   meshes?: { name?: string; primitives: { attributes: Record<string, number>; indices?: number; mode?: number; targets?: unknown[] }[] }[];
-  accessors?: { count: number; min?: number[]; max?: number[]; bufferView?: number }[];
-  bufferViews?: { buffer: number; byteOffset?: number; byteLength: number }[];
+  accessors?: {
+    count: number;
+    min?: number[];
+    max?: number[];
+    bufferView?: number;
+    byteOffset?: number;
+    componentType?: number;
+    type?: string;
+    normalized?: boolean;
+    sparse?: { count: number; indices: { bufferView: number; byteOffset?: number; componentType: number }; values: { bufferView: number; byteOffset?: number } };
+  }[];
+  bufferViews?: { buffer: number; byteOffset?: number; byteLength: number; byteStride?: number }[];
   buffers?: { uri?: string; byteLength: number }[];
   materials?: unknown[];
   textures?: unknown[];
   images?: { uri?: string; bufferView?: number; mimeType?: string; name?: string }[];
-  skins?: { joints: number[]; name?: string }[];
-  animations?: { name?: string; channels: unknown[]; samplers: { input: number }[] }[];
+  skins?: { joints: number[]; name?: string; skeleton?: number; inverseBindMatrices?: number }[];
+  animations?: { name?: string; channels: { sampler: number; target: { node?: number; path: string } }[]; samplers: { input: number; output: number; interpolation?: string }[] }[];
   extensionsUsed?: string[];
   extensionsRequired?: string[];
 }
 
-interface Loaded {
+export interface Loaded {
   json: Gltf;
   bin?: Uint8Array; // a GLB's binary chunk
   dir: string;
@@ -77,18 +87,18 @@ function parseJson(text: string): Gltf {
   return json;
 }
 
-type Mat = number[]; // 4x4, column-major, as glTF writes them
+export type Mat = number[]; // 4x4, column-major, as glTF writes them
 
-const identity = (): Mat => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+export const identity = (): Mat => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
-function multiply(a: Mat, b: Mat): Mat {
+export function multiply(a: Mat, b: Mat): Mat {
   const out = new Array(16).fill(0);
   for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) for (let k = 0; k < 4; k++) out[c * 4 + r] += a[k * 4 + r] * b[c * 4 + k];
   return out;
 }
 
 // A node's local matrix: its `matrix`, or T * R * S.
-function local(n: NonNullable<Gltf["nodes"]>[number]): Mat {
+export function local(n: NonNullable<Gltf["nodes"]>[number]): Mat {
   if (n.matrix?.length === 16) return n.matrix;
   const [tx, ty, tz] = n.translation ?? [0, 0, 0];
   const [x, y, z, w] = n.rotation ?? [0, 0, 0, 1];
@@ -101,7 +111,7 @@ function local(n: NonNullable<Gltf["nodes"]>[number]): Mat {
   ];
 }
 
-const apply = (m: Mat, p: number[]) => [0, 1, 2].map(r => m[r] * p[0] + m[4 + r] * p[1] + m[8 + r] * p[2] + m[12 + r]);
+export const apply = (m: Mat, p: number[]) => [0, 1, 2].map(r => m[r] * p[0] + m[4 + r] * p[1] + m[8 + r] * p[2] + m[12 + r]);
 
 // The pixel size from a PNG's IHDR or a JPEG's SOF, if the bytes are one.
 function imageSize(b: Uint8Array): { width: number; height: number } | undefined {
@@ -127,7 +137,7 @@ function imageSize(b: Uint8Array): { width: number; height: number } | undefined
   return undefined;
 }
 
-function bufferBytes(m: Loaded, index: number): Uint8Array | undefined {
+export function bufferBytes(m: Loaded, index: number): Uint8Array | undefined {
   const b = m.json.buffers?.[index];
   if (!b) return undefined;
   if (b.uri === undefined) return index === 0 ? m.bin : undefined;
@@ -138,6 +148,70 @@ function bufferBytes(m: Loaded, index: number): Uint8Array | undefined {
   } catch {
     return undefined;
   }
+}
+
+const COMPONENTS: Record<string, number> = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT2: 4, MAT3: 9, MAT4: 16 };
+const BYTES: Record<number, number> = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
+const buffers = new WeakMap<Loaded, Map<number, Uint8Array | undefined>>();
+
+// One element's component from a buffer, as glTF 2.0 §3.11 reads it: a
+// normalized integer is scaled to 0..1 (unsigned) or -1..1 (signed).
+function component(dv: DataView, o: number, type: number, normalized: boolean): number {
+  switch (type) {
+    case 5126: return dv.getFloat32(o, true);
+    case 5120: return normalized ? Math.max(dv.getInt8(o) / 127, -1) : dv.getInt8(o);
+    case 5121: return normalized ? dv.getUint8(o) / 255 : dv.getUint8(o);
+    case 5122: return normalized ? Math.max(dv.getInt16(o, true) / 32767, -1) : dv.getInt16(o, true);
+    case 5123: return normalized ? dv.getUint16(o, true) / 65535 : dv.getUint16(o, true);
+    case 5125: return dv.getUint32(o, true);
+  }
+  throw new ModelError(`an accessor of component type ${type}`);
+}
+
+// What an accessor holds, as floats, `size` per element: its buffer view
+// read with its stride, then any sparse substitution on top. An accessor
+// with no buffer view is zeros, as the spec says. Matrices of 1- and 2-byte
+// components (padded columns) are not read: glTF uses them for nothing a
+// game needs.
+export function readAccessor(m: Loaded, index: number): { values: Float32Array; size: number; count: number } {
+  const a = m.json.accessors?.[index];
+  if (!a) throw new ModelError(`accessor ${index} is missing`);
+  const size = COMPONENTS[a.type ?? ""];
+  const bytes = BYTES[a.componentType ?? 0];
+  if (!size || !bytes) throw new ModelError(`accessor ${index} has type ${a.type} of ${a.componentType}`);
+  const values = new Float32Array(a.count * size);
+  let cache = buffers.get(m);
+  if (!cache) buffers.set(m, (cache = new Map()));
+  const view = (v: number) => {
+    const bv = m.json.bufferViews?.[v];
+    if (!bv) throw new ModelError(`buffer view ${v} is missing`);
+    if (!cache!.has(bv.buffer)) cache!.set(bv.buffer, bufferBytes(m, bv.buffer));
+    const buf = cache!.get(bv.buffer);
+    if (!buf) throw new ModelError(`buffer ${bv.buffer} is missing`);
+    return { dv: new DataView(buf.buffer, buf.byteOffset, buf.byteLength), start: bv.byteOffset ?? 0, stride: bv.byteStride, end: (bv.byteOffset ?? 0) + bv.byteLength, length: buf.byteLength };
+  };
+  const normalized = !!a.normalized;
+  if (a.bufferView !== undefined) {
+    const v = view(a.bufferView);
+    const stride = v.stride || size * bytes;
+    const base = v.start + (a.byteOffset ?? 0);
+    if (a.count > 0 && (base + (a.count - 1) * stride + size * bytes > Math.min(v.end, v.length))) throw new ModelError(`accessor ${index} runs past its buffer`);
+    for (let i = 0; i < a.count; i++) for (let c = 0; c < size; c++) values[i * size + c] = component(v.dv, base + i * stride + c * bytes, a.componentType!, normalized);
+  }
+  if (a.sparse && a.sparse.count > 0) {
+    const iv = view(a.sparse.indices.bufferView);
+    const vv = view(a.sparse.values.bufferView);
+    const ib = BYTES[a.sparse.indices.componentType] ?? 0;
+    const io = iv.start + (a.sparse.indices.byteOffset ?? 0);
+    const vo = vv.start + (a.sparse.values.byteOffset ?? 0);
+    if (!ib || io + a.sparse.count * ib > iv.length || vo + a.sparse.count * size * bytes > vv.length) throw new ModelError(`accessor ${index}'s sparse data runs past its buffer`);
+    for (let k = 0; k < a.sparse.count; k++) {
+      const i = component(iv.dv, io + k * ib, a.sparse.indices.componentType, false);
+      if (i >= a.count) continue;
+      for (let c = 0; c < size; c++) values[i * size + c] = component(vv.dv, vo + (k * size + c) * bytes, a.componentType!, normalized);
+    }
+  }
+  return { values, size, count: a.count };
 }
 
 export function modelInfo(m: Loaded) {
