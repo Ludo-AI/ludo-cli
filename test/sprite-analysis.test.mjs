@@ -377,7 +377,10 @@ test("compare: one character's sheets at one size share a pixels per unit; one d
   assert.equal(c.checks.fps.same, false);
   // Palettes of pixel art are compared: these share every colour.
   assert.deepEqual(c.checks.palette.pixels_in_shared_colours, [1, 1]);
-  assert.equal(diff.hint.command, "ludo sprite adjust --spritesheet-url <its spritesheet_url> --frame-size -9");
+  // Two ways to one size: True Size with Ludo, or scaling the sheets here.
+  assert.equal(c.sheets[1].fix, "ludo sprite adjust --spritesheet-url <its spritesheet_url> --frame-size -9");
+  assert.equal(c.sheets[1].alternative, `ludo toolbox sprite pack ${idle} ${attack} --name hero`);
+  assert.equal(diff.hint.command, c.sheets[1].alternative);
 
   // Another character is never an outlier of this one, unless they are said to be one.
   const slime = writeSheet(dir, "slime_idle.png", range(4).map(() => rect(blank(32, 32), 8, 20, 16, 10)));

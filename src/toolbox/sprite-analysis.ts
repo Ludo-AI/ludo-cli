@@ -1493,7 +1493,9 @@ TOOLS.push({
     "the likely cause: a different input image (when the asset logs say so), the export's scale (frame",
     "sizes or ground lines differ), or, when the frame size and ground line match the reference's (as",
     "True Size sheets of one input image do), the pose or the input image, not the scale. A thick weapon",
-    "held against the body counts as body, so a raised one can hide or fake a difference.",
+    "held against the body counts as body, so a raised one can hide or fake a difference. For the",
+    "export's scale there are two ways to one size: re-export Ludo's sheets at True Size (each frame at",
+    "its input image's size), or keep them and scale them to one body height with `sprite pack`.",
     "",
     "Pixels per unit: one number for the character, the reference's body height over its height in the",
     "game (--reference walk.png=1.8m, or cm, mm, u), else over 2 units. For Unity, pass it to `sprite",
@@ -1601,6 +1603,10 @@ TOOLS.push({
       const refTs = ref.origin?.true_size ?? false;
       // Godot's offset for the feet pivot, the same for every sheet?
       const lineUp = list.every(r => r.sheet.fw === list[0].sheet.fw && r.sheet.fh === list[0].sheet.fh && r.s.pivot.x === list[0].s.pivot.x && r.s.pivot.y === list[0].s.pivot.y);
+      // True Size draws every sheet at its input image's size, which can be
+      // smaller than the art wants: scaling the sheets to one body height is
+      // the other way to one size.
+      const pack = `ludo toolbox sprite pack ${list.map(r => quoted(shown(r.sheet.src.file))).join(" ")}${character ? ` --name ${character}` : ""}`;
       const sheets = list.map(r => {
         const size = r4(r.height / ref.height);
         const info = { ...sheetInfo(r), size_vs_reference: size, ...(r === ref ? { reference: true } : {}) };
@@ -1632,7 +1638,8 @@ TOOLS.push({
               : `ludo sprite adjust --spritesheet-url <its spritesheet_url${o?.job ? `, from \`ludo jobs get ${o.job}\`` : ""}> --frame-size -9`;
           }
         }
-        return { ...info, outlier: why, cause, ...(fix ? { fix } : {}) };
+        if (cause === "scale") why += `. Or keep the sheets as they are and scale them to one body height and ground line, free and offline: ${pack}`;
+        return { ...info, outlier: why, cause, ...(fix ? { fix } : {}), ...(cause === "scale" ? { alternative: pack } : {}) };
       });
       const shared = pixelArt
         ? list.map((r, i) => {
@@ -1680,10 +1687,14 @@ TOOLS.push({
     });
 
     const judged = characters.filter((c): c is Extract<(typeof characters)[number], { reference: unknown }> => c.character !== null);
-    const toFix = judged.flatMap(c => c.sheets).find(x => "fix" in x && x.fix && x.cause !== "pose") as { fix: string; cause: Cause } | undefined;
+    const toFix = judged.flatMap(c => c.sheets).find(x => "fix" in x && x.fix && x.cause !== "pose") as { fix: string; cause: Cause; alternative?: string } | undefined;
     const first = judged[0];
+    // A sheet drawn at another scale: one size by scaling the sheets works
+    // on any of them now, so it is the hint; True Size is in the outlier.
     const next = toFix
-      ? hint(toFix.cause === "input_image" ? "Animate the move again from the reference's input image" : toFix.fix.startsWith("ludo sprite adjust") ? "Re-export it at True Size (free)" : "Animate the move again at True Size", toFix.fix)
+      ? toFix.alternative
+        ? hint("Bring the character's sheets to one size and ground line (or see the outlier for True Size)", toFix.alternative)
+        : hint(toFix.cause === "input_image" ? "Animate the move again from the reference's input image" : "Animate the move again at True Size", toFix.fix)
       : first
         ? hint("Write each sheet's engine files with its feet pivot and the character's pixels per unit", `ludo toolbox sprite export ${quoted(first.reference.sheet)} --engine unity --pivot feet --ppu ${first.pixels_per_unit}`)
         : hint("Name the character to compare these sheets", `ludo toolbox sprite compare ${files.map(f => quoted(shown(f))).join(" ")} --character <name>`);
