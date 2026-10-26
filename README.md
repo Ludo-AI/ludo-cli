@@ -208,18 +208,30 @@ ludo toolbox sprite video knight-walk.png --format webm --loops 3
 
 # Sound. WAV and MP3 are read in-process; OGG, FLAC and the rest, and writing OGG or MP3, need
 # ffmpeg. Loudness is LUFS (ITU-R BS.1770).
-ludo toolbox audio info zap.mp3                     # length, loudness, true peak, silence, loop seam
+ludo toolbox audio info zap.mp3                     # length, loudness, true peak, silence, loop seam; music: tempo
 ludo toolbox audio trim zap.mp3                     # silence off both ends (Ludo's come trimmed)
 ludo toolbox audio convert theme.mp3 --to ogg       # Ogg Vorbis for Godot and Unity; --mono, --bits
 
-# What is in a 3D model: meshes, triangles, size, textures, skeleton and animations.
+# What is in a 3D model: meshes, triangles, size, textures, skeleton and animations; for a rigged
+# one which way it faces, and per clip whether it returns to its first pose and a walk's speed.
 ludo toolbox model info knight.glb
+
+# Setting a character up: where its feet and pivot are, its colliders, and one pixels per unit for
+# all its sheets (and which sheet is drawn at another size). They only report.
+ludo toolbox sprite metrics knight-walk.png --overlay   # bounds, ground line, feet pivot; a picture to check
+ludo toolbox sprite collide knight-walk.png --ppu 280   # box and capsule for Godot, Unity, Phaser, Box2D
+ludo toolbox sprite compare knight_*.png --reference knight_walk.png=1.8m
+ludo toolbox image contact icons/*.png                  # one labelled picture of many images
+
+# A folder at a glance: what each asset is, what the game still lacks (with the Ludo command that
+# makes it) and loaders for Phaser or Pixi.
+ludo toolbox asset manifest assets/ --emit phaser
 
 # Engine files for a sheet you already have. Any toolbox tool that writes a sheet takes --engine
 # too, and a trimmed or extruded sheet exports each frame's original size and offset.
 ludo toolbox sprite export knight-walk.png --engine texturepacker
 ludo toolbox sprite export knight-walk.png --engine godot
-ludo toolbox sprite export knight-walk.png --engine unity
+ludo toolbox sprite export knight-walk.png --engine unity --pivot feet --ppu 280
 ```
 
 Files are saved under `./ludo-output` (or `--out <dir>`) and never overwrite anything.

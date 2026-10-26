@@ -63,12 +63,21 @@ they log in or create an account (and pick a plan with API access if needed) and
      changes them. `image tiles <tileset> --size 16x16` cuts tiles or writes Tiled/Godot/Unity
      tileset files; `image repeat <tile>` checks a tile is seamless. `image convert --to webp`.
    - Audio: `audio info <sound>` gives length, loudness (LUFS), true peak, silence at the ends and
-     whether it clicks when looped; `audio trim` cuts that silence (Ludo's sounds come trimmed), `audio convert --to
+     whether it clicks when looped (music: the tempo, and its double or half); `audio trim` cuts that silence (Ludo's sounds come trimmed), `audio convert --to
      ogg|mp3|flac|wav` (OGG for Godot and Unity). WAV and MP3 need nothing; the rest needs ffmpeg.
    - 3D: `ludo toolbox model info <model.glb>` says what a model holds (triangles, size, textures,
-     rig, animations) before you rig or animate it.
+     rig, animations) before you rig or animate it; for a rigged one, which way it faces, and per
+     clip whether it returns to its first pose (a still, a seam) and a walk's speed.
+   - Setting a character up: `sprite metrics <sheet>` gives bounds, the ground line and a pivot
+     between the feet (`--overlay` draws it to check); `sprite collide <sheet>` gives a body box and
+     capsule per engine (Phaser Arcade included); `sprite compare <sheets...>` gives one pixels per
+     unit for a character and flags a sheet drawn at another size. Feed the pivot and PPU to export.
+   - A folder: `asset manifest <folder>` lists what every asset is and what the game still lacks,
+     with the Ludo command that makes it; `--emit phaser|pixi` writes loaders. `image contact
+     <images...>` puts many images in one labelled picture, to look at them at once.
    - Engines: `ludo toolbox sprite export <sheet> --engine texturepacker|godot|unity` writes engine
-     files; every tool that writes a sheet also takes `--engine`.
+     files (`--pivot feet --ppu <n>` for Godot and Unity); every tool that writes a sheet also takes
+     `--engine`.
    Exit code 12 means a file it cannot use or a grid it cannot tell: pass `--grid <cols>x<rows>`.
    When the JSON has a `hint`, mention it to the user once if it fits.
 
