@@ -204,9 +204,9 @@ test("manifest groups a character's animations and finds duplicates", async () =
       frame_width: 32,
       frame_height: 48,
       animations: [
-        { path: "sprites/hero_idle.png", action: "idle", frames: 6 },
-        { path: "sprites/hero_walk.png", action: "walk", frames: 8 },
-        { path: "sprites/hero_walk2.png", action: "walk", take: 2, frames: 8 }
+        { path: "sprites/hero_idle.png", action: "idle", frames: 6, frame_width: 32, frame_height: 48 },
+        { path: "sprites/hero_walk.png", action: "walk", frames: 8, frame_width: 32, frame_height: 48 },
+        { path: "sprites/hero_walk2.png", action: "walk", take: 2, frames: 8, frame_width: 32, frame_height: 48 }
       ]
     }
   ]);
@@ -249,7 +249,11 @@ test("unit: keys, characters, sound kinds and the difference hash", () => {
   assert.equal(soundKind("a/x.wav", 4, false, 1, { low: 0.45, pauses: 0.3 }).kind, "voice");
   assert.equal(soundKind("a/x.wav", 30, true, 1, { low: 0.1, pauses: 0.01 }).kind, "music");
   assert.equal(soundKind("a/x.wav", 10, true, 1, { low: 0.1, pauses: 0 }).kind, "ambience");
-  assert.equal(soundKind("a/x.wav", 20, false, 2, { low: 0.1, pauses: 0 }).reason, "2 copies of one loop written out");
+  assert.equal(soundKind("a/x.wav", 20, false, 2, { low: 0.1, pauses: 0 }).reason, "2 copies of one 10 s loop written out");
+  // Ludo's ambiences are a 10 s loop written twice: 20 s, still an ambience,
+  // renamed or not. A 30 s loop written twice is music.
+  assert.equal(soundKind("audio/city.mp3", 20, true, 2, { low: 0.1, pauses: 0 }).kind, "ambience");
+  assert.equal(soundKind("audio/theme2.mp3", 60, true, 2, { low: 0.1, pauses: 0 }).kind, "music");
   const a = disc(40, 40);
   assert.equal(dHash(a).length, 64);
   // Twice the size: (nearly) the same bits.
@@ -275,14 +279,16 @@ test("--emit writes Phaser, PixiJS and JSON loaders with stable keys, one file o
   assert.equal(pack.assets.path, "assets/");
   assert.deepEqual(pack.assets.files.find(f => f.key === "sprites_hero_walk"), { type: "spritesheet", key: "sprites_hero_walk", url: "sprites/hero_walk.png", frameConfig: { frameWidth: 32, frameHeight: 48, endFrame: 7 } });
   assert.deepEqual(pack.meta.sheets.sprites_hero_walk, { frames: 8, frameRate: 12 });
-  // The three coins look the same at one size: each loader queues one of them.
+  // Of the byte-identical coins each loader queues one; the coin that only
+  // looks the same, under another name, is a file of its own and loads.
   const coins = ["ui/coin.png", "ui/coin-copy.png", "ui/coin-old.png"];
-  assert.equal(pack.assets.files.filter(f => coins.includes(f.url)).length, 1);
-  assert.equal(coins.filter(c => phaser.includes(`, "${c}");`)).length, 1);
-  assert.equal(coins.filter(c => phaser.includes(`// ${c}: left out, the same picture as`)).length, 2);
+  assert.equal(pack.assets.files.filter(f => coins.includes(f.url)).length, 2);
+  assert.ok(pack.assets.files.some(f => f.url === "ui/coin-old.png"));
+  assert.equal(coins.filter(c => phaser.includes(`, "${c}");`)).length, 2);
+  assert.equal(coins.filter(c => phaser.includes(`// ${c}: left out, the same picture as`)).length, 1);
   const pixi = JSON.parse(fs.readFileSync(path.join(out, "assets-manifest.json"), "utf8"));
   assert.deepEqual(pixi.bundles.find(b => b.name === "textures").assets, [{ alias: "textures_lava", src: "assets/textures/lava.png" }]);
-  assert.equal(pixi.bundles.find(b => b.name === "images").assets.length, 1);
+  assert.equal(pixi.bundles.find(b => b.name === "images").assets.length, 2);
   assert.equal(JSON.parse(fs.readFileSync(path.join(out, "assets.json"), "utf8")).count, 11);
   // Keys are the same run after run; the loader overwrites its own copy.
   const again = await run(["toolbox", "asset", "manifest", dir, "--emit", "phaser", "--base", "assets", "--out", out]);
@@ -486,7 +492,7 @@ test("gaps: a move most other characters have, sheets without their sound, an un
   writeSound(path.join(dir, "audio/hero_walk_steps.wav"), { seconds: 0.3, kind: "blip" });
   writeSound(path.join(dir, "audio/rogue_attack.wav"), { seconds: 0.3, kind: "blip" });
   writeGltf(path.join(dir, "models/knight.glb"), { joints: ["Hips", "Spine", "Head"] });
-  writeGltf(path.join(dir, "models/barrel.glb"), {});
+  writeGltf(path.join(dir, "models/barrel.glb"), { height: 0.9 });
   const r = await run(["toolbox", "asset", "manifest", dir]);
   assert.equal(r.code, EXIT.OK, r.stderr);
   const gaps = r.json.gaps.map(g => `${g.kind} ${g.subject} ${g.missing}`);
@@ -497,7 +503,7 @@ test("gaps: a move most other characters have, sheets without their sound, an un
     "sound sprites/hero_idle.png sound",
     "sound sprites/rogue_idle.png sound",
     "sound sprites/rogue_walk.png sound",
-    "sound sprites/slime_walk.png sound",
+    // The slime has no sound of its own, and nothing says it should.
     "rig models/barrel.glb rig",
     "3d-animation models/knight.glb animation"
   ]);
@@ -505,10 +511,10 @@ test("gaps: a move most other characters have, sheets without their sound, an un
   assert.equal(by["animation slime idle"].detail, "slime has walk but no idle, which hero and rogue have");
   assert.deepEqual(by["animation slime idle"].evidence, ["sprites/hero_idle.png", "sprites/rogue_idle.png"]);
   assert.equal(by["animation slime idle"].hint.command, 'ludo sprite animate --initial-image <a frame of slime> --motion-prompt "idle"');
-  // A Ludo sheet (its stamp) gets create-audio; another gets a sound effect.
+  // A Ludo sheet (its stamp) gets create-audio, the evidence its character's own sound.
   assert.equal(by["sound sprites/hero_idle.png sound"].hint.command, "ludo sprite create-audio --spritesheet-video-url <its video_url>");
-  assert.deepEqual(by["sound sprites/hero_idle.png sound"].evidence, ["audio/hero_walk_steps.wav", "audio/rogue_attack.wav"]);
-  assert.equal(by["sound sprites/slime_walk.png sound"].hint.command, 'ludo audio sound-effect --description "<what slime doing walk sounds like>"');
+  assert.deepEqual(by["sound sprites/hero_idle.png sound"].evidence, ["audio/hero_walk_steps.wav"]);
+  assert.equal(by["sound sprites/hero_idle.png sound"].detail, "sprites/hero_idle.png has no sound, while 1 other sheet of hero has its");
   assert.match(by["rig models/barrel.glb rig"].hint.command, /^ludo model rig --model .*barrel\.glb$/);
   assert.match(by["3d-animation models/knight.glb animation"].hint.command, /^ludo model animate-preset --model .*knight\.glb --preset-id <id>$/);
   assert.equal(r.json.hint.command, by["animation slime attack"].hint.command);
@@ -532,11 +538,182 @@ test("gaps need evidence: an animation file for the rig, Ludo's download keeping
   assert.equal(r.code, EXIT.OK, r.stderr);
   assert.deepEqual(r.json.gaps.map(g => `${g.kind} ${g.subject}`), ["sound sprites/bat_fly/animateSprite-1a2b3c4d-1.png"]);
   const [gap] = r.json.gaps;
-  assert.match(gap.detail, /its Ludo video \(sprites\/bat_fly\/animateSprite-1a2b3c4d-2\.mp4\) is here: forge and forge-pixel make none/);
+  assert.equal(gap.detail, "sprites/bat_fly/animateSprite-1a2b3c4d-1.png has no sound: its Ludo download has its video (sprites/bat_fly/animateSprite-1a2b3c4d-2.mp4) but no audio");
   assert.equal(gap.hint.command, "ludo sprite create-audio --spritesheet-video-url <its video_url>");
   // One prop alone, one character with one move: nothing to compare.
   const alone = tmp();
   writeGltf(path.join(alone, "barrel.glb"), {});
   writeSheet(path.join(alone, "hero_walk.png"), figureSheet({ cols: 4, rows: 1 }), { cols: 4, rows: 1, frames: 4, fps: 10 });
   assert.deepEqual((await run(["toolbox", "asset", "manifest", alone])).json.gaps, []);
+});
+
+// ---- What the folder records, and the findings it settles ----
+
+const DAY = 86400e3;
+const writeJson = (file, value) => {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(value, null, 2));
+};
+// One Ludo download as the CLI saves it: the sheet (stamped), its video, its
+// sound when it has one, and the asset log beside them.
+function download(dir, folder, { op = "animateSprite", job, model, days = 0, sound = false, cols = 4, hue = 0 }) {
+  const at = path.join(dir, folder);
+  const files = [`${op}-${job}-1.png`, `${op}-${job}-2.mp4`, ...(sound ? [`${op}-${job}-3.wav`] : [])];
+  writeSheet(path.join(at, files[0]), figureSheet({ cols, rows: 1, hue }), { cols, rows: 1, frames: cols, fps: 10 });
+  fs.writeFileSync(path.join(at, files[1]), "not really a video");
+  if (sound) writeSound(path.join(at, files[2]), { seconds: 0.3, kind: "blip" });
+  const created_at = new Date(Date.now() - days * DAY).toISOString();
+  writeJson(path.join(at, "ludo-assets.json"), { assets: files.map(file => ({ file, command: "sprite animate", operation_id: op, body: model ? { model } : {}, job_id: `${job}-0000-0000-0000-000000000000`, created_at })) });
+  return at;
+}
+
+test("loaders keep sheets that only look alike: distinct moves of one small character all load", async () => {
+  const dir = tmp();
+  // Three moves drawn alike enough that their hashes match frame by frame
+  // (as True Size sheets of one small character can): a disc per frame,
+  // shrinking, a shade darker in each.
+  for (const [i, move] of ["idle", "walk", "attack"].entries()) {
+    const cw = 40;
+    const img = { width: 4 * cw, height: cw, rgba: new Uint8Array(4 * cw * cw * 4) };
+    for (let f = 0; f < 4; f++) {
+      const d = disc(cw - 4 * f, cw - 4 * f);
+      for (let y = 0; y < d.height; y++) for (let x = 0; x < d.width; x++) if (d.rgba[(y * d.width + x) * 4 + 3]) img.rgba.set([d.rgba[(y * d.width + x) * 4] - 3 * i, d.rgba[(y * d.width + x) * 4 + 1], 60, 255], ((y + 2 * f) * img.width + f * cw + x + 2 * f) * 4);
+    }
+    writeSheet(path.join(dir, `knight_${move}.png`), img, { cols: 4, rows: 1, frames: 4, fps: 10 });
+  }
+  const out = path.join(tmp(), "gen");
+  const r = await run(["toolbox", "asset", "manifest", dir, "--emit", "phaser", "--out", out]);
+  assert.equal(r.code, EXIT.OK, r.stderr);
+  assert.deepEqual(r.json.duplicates, [{ match: "looks the same", files: ["knight_attack.png", "knight_idle.png", "knight_walk.png"], difference: r.json.duplicates[0]?.difference }]);
+  const pack = JSON.parse(fs.readFileSync(path.join(out, "assets-pack.json"), "utf8"));
+  assert.deepEqual(pack.assets.files.map(f => f.url), ["knight_attack.png", "knight_idle.png", "knight_walk.png"]);
+  assert.ok(!r.json.notes?.some(n => /left out/.test(n)));
+});
+
+test("a job saved beside its files: its sound is the sheet's sound, and Hydra's sound is a sound effect", async () => {
+  const dir = tmp();
+  const job = (name, { audio, days = 0 }) => {
+    writeSheet(path.join(dir, `${name}_0.png`), figureSheet({ cols: 4, rows: 1, hue: name.charCodeAt(5) * 7 }), { cols: 4, rows: 1, frames: 4, fps: 10 });
+    fs.writeFileSync(path.join(dir, `${name}_1.mp4`), "not really a video");
+    const result = { spritesheet_url: `https://x/${name}.png`, video_url: `https://x/${name}.mp4`, ...(audio ? { audio_url: `https://x/${name}.wav` } : {}), num_frames: 4 };
+    writeJson(path.join(dir, `${name}_job.json`), { id: `${name}-job`, task_type: "animateSprite", status: "succeeded", created_at: Date.now() - days * DAY, result });
+  };
+  job("anim_attack", { audio: true });
+  writeSound(path.join(dir, "anim_attack_2.wav"), { seconds: 2.5, kind: "melody" });
+  // Its sound not downloaded: the job still made one.
+  job("anim_walk", { audio: true });
+  // Forge's: no sound. One made today, one ten days ago.
+  job("anim_idle", { audio: false });
+  job("anim_jump", { audio: false, days: 10 });
+  const r = await run(["toolbox", "asset", "manifest", dir]);
+  assert.equal(r.code, EXIT.OK, r.stderr);
+  const sound = r.json.assets.find(a => a.path === "anim_attack_2.wav");
+  assert.equal(sound.kind, "sfx");
+  assert.equal(sound.reason, "the sound Ludo's animateSprite made with its sheet (anim_attack_job.json)");
+  assert.deepEqual(sound.made, { operation: "animateSprite", job: "anim_attack-job", created_at: sound.made.created_at, record: "anim_attack_job.json" });
+  const by = Object.fromEntries(r.json.gaps.map(g => [g.subject, g]));
+  assert.deepEqual(Object.keys(by), ["anim_idle_0.png", "anim_jump_0.png"]);
+  // The job keeps the video_url: create-audio gets it, while it is new enough.
+  assert.equal(by["anim_idle_0.png"].hint.command, "ludo sprite create-audio --spritesheet-video-url https://x/anim_idle.mp4");
+  assert.equal(by["anim_jump_0.png"].hint.command, 'ludo audio sound-effect --description "<what it doing jump sounds like>"');
+  assert.match(by["anim_jump_0.png"].hint.text, /create-audio takes only sheets made in the last 7 days, and this one was made on \d{4}-\d\d-\d\d$/);
+});
+
+test("the asset log: create-audio only for the sheets it takes, adjusted copies with their source, the PNG named", async () => {
+  const dir = tmp();
+  const walk = download(dir, "hero_walk", { job: "aaaaaaaa", model: "forge-pixel", cols: 4 });
+  // The WebP Ludo sent, beside the PNG copy.
+  const conv = await run(["toolbox", "image", "convert", path.join(walk, "animateSprite-aaaaaaaa-1.png"), "--to", "webp", "--out", walk]);
+  assert.equal(conv.code, EXIT.OK, conv.stderr);
+  download(dir, "hero_walk_ts", { op: "adjustSpritesheet", job: "bbbbbbbb", cols: 4, hue: 30 });
+  download(dir, "hero_idle", { job: "cccccccc", model: "forge", days: 10, cols: 3 });
+  download(dir, "hero_attack", { job: "dddddddd", model: "hydra", sound: true, cols: 5 });
+  download(dir, "slime_hit_ts", { op: "adjustSpritesheet", job: "eeeeeeee", cols: 6 });
+  const r = await run(["toolbox", "asset", "manifest", dir]);
+  assert.equal(r.code, EXIT.OK, r.stderr);
+  const hydra = r.json.assets.find(a => a.path === "hero_attack/animateSprite-dddddddd-3.wav");
+  assert.equal(hydra.kind, "sfx");
+  assert.match(hydra.reason, /^the sound Ludo's animateSprite made with its sheet/);
+  const by = Object.fromEntries(r.json.gaps.map(g => [g.subject, g]));
+  assert.deepEqual(Object.keys(by).sort(), ["hero_idle/animateSprite-cccccccc-1.png", "hero_walk/animateSprite-aaaaaaaa-1.png", "slime_hit_ts/adjustSpritesheet-eeeeeeee-1.png"]);
+  // Named as the PNG the CLI stamped, not the WebP the loaders take.
+  const w = by["hero_walk/animateSprite-aaaaaaaa-1.png"];
+  assert.equal(w.detail, "hero_walk/animateSprite-aaaaaaaa-1.png has no sound: it was made with forge-pixel, which makes none (nor has hero_walk_ts/adjustSpritesheet-bbbbbbbb-1.png, its sprite adjust copy by name)");
+  assert.deepEqual(w.also, ["hero_walk_ts/adjustSpritesheet-bbbbbbbb-1.png"]);
+  assert.equal(w.hint.command, "ludo sprite create-audio --spritesheet-video-url <its video_url>");
+  // Ten days old: past create-audio's 7 days, so a sound effect, saying why.
+  const idle = by["hero_idle/animateSprite-cccccccc-1.png"];
+  assert.equal(idle.hint.command, 'ludo audio sound-effect --description "<what hero doing idle sounds like>"');
+  assert.match(idle.hint.text, /create-audio takes only sheets made in the last 7 days, and this one was made on /);
+  // An adjusted sheet whose source is not here: create-audio does not take it.
+  const slime = by["slime_hit_ts/adjustSpritesheet-eeeeeeee-1.png"];
+  assert.match(slime.detail, /sprite adjust made it, and a copy carries its source's sound only when the source has one/);
+  assert.match(slime.hint.text, /create-audio takes the video_url of a sheet from animateSprite, animateSpriteKeyframes, transferMotion or editSpritesheet, and this one is from adjustSpritesheet$/);
+  assert.ok(slime.hint.command.startsWith("ludo audio sound-effect"));
+  // Groups name the PNG once, not the PNG and its WebP.
+  const hero = r.json.groups.find(g => g.character.startsWith("hero"));
+  assert.ok(!hero.animations.some(a => a.path.endsWith(".webp")));
+});
+
+test("one move's sheets lacking a sound are one gap", async () => {
+  const dir = tmp();
+  for (const [i, d] of ["N", "S", "W"].entries()) download(dir, `boss-smash-${d}`, { op: "transferMotion", job: `${i}a${i}b${i}c${i}d`, model: "forge", cols: 4 + i });
+  const r = await run(["toolbox", "asset", "manifest", dir]);
+  assert.equal(r.code, EXIT.OK, r.stderr);
+  assert.equal(r.json.gaps.length, 1);
+  const [gap] = r.json.gaps;
+  assert.equal(gap.detail, "boss-smash-N/transferMotion-0a0b0c0d-1.png and 2 other sheets of boss's smash have no sound: they were made with forge, which makes none");
+  assert.deepEqual(gap.also, ["boss-smash-S/transferMotion-1a1b1c1d-1.png", "boss-smash-W/transferMotion-2a2b2c2d-1.png"]);
+  assert.equal(gap.hint.command, "ludo sprite create-audio --spritesheet-video-url <its video_url>");
+  assert.match(gap.hint.text, /^Give each a sound with Ludo/);
+});
+
+test("directions, loops and takes stay one character, and two characters are no evidence for an animation", async () => {
+  assert.deepEqual(characterOf("mt_walk_forward/transferMotion-670e302d-1.png"), { character: "mt", action: "walk", variant: "forward" });
+  assert.deepEqual(characterOf("mt_walk_loop/transferMotion-74aae041-1.png"), { character: "mt", action: "walk", variant: "loop" });
+  assert.deepEqual(characterOf("mt_idle_neutral/transferMotion-0f3ce273-1.png"), { character: "mt", action: "idle", variant: "neutral" });
+  assert.deepEqual(characterOf("sprites/hero_walk_left.png"), { character: "hero", action: "walk", variant: "left" });
+  assert.deepEqual(characterOf("fp_hero_attack2_ts/adjustSpritesheet-01553176-1.png"), { character: "fp_hero", action: "attack", take: 2, variant: "ts" });
+  assert.deepEqual(characterOf("boss-smash-NW.clip2/transferMotion-471f11cd-1.png"), { character: "boss", action: "smash", variant: "nw_clip2" });
+  assert.deepEqual(characterOf("attack_goblin.png"), { character: "goblin", action: "attack" });
+  // The file names the knight: its folders are not part of its name.
+  assert.deepEqual(characterOf("collide/knight-walk.webp"), { character: "knight", action: "walk" });
+  assert.deepEqual(characterOf("compare/knight-walk-ts.webp"), { character: "knight", action: "walk", variant: "ts" });
+  const dir = tmp();
+  const sheet = (name, cols, hue) => writeSheet(path.join(dir, name), figureSheet({ cols, rows: 1, hue }), { cols, rows: 1, frames: cols, fps: 8 });
+  sheet("hero_walk_left.png", 4, 0);
+  sheet("hero_walk_right.png", 4, 20);
+  sheet("hero_attack_right.png", 5, 40);
+  sheet("rogue_walk.png", 4, 60);
+  sheet("rogue_attack.png", 5, 80);
+  sheet("knight_walk.png", 4, 100);
+  sheet("knight_attack.png", 5, 120);
+  sheet("slime_walk_loop.png", 6, 140);
+  sheet("slime_walk_forward.png", 6, 160);
+  const r = await run(["toolbox", "asset", "manifest", dir]);
+  assert.equal(r.code, EXIT.OK, r.stderr);
+  // No hero_left without an attack: the hero is one character.
+  assert.deepEqual(r.json.gaps.map(g => `${g.kind} ${g.subject} ${g.missing}`), ["animation slime attack"]);
+  assert.equal(r.json.gaps[0].detail, "slime has walk but no attack, which hero, knight and rogue have");
+  const hero = r.json.groups.find(g => g.character === "hero");
+  assert.deepEqual(hero.animations.map(a => `${a.action} ${a.variant}`), ["attack right", "walk left", "walk right"]);
+  // A hiker who walks, next to a hero who also attacks: a choice, not a gap.
+  const two = tmp();
+  writeSheet(path.join(two, "hiker_walk.png"), figureSheet({ cols: 4, rows: 1 }), { cols: 4, rows: 1, frames: 4, fps: 8 });
+  for (const [move, cols] of [["walk", 4], ["attack", 5], ["idle", 3]]) writeSheet(path.join(two, `fp_hero_${move}.png`), figureSheet({ cols, rows: 1, hue: cols * 30 }), { cols, rows: 1, frames: cols, fps: 8 });
+  assert.deepEqual((await run(["toolbox", "asset", "manifest", two])).json.gaps, []);
+});
+
+test("no rig suggested for a GLB whose rigged copy is here, by its geometry or the log", async () => {
+  const dir = tmp();
+  writeGltf(path.join(dir, "knight.glb"), { height: 1.8 });
+  writeGltf(path.join(dir, "knight_rigged.glb"), { height: 1.8, joints: ["Hips", "Spine", "Head"], clips: ["Walk"] });
+  // Rigged from statue.glb, as the log says, though its bounds moved.
+  writeGltf(path.join(dir, "statue.glb"), { height: 2.4 });
+  writeGltf(path.join(dir, "out/rigModel-1234abcd-1.glb"), { height: 1.2, joints: ["Root", "Arm"], clips: ["Wave"] });
+  writeJson(path.join(dir, "out/ludo-assets.json"), { assets: [{ file: "rigModel-1234abcd-1.glb", command: "model rig", operation_id: "rigModel", body: { model: "../statue.glb" }, job_id: "1234abcd-0000", created_at: new Date().toISOString() }] });
+  writeGltf(path.join(dir, "barrel.glb"), { height: 0.9 });
+  const r = await run(["toolbox", "asset", "manifest", dir]);
+  assert.equal(r.code, EXIT.OK, r.stderr);
+  assert.deepEqual(r.json.gaps.map(g => `${g.kind} ${g.subject}`), ["rig barrel.glb"]);
 });
