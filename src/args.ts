@@ -48,7 +48,6 @@ export interface Globals {
   play: boolean;
   copy: boolean;
   engine?: Engine;
-  engineName?: string; // --engine as given: `toolbox asset lint` checks engines the writers do not (unreal, phaser, web)
   name?: string;
   n?: number;
   maxCredits?: number;
@@ -129,8 +128,8 @@ export function parseArgv(argv: string[]): Parsed {
         case "--copy": globals.copy = true; break;
         case "--engine": {
           const engine = takeValue().toLowerCase();
-          globals.engineName = engine;
-          if ((ENGINES as readonly string[]).includes(engine)) globals.engine = engine as Engine;
+          if (!(ENGINES as readonly string[]).includes(engine)) throw new CliError(`--engine supports: ${ENGINES.join(", ")} (got "${engine}")`, EXIT.USAGE);
+          globals.engine = engine as Engine;
           break;
         }
         case "--help": globals.help = true; break;
@@ -177,11 +176,6 @@ export function parseArgv(argv: string[]): Parsed {
     }
     flags.set(name, list);
   }
-  // --engine names an engine files are written for, except for the tool that
-  // checks assets against an engine's rules: it takes more engines, and
-  // checks the name itself.
-  const checksEngine = words[0] === "toolbox" && words[1] === "asset" && words[2] === "lint";
-  if (globals.engineName && !globals.engine && !checksEngine) throw new CliError(`--engine supports: ${ENGINES.join(", ")} (got "${globals.engineName}")`, EXIT.USAGE);
   return { globals, words, flags };
 }
 
