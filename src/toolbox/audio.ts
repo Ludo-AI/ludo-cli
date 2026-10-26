@@ -434,11 +434,27 @@ export function musicTempo(a: Audio, range: { start: number; end: number } | und
   return t && t.confidence >= MUSIC.autocorrelation && t.steady >= MUSIC.steady ? t : undefined;
 }
 
+// A reading scored under 0.05 of the pick has no support worth naming. One
+// at 0.8 or more is near enough a tie that the pick could have gone to it:
+// over Ludo's music, a chiptune reads 160 on some excerpts and 80 on others,
+// and a 128 BPM track scores 85.3 at 0.93.
+const SUPPORTED = 0.05;
+const NEAR_TIE = 0.8;
+
+// The readings with support worth naming, best first.
+export const supported = (t: Tempo) => t.alternatives.filter(x => x.score >= SUPPORTED).sort((p, q) => q.score - p.score);
+
 // The octave a listener could tap instead: half or double, whichever has
 // more support, inside 40 to 240 BPM.
 export function octaveOf(t: Tempo): { bpm: number; score: number } | undefined {
-  const octaves = t.alternatives.filter(x => (Math.abs(x.bpm / t.bpm - 0.5) < 0.01 || Math.abs(x.bpm / t.bpm - 2) < 0.01) && x.bpm >= 40 && x.bpm <= 240);
+  const octaves = supported(t).filter(x => (Math.abs(x.bpm / t.bpm - 0.5) < 0.01 || Math.abs(x.bpm / t.bpm - 2) < 0.01) && x.bpm >= 40 && x.bpm <= 240);
   return octaves.sort((p, q) => q.score - p.score || Math.abs(Math.log2(p.bpm / 120)) - Math.abs(Math.log2(q.bpm / 120)))[0];
+}
+
+// The readings to name beside the pick: its octave, then any near tie.
+export function readingsOf(t: Tempo): { bpm: number; score: number }[] {
+  const octave = octaveOf(t);
+  return [...(octave ? [octave] : []), ...supported(t).filter(x => x !== octave && x.score >= NEAR_TIE)];
 }
 
 const THRESHOLD: ToolFlag = { flag: "--threshold", value: "dB", description: "Quieter than this counts as silence, in dBFS (default -50)" };
@@ -454,8 +470,10 @@ TOOLS.push({
     "end, clipped samples, and whether it clicks where it loops. A sound under 0.4 s is measured as one",
     "block of its own length.",
     "Music (8 s or more with a beat that repeats and keeps time) gets its tempo, from the onsets'",
-    "autocorrelation and a beat tracker, with the octave a listener could tap instead (half or double).",
-    "In JSON, bpm_alternatives scores each other reading against the pick, always under 1.",
+    "autocorrelation and a beat tracker, with the octave a listener could tap instead (half or double)",
+    "and any other reading that scores 0.8 of the pick or more, such as one at 3:2. On a near tie like",
+    "that, which reading is picked can change with the length of the excerpt. In JSON,",
+    "bpm_alternatives scores each other reading with support (0.05 or more) against the pick, under 1.",
     "Reads WAV and MP3 itself; OGG, FLAC and the rest through ffmpeg."
   ],
   flags: [THRESHOLD],
@@ -474,7 +492,7 @@ TOOLS.push({
     const copies = repeats(a);
     const clipped = clippedSamples(a);
     const beat = musicTempo(a, range);
-    const octave = beat && octaveOf(beat);
+    const others = beat ? readingsOf(beat) : [];
     const bpmText = (v: number) => String(+v.toFixed(1));
     const next =
       !range || lead + tail < a.rate / 50
@@ -504,10 +522,7 @@ TOOLS.push({
           ...(beat
             ? {
                 bpm: round(beat.bpm, 1),
-                bpm_alternatives: beat.alternatives
-                  .filter(x => x === octave || x.score >= 0.05)
-                  .sort((p, q) => q.score - p.score)
-                  .map(x => ({ bpm: round(x.bpm, 1), score: round(x.score) }))
+                bpm_alternatives: supported(beat).map(x => ({ bpm: round(x.bpm, 1), score: round(x.score) }))
               }
             : {}),
           ...(ctx.globals.quiet ? {} : { hint: next })
@@ -521,7 +536,7 @@ TOOLS.push({
       `  Loudness   ${dbText(loud.lufs, "LUFS")}${loud.short ? " (under 0.4 s: one block of its own length)" : ""}`,
       `  Peak       ${dbText(peak, "dBFS")}, true peak ${dbText(tp, "dBTP")}${clipped ? `, ${clipped} clipped samples` : ""}`,
       `  Silence    ${range ? `${(lead / a.rate).toFixed(2)} s at the start, ${(tail / a.rate).toFixed(2)} s at the end` : "all of it"} (under ${threshold} dBFS)`,
-      ...(beat ? [`  Tempo      ${bpmText(beat.bpm)} BPM${octave ? ` (or ${bpmText(octave.bpm)})` : ""}`] : []),
+      ...(beat ? [`  Tempo      ${bpmText(beat.bpm)} BPM${others.length ? ` (or ${others.map(x => bpmText(x.bpm)).join(", ")})` : ""}`] : []),
       `  Looping    ${copies > 1 ? `it is ${copies} copies of one ${(n / copies / a.rate).toFixed(2)} s stretch; ` : ""}${clicks ? "clicks where it wraps around" : "no click where it wraps around"}${src.loop ? `; its WAV loop runs ${(src.loop.start / a.rate).toFixed(2)}-${(src.loop.end / a.rate).toFixed(2)} s` : ""}`
     ];
     process.stdout.write(lines.join("\n") + "\n");
