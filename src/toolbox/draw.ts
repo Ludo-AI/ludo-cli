@@ -18,7 +18,7 @@ export function canvas(width: number, height: number, fill: Rgba): Image {
 }
 
 // Source-over of one colour, with its alpha scaled by `cover` (0-1).
-export function blend(img: Image, x: number, y: number, c: Rgba, cover = 1) {
+function blend(img: Image, x: number, y: number, c: Rgba, cover = 1) {
   if (x < 0 || y < 0 || x >= img.width || y >= img.height) return;
   const i = (y * img.width + x) * 4;
   const a = (c[3] / 255) * cover;
@@ -72,15 +72,6 @@ export function line(img: Image, x0: number, y0: number, x1: number, y1: number,
       err += dx;
       y0 += sy;
     }
-  }
-}
-
-// A thicker line: the 1-pixel one drawn again offset across its direction.
-export function thickLine(img: Image, x0: number, y0: number, x1: number, y1: number, c: Rgba, width: number) {
-  const steep = Math.abs(y1 - y0) > Math.abs(x1 - x0);
-  for (let k = -Math.floor((width - 1) / 2); k <= Math.floor(width / 2); k++) {
-    if (steep) line(img, x0 + k, y0, x1 + k, y1, c);
-    else line(img, x0, y0 + k, x1, y1 + k, c);
   }
 }
 
@@ -142,16 +133,6 @@ export function text(img: Image, x: number, y: number, s: string, c: Rgba, size 
     x += ADVANCE * size;
   }
   return x;
-}
-
-// Text on a box of `bg` with `pad` pixels around it, so a label reads on
-// any picture. Returns the box.
-export function label(img: Image, x: number, y: number, s: string, fg: Rgba, bg: Rgba, size = 1, pad = 2) {
-  const w = textWidth(s, size) + 2 * pad;
-  const h = textHeight(size) + 2 * pad;
-  fillRect(img, x, y, w, h, bg);
-  text(img, x + pad, y + pad, s, fg, size);
-  return { x, y, w, h };
 }
 
 // The longest prefix of `s` that fits `width` at `size`, with "..." when cut.
