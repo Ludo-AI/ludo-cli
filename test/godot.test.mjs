@@ -177,4 +177,6 @@ test("ludo toolbox sprite export --engine godot --pivot feet writes the scene to
   const out = JSON.parse((await promisify(execFile)(process.execPath, [cli, "toolbox", "sprite", "export", "stand.png", "--grid", "2x1", "--engine", "godot", "--pivot", "feet", "--json"], { env, cwd: dir })).stdout);
   assert.deepEqual(out.engine_files, ["stand.tres", "stand.tscn"]);
   assert.match(fs.readFileSync(path.join(dir, "stand.tscn"), "utf8"), /path="stand.tres"[^]*offset = Vector2\(0, -12\)/);
+  // One node per sheet: the output says when one AnimatedSprite2D can hold a character's moves.
+  assert.match(out.godot_scene, /one frame size and pivot/);
 });

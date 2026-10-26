@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,10 +12,11 @@ import { bodyBox, capsuleOf, components, convexHull, dilate, erode, framesLayout
 
 const CLI = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 
-function run(args) {
+// `text`: stdout taken for a terminal, for the text the tools print there.
+function run(args, { text = false } = {}) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-sprite-analysis-"));
   return new Promise(resolve => {
-    const child = spawn(process.execPath, [CLI, ...args], {
+    const child = spawn(process.execPath, [...(text ? ["--import", "data:text/javascript,process.stdout.isTTY=true"] : []), CLI, ...args, ...(text ? ["--plain"] : [])], {
       cwd,
       env: { ...process.env, LUDO_API_URL: "http://127.0.0.1:9", LUDO_API_KEY: "", LUDO_CONFIG_DIR: path.join(cwd, ".config"), LUDO_CACHE_DIR: path.join(cwd, ".cache"), LUDO_TELEMETRY: "0", CLAUDECODE: "", CLAUDE_CODE_ENTRYPOINT: "" }
     });
@@ -145,24 +147,36 @@ test("erosion, dilation and opening; the outline leaves specks out", () => {
   assert.deepEqual(capsuleOf({ x: 0, y: 0, w: 30, h: 10 }), { x: 15, y: 5, radius: 5, height: 30, direction: "horizontal" });
 });
 
-test("the body leaves out a raised spike and a sword held out, and keeps the feet", () => {
-  const [w, h] = [64, 100];
-  const m = new Uint8Array(w * h);
-  const set = (x0, y0, x1, y1) => {
+test("the body leaves out a blade, a spike and a pole beside it, and keeps a head on a thin neck and the feet", () => {
+  const [w, h] = [80, 100];
+  const fresh = () => new Uint8Array(w * h);
+  const set = (m, x0, y0, x1, y1) => {
     for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) m[y * w + x] = 1;
   };
-  set(10, 20, 30, 80); // the body, 20 x 60
-  set(30, 40, 60, 46); // a sword held out, 6 rows thick: too thick to open away, too few rows to widen the median
-  set(18, 5, 20, 20); // a 2 px spike raised over the head
-  set(12, 80, 16, 82); // a 4 x 2 foot, thinner than the opening
-  const bounds = measureFrame(m, w, h).bounds;
-  assert.deepEqual(bounds, { x: 10, y: 5, w: 50, h: 77 });
-  // Opening by 3% of 77 (2 px) takes the spike but its root (1 px over the
-  // head); the median row ignores the sword; the foot stays the bottom.
-  assert.deepEqual(bodyBox(m, w, h, 2), { x: 10, y: 19, w: 20, h: 63 });
+  const m = fresh();
+  set(m, 10, 30, 30, 80); // the body, 20 x 50
+  set(m, 14, 14, 26, 26); // a 12 x 12 head on a 2 px neck
+  set(m, 19, 26, 21, 30);
+  set(m, 30, 50, 60, 53); // a blade held out, 3 rows thick
+  set(m, 24, 4, 26, 14); // a 2 px spike raised over the head
+  set(m, 66, 20, 74, 82); // a pole beside it, 8 px wide, not touching it
+  set(m, 12, 80, 16, 82); // a 4 x 2 foot, thinner than the opening
+  assert.deepEqual(measureFrame(m, w, h).bounds, { x: 10, y: 4, w: 64, h: 78 });
+  // Opening by 2 takes the blade, the spike and the neck; the head is in the
+  // body's piece and stays, the pole is a piece of its own and goes; the
+  // foot stays the bottom. Where the blade meets the body the opening keeps
+  // a fillet, up to its radius wide (x 30-31).
+  assert.deepEqual(bodyBox(m, w, h, 2), { x: 10, y: 14, w: 22, h: 68 });
   // A floor (the ground line) keeps what hangs below it out.
-  assert.deepEqual(bodyBox(m, w, h, 2, 79), { x: 10, y: 19, w: 20, h: 61 });
-  assert.equal(bodyBox(new Uint8Array(w * h), w, h, 2), null);
+  assert.deepEqual(bodyBox(m, w, h, 2, 79), { x: 10, y: 14, w: 22, h: 66 });
+  // Under the opening's size everything is body: the whole piece.
+  assert.deepEqual(bodyBox(m, w, h, 0), { x: 10, y: 4, w: 50, h: 78 });
+  // A blade as thick as a limb counts as body (the limit the help states).
+  const thick = fresh();
+  set(thick, 10, 30, 30, 80);
+  set(thick, 30, 50, 60, 58);
+  assert.deepEqual(bodyBox(thick, w, h, 2), { x: 10, y: 30, w: 50, h: 50 });
+  assert.equal(bodyBox(fresh(), w, h, 2), null);
 });
 
 test("the frames' picture stays within its size, enlarges by whole factors and shrinks by any", () => {
@@ -193,8 +207,9 @@ test("metrics: bounds, body, ground, a pivot between the feet, and engine values
   assert.equal(out.ground.feet, "the feet are 6 px above the frame's bottom edge");
   assert.equal(out.character, true);
   assert.equal(out.frames[0].bounds.w, 40, "the art with its sword");
-  assert.deepEqual([out.frames[0].body.x, out.frames[0].body.w], [22, 20], "the body without it");
-  assert.equal(out.body.width, 20);
+  // The body without it, but for the fillet the opening leaves where it meets the body.
+  assert.deepEqual([out.frames[0].body.x, out.frames[0].body.w], [22, 21], "the body without it");
+  assert.equal(out.body.width, 21);
   assert.deepEqual(out.pivot, { ...out.pivot, x: 32, y: 58, kind: "feet" });
   assert.deepEqual(out.godot.offset, [32 - 32, 32 - 58]);
   assert.deepEqual(out.godot.uncentered.offset, [-32, -58]);
@@ -301,8 +316,9 @@ test("collide: a sword held out stays out of the box", async () => {
   const dir = tmp();
   const file = writeSheet(dir, "knight.png", range(4).map(t => figure(t, { sword: 20, bob: false })));
   const out = await json(["toolbox", "sprite", "collide", file]);
-  // The body is x 22-42 from the pivot at 32; the sword reaches to 62.
-  assert.deepEqual([out.shapes.box.x, out.shapes.box.w], [-10, 20]);
+  // The body is x 22-42 from the pivot at 32 (and a 1 px fillet where the
+  // sword meets it); the sword reaches to 62.
+  assert.deepEqual([out.shapes.box.x, out.shapes.box.w], [-10, 21]);
   assert.equal(out.hint.command, `ludo toolbox sprite export ${file} --engine unity --pivot feet --ppu 100`);
 });
 
@@ -374,6 +390,131 @@ test("compare: one character's sheets at one size share a pixels per unit; one d
   assert.equal((await run(["toolbox", "sprite", "compare", idle, "--reference", "nope.png=1.8m"])).code, EXIT.USAGE);
   assert.equal((await run(["toolbox", "sprite", "compare", idle, "--reference", "hero_idle.png=tall"])).code, EXIT.USAGE);
   assert.equal((await run(["toolbox", "sprite", "compare"])).code, EXIT.USAGE);
+});
+
+test("the feet pivot keeps to the body's columns: a spear planted beside the feet does not move it", async () => {
+  const dir = tmp();
+  const plain = writeSheet(dir, "plain.png", range(4).map(t => figure(t, { bob: false })));
+  const spear = writeSheet(dir, "spear.png", range(4).map(t => rect(figure(t, { bob: false }), 50, 10, 3, 48, [150, 100, 50])));
+  const a = await json(["toolbox", "sprite", "metrics", plain]);
+  const b = await json(["toolbox", "sprite", "metrics", spear]);
+  assert.equal(a.pivot.x, 32);
+  assert.deepEqual([b.pivot.x, b.pivot.y], [a.pivot.x, a.pivot.y]);
+  assert.ok(b.frames[0].body.x + b.frames[0].body.w <= 44, JSON.stringify(b.frames[0].body));
+});
+
+test("--pivot feet on a jump takes the feet from the frames on the ground; with none low in the frame it says so", async () => {
+  const dir = tmp();
+  // 8 frames, 2 on the ground (row 57), 6 in the air at different heights.
+  const heights = [0, 0, 6, 12, 18, 18, 12, 6];
+  const jump = writeSheet(dir, "frog_jump.png", heights.map((h, t) => figure(t, { rise: h, bob: false })));
+  const auto = await json(["toolbox", "sprite", "metrics", jump]);
+  assert.equal(auto.pivot.kind, "mass");
+  const feet = await json(["toolbox", "sprite", "metrics", jump, "--pivot", "feet"]);
+  assert.deepEqual([feet.pivot.x, feet.pivot.y, feet.pivot.kind], [32, 58, "feet"]);
+  assert.match(feet.pivot.why, /2 of 8 frames that reach its lowest row/);
+  // A spark high in the frame has no feet: the centre of mass, and what to pass.
+  const spark = writeSheet(dir, "spark.png", range(4).map(t => disc(blank(64, 64), 32, 12 + t, 6)));
+  const none = await json(["toolbox", "sprite", "metrics", spark, "--pivot", "feet"]);
+  assert.equal(none.pivot.kind, "mass");
+  assert.match(none.pivot.why, /--pivot feet asked, but no frame touches a ground line.*pass --pivot X,Y/);
+});
+
+test("collide --per-frame prints a line for each frame's box", async () => {
+  const dir = tmp();
+  const file = writeSheet(dir, "grow.png", [rect(blank(32, 32), 10, 20, 10, 10), rect(blank(32, 32), 6, 10, 20, 20)]);
+  const r = await run(["toolbox", "sprite", "collide", file, "--per-frame", "--pivot", "16,30", "--out", dir], { text: true });
+  assert.equal(r.code, EXIT.OK, r.stderr);
+  assert.match(r.stdout, /frame +1 +box 10x10 at -6, -10/);
+  assert.match(r.stdout, /frame +2 +box 20x20 at -10, -20/);
+});
+
+test("compare: a folder that only says where files are kept names no character, and sizes are not judged across them", async () => {
+  const dir = tmp();
+  const out = path.join(dir, "ludo-output");
+  fs.mkdirSync(out);
+  const knight = writeSheet(out, "animateSprite-aaaa1111-1.png", range(4).map(t => figure(t)));
+  const frog = writeSheet(out, "animateSprite-bbbb2222-1.png", range(4).map(doubled));
+  const r = await json(["toolbox", "sprite", "compare", knight, frog]);
+  assert.deepEqual(r.characters.map(c => c.character), [null]);
+  assert.equal(r.characters[0].consistent, undefined);
+  assert.match(r.characters[0].note, /--character/);
+  assert.match(r.hint.command, /--character <name>$/);
+  fs.mkdirSync(path.join(dir, "sprites"));
+  const walk = writeSheet(path.join(dir, "sprites"), "walk.png", range(4).map(t => figure(t)));
+  const named = await json(["toolbox", "sprite", "compare", walk, knight, "--character", "hero"]);
+  assert.equal(named.characters[0].character, "hero");
+});
+
+// A character drawn shorter in its frame: the same feet, the body's top lower.
+function shorter(t) {
+  const img = blank(64, 64);
+  rect(img, 22, 18, 20, 34);
+  rect(img, 23, 52, 6, 6, [60, 60, 140]);
+  rect(img, 35, 52, 6, 6, [60, 60, 140]);
+  return img;
+}
+
+// A Ludo download in its own folder with its asset log, as `ludo sprite animate --out <folder>` saves it.
+function ludoSheet(dir, folder, job, frames, body, made = new Date().toISOString()) {
+  const at = path.join(dir, folder);
+  fs.mkdirSync(at, { recursive: true });
+  const png = writeSheet(at, `${body.operation ?? "animateSprite"}-${job}-1.png`, frames);
+  const webp = path.join(at, `${body.operation ?? "animateSprite"}-${job}-1.webp`);
+  fs.writeFileSync(webp, `a sheet ${job}`);
+  const { operation, ...request } = body;
+  const entry = file => ({ file, command: operation === "adjustSpritesheet" ? "sprite adjust" : "sprite animate", operation_id: operation ?? "animateSprite", body: request, job_id: `${job}-0000`, created_at: made });
+  fs.writeFileSync(path.join(at, "ludo-assets.json"), JSON.stringify({ assets: [entry(path.basename(webp)), entry(path.basename(png))] }));
+  return { png, md5: crypto.createHash("md5").update(fs.readFileSync(webp)).digest("hex") };
+}
+
+test("compare reads the asset log: another input image, the same frame and ground (pose, not scale), the real spritesheet_url, adjust's 7 days", async () => {
+  const dir = tmp();
+  fs.mkdirSync(path.join(dir, "native"));
+  fs.writeFileSync(path.join(dir, "native", "hero_v1.png"), encodePng(rect(blank(8, 8), 0, 0, 8, 8)));
+  fs.writeFileSync(path.join(dir, "native", "hero_v2.png"), encodePng(rect(blank(8, 8), 0, 0, 4, 4)));
+  const v1 = { initial_image: "../native/hero_v1.png", motion_prompt: "walking", model: "forge-pixel", frame_size: -9 };
+  const walk = ludoSheet(dir, "hero_walk", "11111111", range(4).map(t => figure(t)), v1);
+  const idle = ludoSheet(dir, "hero_idle", "22222222", range(4).map(t => figure(t)), { ...v1, motion_prompt: "idle" });
+  const attack = ludoSheet(dir, "hero_attack", "33333333", range(4).map(shorter), { ...v1, initial_image: "../native/hero_v2.png", motion_prompt: "attack slash" });
+  const r = await json(["toolbox", "sprite", "compare", walk.png, idle.png, attack.png]);
+  const c = r.characters[0];
+  const a = c.sheets.find(x => x.sheet.endsWith("33333333-1.png"));
+  assert.equal(a.cause, "input_image");
+  assert.match(a.outlier, /another input image/);
+  assert.equal(a.fix, `ludo sprite animate --initial-image ${path.join(dir, "native", "hero_v1.png")} --motion-prompt "attack slash" --model forge-pixel --frame-size -9`);
+  assert.equal(r.hint.command, a.fix);
+  assert.equal(c.consistent, false);
+
+  // From the same image, at the same frame size and ground line: the pose.
+  const crouch = ludoSheet(dir, "hero_crouch", "44444444", range(4).map(shorter), { ...v1, motion_prompt: "crouch" });
+  const pose = await json(["toolbox", "sprite", "compare", walk.png, idle.png, crouch.png]);
+  const p = pose.characters[0].sheets.find(x => x.sheet.endsWith("44444444-1.png"));
+  assert.equal(p.cause, "pose");
+  assert.equal(p.fix, undefined);
+  assert.equal(pose.consistent, true);
+  // Without a log, the same frame and ground line: the pose or the input image, never a re-export.
+  const bare = path.join(dir, "bare");
+  fs.mkdirSync(bare);
+  const files = [writeSheet(bare, "hero_walk.png", range(4).map(t => figure(t))), writeSheet(bare, "hero_idle.png", range(4).map(t => figure(t))), writeSheet(bare, "hero_attack.png", range(4).map(shorter))];
+  const nolog = await json(["toolbox", "sprite", "compare", ...files]);
+  const n = nolog.characters[0].sheets[2];
+  assert.equal(n.cause, "pose_or_image");
+  assert.doesNotMatch(nolog.hint.command, /sprite adjust/);
+
+  // Drawn at another export scale: adjust with the URL on record, while it is under 7 days old.
+  const big = ludoSheet(dir, "hero_jump", "55555555", range(4).map(doubled), { initial_image: "../native/hero_v1.png", motion_prompt: "jump" });
+  ludoSheet(dir, "hero_jump_ts", "66666666", range(4).map(t => figure(t)), { operation: "adjustSpritesheet", spritesheet_url: `https://storage.googleapis.com/ludo-assets/api/${big.md5}.webp`, frame_size: 192 });
+  const scale = await json(["toolbox", "sprite", "compare", walk.png, idle.png, big.png]);
+  const s = scale.characters[0].sheets.find(x => x.sheet.endsWith("55555555-1.png"));
+  assert.equal(s.cause, "scale");
+  assert.equal(s.fix, `ludo sprite adjust --spritesheet-url https://storage.googleapis.com/ludo-assets/api/${big.md5}.webp --frame-size -9`);
+  // Older than adjust takes: animate it again at True Size.
+  const old = ludoSheet(dir, "hero_run", "77777777", range(4).map(doubled), { initial_image: "../native/hero_v1.png", motion_prompt: "run" }, "2020-01-01T00:00:00.000Z");
+  const late = await json(["toolbox", "sprite", "compare", walk.png, idle.png, old.png]);
+  const l = late.characters[0].sheets.find(x => x.sheet.endsWith("77777777-1.png"));
+  assert.match(l.outlier, /only takes spritesheets made in the last 7 days/);
+  assert.equal(l.fix, `ludo sprite animate --initial-image ${path.join(dir, "native", "hero_v1.png")} --motion-prompt "run" --frame-size -9`);
 });
 
 test("the tools are listed, have help, and the commands their hints name exist", async () => {
