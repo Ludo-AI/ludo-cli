@@ -12,9 +12,7 @@ import "./audio.js";
 import "./model.js";
 import "./sprite-analysis.js";
 import "./preview.js";
-import "./audio-analysis.js";
 import "./asset.js";
-import "./model-analysis.js";
 
 export { TOOLS } from "./registry.js";
 

@@ -12,8 +12,10 @@ import { hint, TOOLS, type ToolCall } from "./registry.js";
 // skins, morph targets), plus what a game needs to know before using it:
 // how many mesh instances the default scene draws, its size there (POSITION
 // bounds through the node transforms), each image's pixel size, each
-// animation's length, and the joints. test/model.test.mjs
-// checks the counts against glTF-Validator on Khronos's sample models.
+// animation's length, and the joints; then each clip run through the
+// skeleton (animationFacts). test/model.test.mjs checks the counts against
+// glTF-Validator on Khronos's sample models. The tool only reports: Ludo's
+// rigging and animation make the model, and nothing here changes it.
 
 export class ModelError extends Error {}
 
@@ -214,20 +216,490 @@ export function readAccessor(m: Loaded, index: number): { values: Float32Array; 
   return { values, size, count: a.count };
 }
 
+// ---- The scene graph
+
+type Vec = number[];
+type GNode = NonNullable<Gltf["nodes"]>[number];
+
+const sub = (a: Vec, b: Vec) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const dot = (a: Vec, b: Vec) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a: Vec, b: Vec) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const len = (a: Vec) => Math.hypot(a[0], a[1], a[2]);
+const unit = (a: Vec) => {
+  const l = len(a);
+  return l > 1e-12 ? a.map(v => v / l) : [0, 0, 0];
+};
+const flat = (a: Vec) => [a[0], 0, a[2]]; // onto the ground: glTF is +Y up
+const mean = (vs: Vec[]) => [0, 1, 2].map(k => vs.reduce((s, v) => s + v[k], 0) / Math.max(1, vs.length));
+const degrees = (rad: number) => (rad * 180) / Math.PI;
+const median = (xs: number[]) => {
+  if (!xs.length) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  return s.length % 2 ? s[s.length >> 1] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+};
+// "+Z" for the axis a direction is closest to.
+function axisOf(v: Vec): string {
+  let k = 0;
+  for (let a = 1; a < 3; a++) if (Math.abs(v[a]) > Math.abs(v[k])) k = a;
+  return `${v[k] < 0 ? "-" : "+"}${"XYZ"[k]}`;
+}
+
+export interface Graph {
+  parent: number[]; // -1 for a scene root, or a node the scene does not draw
+  depth: number[]; // -1 for nodes outside the default scene
+  order: number[]; // the scene's nodes, parents before children
+}
+
+export function sceneGraph(j: Gltf): Graph {
+  const nodes = j.nodes ?? [];
+  const parent: number[] = new Array(nodes.length).fill(-1);
+  const depth: number[] = new Array(nodes.length).fill(-1);
+  const order: number[] = [];
+  const walk = (n: number, p: number, d: number) => {
+    if (!nodes[n] || depth[n] >= 0 || d > 256) return;
+    parent[n] = p;
+    depth[n] = d;
+    order.push(n);
+    for (const c of nodes[n].children ?? []) walk(c, n, d + 1);
+  };
+  for (const r of j.scenes?.[j.scene ?? 0]?.nodes ?? []) walk(r, -1, 0);
+  return { parent, depth, order };
+}
+
+// Every scene node's world matrix, with `pose` standing in for the nodes an
+// animation moves (an animated node has TRS, never a matrix, by the spec).
+export function worldMatrices(j: Gltf, g: Graph, pose?: Map<number, GNode>): Mat[] {
+  const out: Mat[] = [];
+  for (const n of g.order) {
+    const l = local(pose?.get(n) ?? j.nodes![n]);
+    out[n] = g.parent[n] >= 0 ? multiply(out[g.parent[n]], l) : l;
+  }
+  return out;
+}
+
+const at = (w: Mat) => [w[12], w[13], w[14]];
+
+// ---- The rig: which joints are the feet, and which way the toes point
+
+// Bone names Ludo's joint namings use (SMPL, Mixamo, HumanIK, Unreal,
+// Godot, Rigify, VRoid) say the side as a word or a lone L or R: L_Foot,
+// LeftFoot, foot_l, foot.L, J_Bip_L_Foot.
+const sideOf = (name: string): "left" | "right" | undefined => {
+  if (/left/i.test(name) || /(^|[^A-Za-z])[Ll](?=[^A-Za-z]|$)|(^|[^A-Za-z])l(?=[A-Z])/.test(name)) return "left";
+  if (/right/i.test(name) || /(^|[^A-Za-z])[Rr](?=[^A-Za-z]|$)|(^|[^A-Za-z])r(?=[A-Z])/.test(name)) return "right";
+  return undefined;
+};
+const FOOT = /foot|ankle|toe|ball|heel/i;
+// Helper bones that sit at the feet without being them: IK targets, Rigify's
+// mechanism and original copies, Unreal's ik_foot_l.
+const HELPER = /(^|[^a-z])(ik|fk|ctrl|ctl|control|pole|target|mch|org|eye)([^a-z]|$)|eyeball/i;
+
+interface Foot {
+  label: string; // "left", "right", or "foot 1" when the names do not say
+  joints: number[]; // from the ankle down to the toe
+}
+
+// The skeleton's joints: the skins' joints, or for an animation-only file
+// (Ludo's animate returns a skeleton and a clip, no mesh) the nodes its
+// channels move and everything below them.
+export function skeletonJoints(j: Gltf, g: Graph): number[] {
+  const set = new Set<number>();
+  for (const s of j.skins ?? []) for (const n of s.joints) if (g.depth[n] >= 0) set.add(n);
+  if (!set.size) {
+    const moved = new Set((j.animations ?? []).flatMap(a => a.channels.map(c => c.target.node ?? -1)));
+    for (const n of g.order) if (j.nodes![n].mesh === undefined && (moved.has(n) || set.has(g.parent[n]))) set.add(n);
+  }
+  return g.order.filter(n => set.has(n));
+}
+
+const nameOf = (j: Gltf, n: number) => j.nodes?.[n]?.name ?? `node ${n}`;
+
+function ancestors(g: Graph, n: number): number[] {
+  const out: number[] = [];
+  for (let p = g.parent[n]; p >= 0; p = g.parent[p]) out.push(p);
+  return out;
+}
+
+// The feet: by name when the bones say left and right, else the chains of
+// joints in the bottom 15% of the skeleton (two for a biped, four for most
+// quadrupeds), each from its top joint (the ankle) down.
+function feetOf(j: Gltf, g: Graph, joints: number[], w: Mat[]): { feet: Foot[]; named: boolean } {
+  const chainOf = (cands: number[]) => {
+    const set = new Set(cands);
+    let best = cands[0];
+    let most = -1;
+    for (const c of cands) {
+      const count = ancestors(g, c).filter(a => set.has(a)).length;
+      if (count > most || (count === most && g.depth[c] > g.depth[best])) [best, most] = [c, count];
+    }
+    return [...ancestors(g, best).filter(a => set.has(a)).reverse(), best];
+  };
+  const named: Foot[] = [];
+  for (const side of ["left", "right"] as const) {
+    const cands = joints.filter(n => FOOT.test(nameOf(j, n)) && !HELPER.test(nameOf(j, n)) && sideOf(nameOf(j, n)) === side);
+    if (cands.length) named.push({ label: side, joints: chainOf(cands) });
+  }
+  if (named.length === 2) return { feet: named, named: true };
+  if (joints.length < 3) return { feet: [], named: false };
+  const ys = joints.map(n => w[n][13]);
+  const lo = Math.min(...ys);
+  const hi = Math.max(...ys);
+  if (hi - lo <= 1e-9) return { feet: [], named: false };
+  const low = new Set(joints.filter(n => w[n][13] <= lo + 0.15 * (hi - lo)));
+  const groups = new Map<number, number[]>();
+  for (const n of g.order) {
+    if (!low.has(n)) continue;
+    let top = n;
+    while (g.parent[top] >= 0 && low.has(g.parent[top])) top = g.parent[top];
+    groups.set(top, [...(groups.get(top) ?? []), n]);
+  }
+  const feet = [...groups.values()].map(c => chainOf(c));
+  return feet.length >= 2 ? { feet: feet.map((c, i) => ({ label: `foot ${i + 1}`, joints: c })), named: false } : { feet: [], named: false };
+}
+
+// Which way a rig faces, on the ground, when its feet say so clearly: its
+// toes point ahead of its ankles, and a character facing +Z has its left
+// side on +X (left x up = forward). Undefined when the toes and the sides
+// disagree, or unnamed feet point different ways.
+function rigForward(feet: Foot[], named: boolean, w: Mat[]): Vec | undefined {
+  const toes = feet.filter(f => f.joints.length >= 2).map(f => unit(flat(sub(at(w[f.joints[f.joints.length - 1]]), at(w[f.joints[0]])))));
+  const toe = toes.length ? unit(mean(toes)) : undefined;
+  const agree = toes.length >= 2 && toes.every(t => dot(t, toe!) > 0.7);
+  let side: Vec | undefined;
+  if (named) {
+    const left = mean(feet.find(f => f.label === "left")!.joints.map(n => at(w[n])));
+    const right = mean(feet.find(f => f.label === "right")!.joints.map(n => at(w[n])));
+    const across = flat(sub(left, right));
+    if (len(across) > 1e-9) side = unit(cross(across, [0, 1, 0]));
+  }
+  if (toe && len(toe) > 0.5 && side) return dot(toe, side) > 0.7 ? unit([toe[0] + side[0], 0, toe[2] + side[2]]) : undefined;
+  if (side) return side;
+  return toe && len(toe) > 0.5 && agree ? toe : undefined;
+}
+
+// ---- Animation sampling
+
+interface Channel {
+  node: number;
+  path: "translation" | "rotation" | "scale";
+  times: Float32Array;
+  values: Float32Array;
+  size: number;
+  interp: string;
+}
+
+function channelsOf(m: Loaded, a: NonNullable<Gltf["animations"]>[number]): Channel[] {
+  const out: Channel[] = [];
+  for (const c of a.channels) {
+    const path = c.target.path;
+    const s = a.samplers[c.sampler];
+    if (c.target.node === undefined || !s || (path !== "translation" && path !== "rotation" && path !== "scale")) continue;
+    out.push({ node: c.target.node, path, times: readAccessor(m, s.input).values, values: readAccessor(m, s.output).values, size: path === "rotation" ? 4 : 3, interp: s.interpolation ?? "LINEAR" });
+  }
+  return out;
+}
+
+const dot4 = (a: Vec, b: Vec) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+const norm4 = (a: Vec) => {
+  const l = Math.hypot(a[0], a[1], a[2], a[3]) || 1;
+  return a.map(v => v / l);
+};
+
+function slerp(a: Vec, b: Vec, u: number): Vec {
+  let d = dot4(a, b);
+  const bb = d < 0 ? b.map(v => -v) : b;
+  d = Math.abs(d);
+  if (d > 0.9995) return norm4(a.map((v, i) => v + (bb[i] - v) * u));
+  const th = Math.acos(d);
+  const s = Math.sin(th);
+  const wa = Math.sin((1 - u) * th) / s;
+  const wb = Math.sin(u * th) / s;
+  return a.map((v, i) => wa * v + wb * bb[i]);
+}
+
+// A channel's value at time t, interpolated as glTF 2.0 Appendix C says:
+// STEP holds, LINEAR lerps (slerps rotations), CUBICSPLINE is a Hermite curve
+// with its tangents stored either side of each value. Before the first key
+// and after the last, the end keys hold.
+export function sampleChannel(c: Pick<Channel, "times" | "values" | "size" | "interp" | "path">, t: number): Vec {
+  const n = c.times.length;
+  const cubic = c.interp === "CUBICSPLINE";
+  const get = (k: number, part = 1) => {
+    const o = cubic ? (k * 3 + part) * c.size : k * c.size;
+    return Array.from(c.values.subarray(o, o + c.size));
+  };
+  if (n === 0) return c.path === "rotation" ? [0, 0, 0, 1] : c.path === "scale" ? [1, 1, 1] : [0, 0, 0];
+  if (t <= c.times[0] || n === 1) return get(0);
+  if (t >= c.times[n - 1]) return get(n - 1);
+  let lo = 0;
+  let hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (c.times[mid] <= t) lo = mid;
+    else hi = mid;
+  }
+  const t0 = c.times[lo];
+  const dt = c.times[hi] - t0;
+  const u = dt > 0 ? (t - t0) / dt : 0;
+  if (c.interp === "STEP") return get(lo);
+  if (cubic) {
+    const p0 = get(lo);
+    const m0 = get(lo, 2);
+    const p1 = get(hi);
+    const m1 = get(hi, 0);
+    const u2 = u * u;
+    const u3 = u2 * u;
+    const v = p0.map((_, i) => (2 * u3 - 3 * u2 + 1) * p0[i] + (u3 - 2 * u2 + u) * dt * m0[i] + (-2 * u3 + 3 * u2) * p1[i] + (u3 - u2) * dt * m1[i]);
+    return c.path === "rotation" ? norm4(v) : v;
+  }
+  const a = get(lo);
+  const b = get(hi);
+  return c.path === "rotation" ? slerp(a, b, u) : a.map((v, i) => v + (b[i] - v) * u);
+}
+
+function poseAt(j: Gltf, chans: Channel[], t: number): Map<number, GNode> {
+  const pose = new Map<number, GNode>();
+  for (const c of chans) {
+    const rest = j.nodes![c.node];
+    const node = pose.get(c.node) ?? { translation: rest.translation, rotation: rest.rotation, scale: rest.scale };
+    node[c.path] = sampleChannel(c, t);
+    pose.set(c.node, node);
+  }
+  return pose;
+}
+
+const quatAngle = (a: Vec, b: Vec) => 2 * Math.acos(Math.min(1, Math.abs(dot4(norm4(a), norm4(b)))));
+
+// ---- What each clip does
+
+export interface ClipFacts {
+  still?: true; // every key holds one pose
+  returns_to_first_pose?: boolean; // no joint jumps more than a step from the last pose to the first
+  end_jump?: { joint: string; deg: number }; // when it does not: the worst joint's jump
+  root_motion?: { distance: number; axis: string; speed: number }; // only when it travels
+  move_speed?: { speed: number; axis: string; from: "planted feet" | "root motion"; range?: [number, number] };
+}
+
+// The clips that may be a gait, by name: walk_forward, Brisk Walk, h4_run.
+const LOCOMOTION = /(^|[^a-z])(walk|run|jog|sprint|strafe|march|sneak|crawl|backpedal|trot|gallop|locomot)/;
+const isLocomotion = (name: string) => LOCOMOTION.test(name.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase());
+
+const r4 = (v: number) => Math.round(v * 1e4) / 1e4 || 0;
+
+/**
+ * What each animation does, from its samplers run through the skeleton, and
+ * which way the skeleton faces. Lengths are in the model's units.
+ */
+export function animationFacts(m: Loaded): { facing?: { axis: string; turn_deg: number }; clips: ClipFacts[] } {
+  const j = m.json;
+  const g = sceneGraph(j);
+  const rest = worldMatrices(j, g);
+  const joints = skeletonJoints(j, g);
+  const { feet, named } = feetOf(j, g, joints, rest);
+  const restY = joints.map(n => rest[n][13]);
+  // The skeleton's height sets every tolerance, so they hold at any scale.
+  const tall = joints.length ? Math.max(...restY) - Math.min(...restY) : 0;
+  const fwd = feet.length >= 2 ? rigForward(feet, named, rest) : undefined;
+  return {
+    ...(fwd ? { facing: { axis: axisOf(fwd), turn_deg: Math.round(degrees(-Math.atan2(fwd[0], fwd[2]))) || 0 } } : {}),
+    clips: (j.animations ?? []).map((a, i) => clipFacts(m, g, a, a.name || `animation ${i}`, feet, tall))
+  };
+}
+
+function clipFacts(m: Loaded, g: Graph, a: NonNullable<Gltf["animations"]>[number], name: string, feet: Foot[], tall: number): ClipFacts {
+  const j = m.json;
+  const chans = channelsOf(m, a).filter(c => g.depth[c.node] >= 0);
+  const start = Math.min(...chans.map(c => c.times[0] ?? Infinity));
+  const end = Math.max(...chans.map(c => c.times[c.times.length - 1] ?? -Infinity));
+  if (!chans.length || !Number.isFinite(start) || end <= start) return { still: true };
+  const duration = end - start;
+  const moves = chans.some(c => {
+    const v = c.values;
+    const z = c.interp === "CUBICSPLINE" ? c.size : 0; // the first value, past its in-tangent
+    for (let k = z; k + c.size <= v.length; k += c.size) {
+      if (c.interp === "CUBICSPLINE" && (k / c.size) % 3 !== 1) continue;
+      if (c.path === "rotation" ? degrees(quatAngle(Array.from(v.subarray(z, z + 4)), Array.from(v.subarray(k, k + 4)))) > 0.1 : Math.hypot(...[0, 1, 2].map(i => v[k + i] - v[z + i])) > 1e-4 * (tall || 1)) return true;
+    }
+    return false;
+  });
+  if (!moves) return { still: true };
+  const main = chans.reduce((p, c) => (c.times.length > p.times.length ? c : p));
+  const keyDt = median(Array.from(main.times.subarray(1)).map((t, i) => t - main.times[i]));
+  const out: ClipFacts = {};
+
+  // The seam: the jump each joint's rotation makes from the last pose back
+  // to the first, against the steps it takes either side of it (the first
+  // and the last key intervals). Jumping no further than a step or two is a
+  // clean seam, as on a loop or a one-shot that ends at rest; which of the
+  // two it is, the clip's name says, not its keys.
+  const rots = chans.filter(c => c.path === "rotation");
+  if (rots.length && keyDt > 0) {
+    const h = Math.min(keyDt, duration / 10);
+    const per = rots.map(c => {
+      const seam = degrees(quatAngle(sampleChannel(c, end), sampleChannel(c, start)));
+      const step = (degrees(quatAngle(sampleChannel(c, start), sampleChannel(c, start + h))) + degrees(quatAngle(sampleChannel(c, end - h), sampleChannel(c, end)))) / 2;
+      return { c, seam, ratio: seam / Math.max(step, 0.5) };
+    });
+    const worst = per.reduce((p, q) => (q.ratio > p.ratio ? q : p));
+    out.returns_to_first_pose = per.every(p => p.seam < 1) || worst.ratio <= 2;
+    if (!out.returns_to_first_pose) out.end_jump = { joint: nameOf(j, worst.c.node), deg: Math.round(worst.seam) };
+  }
+
+  // Sample at the keys' own rate (at least 30 a second, at most 2000 in all).
+  const n = Math.min(2000, Math.max(2, Math.ceil(duration * Math.max(30, keyDt > 0 ? 1 / keyDt : 0)) + 1));
+  const dt = duration / (n - 1);
+  const worlds = Array.from({ length: n }, (_, k) => worldMatrices(j, g, poseAt(j, chans, start + k * dt)));
+
+  // Root motion: how the topmost animated joint travels over the ground
+  // (the hips, in Ludo's clips; a dedicated root bone, in Unreal's), as an
+  // engine's root-motion extraction reads it.
+  const animated = [...new Set(chans.map(c => c.node))];
+  const root = animated.reduce((p, q) => (g.depth[q] < g.depth[p] ? q : p));
+  const rootAt = worlds.map(w => at(w[root]));
+  const travel = flat(sub(rootAt[n - 1], rootAt[0]));
+  const inPlace = len(travel) < 0.03 * (tall || 1);
+  if (!inPlace) out.root_motion = { distance: r4(len(travel)), axis: axisOf(travel), speed: r4(len(travel) / duration) };
+  // A walk that turns (and so ends away from its first pose) has no one
+  // direction to give a speed along.
+  if (feet.length < 2 || !isLocomotion(name) || out.returns_to_first_pose === false) return out;
+
+  // Foot contacts. A joint of a foot is low while it is near the lowest it
+  // gets in the clip (within 30% of how high it lifts, kept between 1.5% and
+  // 5% of the skeleton's height) and barely moving up or down; a foot is
+  // down while one of its joints is low (the heel at heel strike, the ball at
+  // toe-off). Height alone is fooled by a foot that shuffles low through its
+  // swing, so a striding foot (one that swings well ahead of and behind the
+  // root) is also only down while it moves back against the root, as a
+  // planted foot does whether the clip travels or walks in place; any other
+  // foot only while it stays still.
+  const T = tall || 1;
+  const minRun = Math.max(2, Math.round(0.06 / dt));
+  const rate = (xs: number[], k: number) => {
+    const k0 = Math.max(0, k - 1);
+    const k1 = Math.min(n - 1, k + 1);
+    return (xs[k1] - xs[k0]) / ((k1 - k0) * dt);
+  };
+  const heights = feet.map(f => f.joints.map(nd => worlds.map(w => w[nd][13])));
+  const floors = heights.map(hs => hs.map(h => Math.min(...h)));
+  const reach = (ji: number) => Math.min(...floors.filter(fl => fl.length > ji).map(fl => fl[ji]));
+  const contacts = feet.map((f, fi) => {
+    const low: boolean[] = new Array(n).fill(false);
+    heights[fi].forEach((h, ji) => {
+      const floor = floors[fi][ji];
+      if (floor > reach(ji) + 0.05 * T) return; // never gets down to where the other feet do
+      const tol = Math.min(0.05 * T, Math.max(0.015 * T, 0.3 * (Math.max(...h) - floor)));
+      for (let k = 0; k < n; k++) if (h[k] <= floor + tol && Math.abs(rate(h, k)) <= 0.35 * T) low[k] = true;
+    });
+    const ball = f.joints[Math.min(1, f.joints.length - 1)];
+    // The foot against the root, on the ground, along the line it swings on.
+    const rel = worlds.map((w, k) => flat(sub(mean(f.joints.map(nd => at(w[nd]))), rootAt[k])));
+    const c = mean(rel);
+    let [sxx, szz, sxz] = [0, 0, 0];
+    for (const r of rel) {
+      sxx += (r[0] - c[0]) ** 2;
+      szz += (r[2] - c[2]) ** 2;
+      sxz += (r[0] - c[0]) * (r[2] - c[2]);
+    }
+    const theta = 0.5 * Math.atan2(2 * sxz, sxx - szz);
+    const axis = [Math.cos(theta), 0, Math.sin(theta)];
+    const along = rel.map(r => dot(r, axis));
+    const swing = Math.max(...along) - Math.min(...along);
+    const striding = swing > 0.08 * T;
+    const u = along.map((_, k) => rate(along, k));
+    let back = 0;
+    if (striding) {
+      let [neg, pos] = [0, 0];
+      for (let k = 0; k < n; k++) if (low[k]) u[k] < 0 ? neg++ : pos++;
+      back = neg >= pos ? -1 : 1;
+    }
+    const bx = worlds.map(w => w[ball][12]);
+    const bz = worlds.map(w => w[ball][14]);
+    const down = low.map((l, k) => l && (striding ? u[k] * back >= -0.02 * T : Math.hypot(rate(bx, k), rate(bz, k)) <= 0.1 * T));
+    // The point on the ground is whichever joint is lowest (the heel, then
+    // the ball), so a step's slide is that joint's, sample by sample.
+    const lowestAlong = heights[fi].map((_, ji) => {
+      const ja = worlds.map((w, k) => dot(flat(sub(at(w[f.joints[ji]]), rootAt[k])), axis));
+      return ja.map((_, k) => rate(ja, k));
+    });
+    const slideAt = (k: number) => {
+      let ji = 0;
+      for (let q = 1; q < heights[fi].length; q++) if (heights[fi][q][k] < heights[fi][ji][k]) ji = q;
+      return Math.abs(lowestAlong[ji][k]);
+    };
+    const runs: [number, number][] = [];
+    const bridge = Math.max(2, Math.round(0.12 / dt)); // a flicker inside one step is not two steps
+    for (let k = 0; k < n; k++) {
+      if (!down[k]) continue;
+      let e = k;
+      while (e + 1 < n && down[e + 1]) e++;
+      if (runs.length && k - runs[runs.length - 1][1] <= bridge) runs[runs.length - 1][1] = e;
+      else runs.push([k, e]);
+      k = e;
+    }
+    // A step the clip's start or end cuts short is part of one that wraps
+    // round, when the clip returns to its first pose.
+    const wraps = !!out.returns_to_first_pose && runs.length > 1 && runs[0][0] === 0 && runs[runs.length - 1][1] === n - 1;
+    const steps = runs
+      .filter(([s0, e], i) => e - s0 + 1 >= minRun || (wraps && (i === 0 || i === runs.length - 1)))
+      .map(([s0, e]) => {
+        const ks = Array.from({ length: e - s0 + 1 }, (_, i) => s0 + i);
+        return {
+          seconds: (e - s0) * dt,
+          cut: wraps && (s0 === 0 || e === n - 1),
+          slide: median(ks.map(slideAt)), // against the root
+          world: median(ks.map(k => Math.hypot(rate(bx, k), rate(bz, k)))), // over the ground
+          travel: Math.abs(along[e] - along[s0]) / (swing || 1) // of the swing
+        };
+      });
+    return { steps, rel, ahead: striding ? axis.map(v => -back * v) : undefined };
+  });
+  if (!contacts.every(c => c.steps.length)) return out;
+  const whole = contacts.flatMap(c => c.steps.filter(s0 => !s0.cut && s0.seconds > 0));
+  const all = whole.length ? whole : contacts.flatMap(c => c.steps.filter(s0 => s0.seconds > 0));
+  // Steps under half the usual length are a foot touching down, not a step.
+  const usual = median(all.map(s0 => s0.seconds));
+  const steps = all.filter(s0 => s0.seconds >= 0.5 * usual);
+  if (!steps.length) return out;
+  // A gait, not a dance, a jump or an attack: the feet take turns (one
+  // ahead while the other is behind, so their swings against the root run
+  // against each other), and a planted foot sweeps back through over a
+  // third of its swing.
+  const corr = (p: number[], q: number[]) => p.reduce((t, v, k) => t + v * q[k], 0) / Math.sqrt(p.reduce((t, v) => t + v * v, 0) * q.reduce((t, v) => t + v * v, 0) || 1);
+  const gait = (dir: Vec) => {
+    const along = contacts.map(c => {
+      const xs = c.rel.map(r => dot(r, dir));
+      const m0 = xs.reduce((t, v) => t + v, 0) / n;
+      return xs.map(v => v - m0);
+    });
+    return (contacts.length !== 2 || corr(along[0], along[1]) < -0.3) && contacts.every(c => Math.max(...c.steps.map(x => x.travel)) >= 0.35);
+  };
+  const speed = len(travel) / duration;
+  if (!inPlace) {
+    // Travelling, the clip's own speed is the one to move at, as long as
+    // its planted feet hold still on the ground while it does.
+    if (speed > 0.05 * T && gait(unit(travel)) && median(steps.map(s0 => s0.world)) <= 0.25 * speed) out.move_speed = { speed: r4(speed), axis: axisOf(travel), from: "root motion" };
+    return out;
+  }
+  // In place, a planted foot slides back at the speed the body should move:
+  // the character covers the ground the foot gives away.
+  if (!contacts.every(c => c.ahead)) return out;
+  const dirs = contacts.map(c => c.ahead!);
+  const dir = unit(mean(dirs));
+  const slides = steps.map(s0 => s0.slide);
+  const slide = median(slides);
+  if (dirs.every(d => dot(d, dir) > 0.7) && slide > 0.05 * T && gait(dir)) {
+    out.move_speed = { speed: r4(slide), axis: axisOf(dir), from: "planted feet", range: [r4(Math.min(...slides)), r4(Math.max(...slides))] };
+  }
+  return out;
+}
+
 export function modelInfo(m: Loaded) {
   const j = m.json;
   const acc = (i: number | undefined) => (i === undefined ? undefined : j.accessors?.[i]);
   // The nodes the default scene draws, with their world matrices.
-  const scene = j.scenes?.[j.scene ?? 0];
-  const drawn: { node: number; world: Mat }[] = [];
-  const walk = (n: number, parent: Mat, depth: number) => {
-    const node = j.nodes?.[n];
-    if (!node || depth > 256) return;
-    const world = multiply(parent, local(node));
-    drawn.push({ node: n, world });
-    for (const c of node.children ?? []) walk(c, world, depth + 1);
-  };
-  for (const n of scene?.nodes ?? []) walk(n, identity(), 0);
+  const g = sceneGraph(j);
+  const worlds = worldMatrices(j, g);
+  const drawn = g.order.map(node => ({ node, world: worlds[node] }));
 
   let primitives = 0;
   let vertices = 0;
@@ -317,6 +789,23 @@ export function modelInfo(m: Loaded) {
   };
 }
 
+// One clip in words: a still, or how its end meets its start, how it
+// travels, and for a walk or run the speed that keeps its feet planted.
+function clipLine(a: { name: string; seconds: number } & ClipFacts): string {
+  const said = a.still
+    ? ["a still: every key holds one pose"]
+    : [
+        a.returns_to_first_pose === undefined ? "" : a.returns_to_first_pose ? "returns to its first pose" : `ends ${a.end_jump!.deg}° from its first pose (${a.end_jump!.joint})`,
+        a.root_motion ? `travels ${+a.root_motion.distance.toFixed(3)} units along ${a.root_motion.axis}` : "",
+        a.move_speed
+          ? a.move_speed.from === "planted feet"
+            ? `move it at ${+a.move_speed.speed.toFixed(2)} units/s along ${a.move_speed.axis}, the median speed its planted feet slide back${a.move_speed.range![1] - a.move_speed.range![0] >= 0.005 ? ` (${a.move_speed.range!.map(v => v.toFixed(2)).join(" to ")} a step)` : ""}`
+            : `moves at ${+a.move_speed.speed.toFixed(2)} units/s along ${a.move_speed.axis}, its feet planted`
+          : ""
+      ].filter(Boolean);
+  return `  ${a.name} (${+a.seconds.toFixed(2)} s)${said.length ? `: ${said.join("; ")}` : ""}`;
+}
+
 TOOLS.push({
   group: "model",
   name: "info",
@@ -326,7 +815,13 @@ TOOLS.push({
     "Counts as Khronos's glTF-Validator does (primitives, vertices and triangles of every mesh, once),",
     "plus the mesh instances the scene draws, its size there (bounds through the node transforms), each",
     "texture's pixel size, the skeleton's joints and each animation's length. Reads .glb, and .gltf",
-    "with its buffers and images beside it or embedded."
+    "with its buffers and images beside it or embedded.",
+    "Each clip is run through the skeleton: whether it holds one pose, returns to its first pose (no",
+    "joint jumps more than a key's step from its last pose to its first; whether to loop it is for its",
+    "name to say) and travels (root motion). A walk or run, by its name and feet that take turns, gets",
+    "the speed to move it at: the median speed its planted feet slide back when it walks in place, or",
+    "its own speed when it travels. Lengths and speeds are in the model's units, as its size is. A",
+    "rigged model whose feet say which way it faces gets that facing."
   ],
   flags: [],
   async run(ctx: Ctx, call: ToolCall) {
@@ -340,24 +835,48 @@ TOOLS.push({
       throw err;
     }
     let info: ReturnType<typeof modelInfo>;
+    let facts: ReturnType<typeof animationFacts> | undefined;
     try {
-      info = modelInfo(readGltf(buf, file));
+      const m = readGltf(buf, file);
+      info = modelInfo(m);
+      try {
+        facts = animationFacts(m);
+      } catch (err) {
+        // Buffers it cannot read leave the counts, which need none.
+        if (!(err instanceof ModelError || err instanceof RangeError)) throw err;
+      }
     } catch (err) {
       if (err instanceof ModelError || err instanceof TypeError) throw new CliError(`Cannot read ${file} as a glTF model: ${err.message}`, EXIT.BAD_INPUT);
       throw err;
     }
-    const next = info.rigged
-      ? hint("Animate it with Ludo", `ludo model animate --model ${shown(file)} --prompt "<what it does>"`)
-      : hint("Rig it with Ludo, so it can be animated", `ludo model rig --model ${shown(file)}`);
+    const animations = info.animations.map((a, i) => ({ ...a, ...facts?.clips[i] }));
+    // A facing for the model a rig places, not for an animation file's skeleton.
+    const facing = info.rigged ? facts?.facing : undefined;
+    const skeleton = !info.meshes && info.animated; // an animation-only file: a skeleton and its clips
+    const next = skeleton
+      ? animations.some(a => a.still)
+        ? hint("A clip does not move; ask Ludo for another take", `ludo model animate --model <rigged model> --prompt "<what it does>"`)
+        : hint("Ask Ludo for more clips for the rigged model", `ludo model animate --model <rigged model> --prompt "<what it does>"`)
+      : info.rigged
+        ? hint("Animate it with Ludo", `ludo model animate --model ${shown(file)} --prompt "<what it does>"`)
+        : hint("Rig it with Ludo, so it can be animated", `ludo model rig --model ${shown(file)}`);
     if (ctx.jsonOut) {
-      printJson({ model: shown(file), bytes: buf.length, ...info, ...(ctx.globals.quiet ? {} : { hint: next }) }, false);
+      printJson({ model: shown(file), bytes: buf.length, ...info, animations, ...(facing ? { facing } : {}), ...(ctx.globals.quiet ? {} : { hint: next }) }, false);
     } else {
       const lines = [
         `${info.meshes} mesh${info.meshes === 1 ? "" : "es"} (${info.mesh_instances} drawn), ${info.primitives} primitive${info.primitives === 1 ? "" : "s"}, ${info.vertices} vertices, ${info.triangles} triangles`,
         ...(info.bounds ? [`Size ${info.bounds.size.map(v => +v.toFixed(3)).join(" x ")} (x, y, z)`] : []),
         `${info.materials} material${info.materials === 1 ? "" : "s"}, ${info.textures} texture${info.textures === 1 ? "" : "s"}${info.images.length ? ` (${info.images.map(i => ("width" in i ? `${i.width}x${i.height}` : "?")).join(", ")})` : ""}`,
-        info.rigged ? `Rigged: ${info.skins.map(s => `${s.joints} joints`).join(", ")}` : "Not rigged",
-        info.animated ? `Animations: ${info.animations.map(a => `${a.name} (${a.seconds} s)`).join(", ")}` : "No animations",
+        info.rigged ? `Rigged: ${info.skins.map(s => `${s.joints} joints`).join(", ")}` : skeleton ? "No mesh: a skeleton and its animations" : "Not rigged",
+        // glTF's front is +Z, which Godot keeps as Vector3.MODEL_FRONT.
+        ...(facing
+          ? [
+              facing.axis === "+Z" && Math.abs(facing.turn_deg) < 20
+                ? "Faces +Z, glTF's front (Godot's MODEL_FRONT); Godot's CharacterBody3D template moves along -Z, so turn it 180° under the body there"
+                : `Faces ${facing.axis}, not glTF's +Z front: turned ${facing.turn_deg}° on Y, it faces +Z`
+            ]
+          : []),
+        ...(info.animated ? [`Animations: ${animations.length}`, ...animations.map(clipLine)] : ["No animations"]),
         ...(info.morph_targets ? ["Has morph targets"] : []),
         ...(info.extensions_required.length ? [`Requires ${info.extensions_required.join(", ")}`] : [])
       ];
