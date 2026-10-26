@@ -8,6 +8,7 @@ import { CONFIDENT, guessGrid } from "./grid.js";
 import { loadImageFile, shown, type Loaded } from "./io.js";
 import { natural } from "./sprite.js";
 import { crop, frameRects } from "./sheet.js";
+import { contentBox, emptiness } from "./pixels.js";
 import { seams } from "./tiles.js";
 import { loadAudioFile } from "./audio-io.js";
 import { frames as sampleFrames, loopClicks, loudness, repeats, samplePeak, toDb, toMono } from "./sound.js";
@@ -302,8 +303,12 @@ function readImage(a: Asset, src: Loaded) {
   }
   // Up to 8 frames spread over the sheet, each hashed on its own: two
   // animations of one character start from the same pose and keep its
-  // silhouette, so only frame by frame do they differ.
-  a.phash = new Uint8Array(framesOf(img, grid, HASHED_FRAMES).flatMap(f => [...dHash(f)]));
+  // silhouette, so only frame by frame do they differ. They are hashed
+  // inside the box the art fills in all of them: a small figure in a big
+  // empty frame would leave most cells the same grey whatever its pose.
+  const hashed = framesOf(img, grid, HASHED_FRAMES);
+  const box = contentBox(hashed, emptiness(hashed, 127));
+  a.phash = new Uint8Array(hashed.flatMap(f => [...dHash(box ? crop(f, box) : f)]));
 }
 
 const HASHED_FRAMES = 8;
@@ -696,9 +701,11 @@ export interface Duplicate {
 }
 
 // Byte-identical files, then pictures that look the same: the same number
-// of frames of about the same shape, where no hashed frame differs in more
-// than 6 of its 64 bits (a re-encode, a resize, a PNG and its WebP). Two
-// moves of one character differ by 10 to 15 bits in some frames.
+// of frames of about the same shape, whose hashed frames differ in 6 of
+// their 64 bits or fewer on average and in no frame by more than 10 (a
+// re-encode, a PNG and its WebP, a copy at half size: up to 9 in a frame).
+// Two moves of one character share their first pose but differ by 15 to 18
+// bits in some frames, 11 to 13 on average.
 export function duplicatesOf(assets: Asset[]): Duplicate[] {
   const out: Duplicate[] = [];
   const bySha = new Map<string, Asset[]>();
@@ -714,8 +721,13 @@ export function duplicatesOf(assets: Asset[]): Duplicate[] {
       const [p, q] = [pics[i], pics[j]];
       if ((p.frames ?? 1) !== (q.frames ?? 1) || Math.abs(shape(p) / shape(q) - 1) > 0.03) continue;
       let d = 0;
-      for (let k = 0; k < p.phash!.length; k += 64) d = Math.max(d, hamming(p.phash!.subarray(k, k + 64), q.phash!.subarray(k, k + 64)));
-      if (d > 6) continue;
+      let total = 0;
+      for (let k = 0; k < p.phash!.length; k += 64) {
+        const n = hamming(p.phash!.subarray(k, k + 64), q.phash!.subarray(k, k + 64));
+        d = Math.max(d, n);
+        total += n;
+      }
+      if (d > 10 || total / (p.phash!.length / 64) > 6) continue;
       parent[find(j)] = find(i);
       worst.set(i, Math.max(worst.get(i) ?? 0, d));
       worst.set(j, Math.max(worst.get(j) ?? 0, d));

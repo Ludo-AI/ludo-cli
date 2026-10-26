@@ -270,6 +270,37 @@ test("unit: keys, characters, sound kinds and the difference hash", () => {
 
 // ---- --emit ----
 
+// A small figure in a big empty frame, its arm in another place in each
+// frame: `raise` lifts it, else it reaches forward. Two such sheets are two
+// moves of one character, not copies of one picture.
+function smallMoveSheet(raise) {
+  const [cols, rows, cw, ch] = [4, 2, 128, 128];
+  const width = cols * cw;
+  const height = rows * ch;
+  const rgba = new Uint8Array(width * height * 4);
+  const box = (x0, y0, w, h, c) => {
+    for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) rgba.set(c, (y * width + x) * 4);
+  };
+  for (let f = 0; f < cols * rows; f++) {
+    const [fx, fy] = [(f % cols) * cw, Math.floor(f / cols) * ch];
+    box(fx + 56, fy + 94, 16, 30, [70, 90, 160, 255]);
+    const t = f / (cols * rows - 1);
+    if (raise) box(fx + 72, fy + Math.round(94 - 50 * t), 10, 50, [220, 200, 60, 255]);
+    else box(fx + 72, fy + 98, Math.round(10 + 50 * t), 10, [220, 200, 60, 255]);
+  }
+  return { width, height, rgba };
+}
+
+test("two moves of a small figure in big frames are not taken for copies", async () => {
+  const dir = tmp();
+  const grid = { cols: 4, rows: 2, frames: 8, fps: 10 };
+  writeSheet(path.join(dir, "knight_attack.png"), smallMoveSheet(true), grid);
+  writeSheet(path.join(dir, "knight_reach.png"), smallMoveSheet(false), grid);
+  const r = await run(["toolbox", "asset", "manifest", dir]);
+  assert.equal(r.code, EXIT.OK, r.stderr);
+  assert.deepEqual(r.json.duplicates, []);
+});
+
 test("--emit writes Phaser, PixiJS and JSON loaders with stable keys, one file of each set of duplicates", async () => {
   const dir = gameFolder();
   const out = path.join(tmp(), "gen");
