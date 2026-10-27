@@ -5,6 +5,7 @@ import { noteInput } from "../telemetry.js";
 import { decodeWav, encodeWav, isWav, WavError, type Audio } from "./wav.js";
 import { decodeMp3, isMp3, Mp3Error } from "./mp3.js";
 import { FFMPEG_INSTALL, haveFfmpeg, needFfmpeg, run } from "./video.js";
+import { readInput } from "./read-file.js";
 
 // Reading and writing the audio tools' files. WAV is read and written
 // in-process and MP3 read in-process (mp3.ts); every other format crosses
@@ -26,16 +27,7 @@ export interface LoadedAudio {
   loop?: { start: number; end: number }; // a WAV's smpl loop
 }
 
-function readFile(file: string): Buffer {
-  try {
-    return fs.readFileSync(file);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") throw new CliError(`File not found: ${file}`, EXIT.USAGE);
-    if (code === "EISDIR") throw new CliError(`${file} is a folder, not a sound`, EXIT.USAGE);
-    throw err;
-  }
-}
+const readFile = (file: string): Buffer => readInput(file, "a sound");
 
 const tooLong = (file: string, samples?: number) =>
   new CliError(`${file} is too long: ${samples ? `${samples} samples is ` : ""}over ${MAX_AUDIO_SAMPLES} samples (10 minutes of 48 kHz stereo)`, EXIT.BAD_INPUT, "Cut it into shorter files first.");

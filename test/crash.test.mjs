@@ -16,6 +16,12 @@ test("scrub removes home paths, user paths and URL query strings", () => {
   assert.equal(scrub("Cannot read properties of undefined (reading 'id')"), "Cannot read properties of undefined (reading 'id')");
 });
 
+test("scrub blanks the paths of any failed file operation, relative ones too (LUDO-CLI-A)", () => {
+  assert.equal(scrub("ENAMETOOLONG: name too long, open 'walk cycle.glb idle.glb'"), "ENAMETOOLONG: name too long, open '<path>'");
+  assert.equal(scrub("ELOOP: too many symbolic links encountered, open 'loop/a.png'"), "ELOOP: too many symbolic links encountered, open '<path>'");
+  assert.equal(scrub("EXDEV: cross-device link not permitted, rename 'a.png' -> 'b.png'"), "EXDEV: cross-device link not permitted, rename '<path>' -> '<path>'");
+});
+
 test("stack frames keep only the CLI's own files", () => {
   const stack = [
     "TypeError: boom",

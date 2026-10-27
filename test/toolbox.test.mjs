@@ -100,6 +100,24 @@ test("an API that hangs costs a toolbox command at most the telemetry timeout", 
   assert.ok(hanging.ms - quiet.ms < 2000, `${hanging.ms} ms vs ${quiet.ms} ms`);
 });
 
+test("a file that won't open is a usage error that says why, never a crash (LUDO-CLI-A)", async () => {
+  // Several files in one quoted argument: one long name.
+  const many = Array.from({ length: 14 }, (_, i) => `${"walk-cycle-take-".repeat(2)}${i}.glb`).join(" ");
+  for (const args of [["model", "info", many], ["image", "trim", many], ["audio", "info", many]]) {
+    const r = await run(["toolbox", ...args]);
+    assert.equal(r.code, EXIT.USAGE, `${args[1]}: ${r.stderr}`);
+    assert.match(r.stderr, /^Error: (File not found|Cannot open)/, args[1]);
+    assert.match(r.stderr, /Give each file as its own argument/, args[1]);
+    assert.doesNotMatch(r.stderr, /crash report|    at /, args[1]);
+  }
+  // Through a file as if it were a folder.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-open-"));
+  fs.writeFileSync(path.join(dir, "a.glb"), "x");
+  const r = await run(["toolbox", "model", "info", path.join(dir, "a.glb", "b.glb")]);
+  assert.equal(r.code, EXIT.USAGE, r.stderr);
+  assert.match(r.stderr, process.platform === "win32" ? /File not found|Cannot open/ : /Cannot open .*: part of the path is not a folder/);
+});
+
 test("an unknown group is a usage error that lists the groups", async () => {
   const { code, stderr } = await run(["toolbox", "nope"]);
   assert.equal(code, EXIT.USAGE);

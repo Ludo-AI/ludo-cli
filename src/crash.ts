@@ -58,8 +58,9 @@ export function scrub(text: string): string {
   if (key && key.length >= 16) out = out.split(key).join("[api-key]");
   // Keys in any other shape: CLI keys, 64-hex keys, Authorization values.
   out = out.replace(/ludo_[A-Za-z0-9_-]{20,}/g, "[api-key]").replace(/\b[0-9a-f]{64}\b/gi, "[api-key]").replace(/ApiKey \S+/g, "ApiKey [api-key]");
-  // The operand of a failed file operation, relative paths included.
-  out = out.replace(/(ENOENT|EACCES|EISDIR|ENOTDIR|EPERM)([^']*)'[^']*'/g, "$1$2'<path>'");
+  // The operands of any failed file operation ("ENAMETOOLONG: name too long,
+  // open 'walk cycle.glb'", a rename's second path too), relative ones included.
+  out = out.replace(/\b(E[A-Z]{2,}): ([^'\n]*)'[^'\n]*'(?: -> '[^'\n]*')?/g, (m, code, mid) => `${code}: ${mid}'<path>'${m.includes("' -> '") ? " -> '<path>'" : ""}`);
   const home = os.homedir();
   if (home) out = out.split(home).join("~");
   // JSON.parse quotes the text it choked on, which may be a response or a user's file.

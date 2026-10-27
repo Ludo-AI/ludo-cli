@@ -13,6 +13,7 @@ import { EXTRUDE_KEY, parseExtrude, parseTrim, TRIM_KEY, type Trim } from "./pix
 import { ENGINE_FILE, writeEngineFile, type EngineOptions } from "../tty/engines.js";
 import type { Ctx } from "../generate.js";
 import { noteInput } from "../telemetry.js";
+import { readInput } from "./read-file.js";
 
 // Reading and writing the toolbox's files. The image work stays in pure
 // functions; this is the only place that touches the disk.
@@ -36,15 +37,7 @@ export interface Layout {
 const KEEP = new Set(["gAMA", "cHRM", "sRGB", "iCCP", "pHYs"]);
 
 export function loadImageFile(file: string): Loaded {
-  let buf: Buffer;
-  try {
-    buf = fs.readFileSync(file);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") throw new CliError(`File not found: ${file}`, EXIT.USAGE);
-    if (code === "EISDIR") throw new CliError(`${file} is a folder, not an image`, EXIT.USAGE);
-    throw err;
-  }
+  let buf = readInput(file, "an image");
   if (isGif(buf)) {
     noteInput("gif", false);
     return loadGif(file, buf);

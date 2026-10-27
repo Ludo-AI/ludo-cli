@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { encodePng, readPng, type Image } from "../tty/png.js";
+import { readInput } from "./read-file.js";
 
 // Palettes in the files pixel artists trade (the ones Lospec exports):
 //  - .hex: one rrggbb a line (Lospec's HEX file).
@@ -128,7 +129,7 @@ export function loadPalette(spec: string): Colour[] {
     if (PALETTE_EXTENSIONS.includes(ext) || /[\\/]/.test(spec)) throw new PaletteError(`File not found: ${spec}`);
     return parseHexList(spec);
   }
-  const buf = fs.readFileSync(spec);
+  const buf = readInput(spec, "a palette");
   if (ext === ".png") return coloursOf([readPng(buf).image]).map(c => c.colour);
   return parsePalette(buf.toString("utf8"), ext);
 }

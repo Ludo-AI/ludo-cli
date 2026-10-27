@@ -9,6 +9,7 @@ import { baseOf, loadImageFile, shown, type Loaded } from "./io.js";
 import { crop, joinFrames, sliceSheet } from "./sheet.js";
 import { frameFiles, resolveGrid } from "./sprite.js";
 import type { ToolCall } from "./registry.js";
+import { readInput } from "./read-file.js";
 
 // What `sprite pack` and `sprite sequence` share: their inputs (sheets or
 // folders of frames, one animation each), picking an animation in a flag by
@@ -169,12 +170,12 @@ export function manifestPath(dir: string, input: string): string {
 
 /** A manifest written by `ludo toolbox <tool>`, checked enough to re-run. */
 export function readManifest<M extends { ludo: string; version: number; animations: SavedAnimation[] }>(file: string, tool: string, version: number, what: string): M {
+  const text = readInput(file, `a ${what} manifest`).toString("utf8");
   let m: M;
   try {
-    m = JSON.parse(fs.readFileSync(file, "utf8"));
+    m = JSON.parse(text);
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    throw new CliError(code === "ENOENT" ? `File not found: ${file}` : `Cannot read ${file}: ${(err as Error).message}`, code === "ENOENT" ? EXIT.USAGE : EXIT.BAD_INPUT);
+    throw new CliError(`Cannot read ${file}: ${(err as Error).message}`, EXIT.BAD_INPUT);
   }
   const ok =
     m &&

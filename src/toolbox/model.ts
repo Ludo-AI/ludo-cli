@@ -4,6 +4,7 @@ import { CliError, EXIT } from "../errors.js";
 import { printJson, type Ctx } from "../generate.js";
 import { shown } from "./io.js";
 import { hint, TOOLS, type ToolCall } from "./registry.js";
+import { readInput } from "./read-file.js";
 
 // What is in a glTF 2.0 model (.glb, or .gltf with its buffers), read from
 // its JSON as the spec (Khronos glTF 2.0) lays it out: the counts Khronos's
@@ -930,13 +931,7 @@ TOOLS.push({
   async run(ctx: Ctx, call: ToolCall) {
     if (call.args.length !== 1) throw new CliError("Usage: ludo toolbox model info <model.glb>", EXIT.USAGE);
     const file = call.args[0];
-    let buf: Buffer;
-    try {
-      buf = fs.readFileSync(file);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") throw new CliError(`File not found: ${file}`, EXIT.USAGE);
-      throw err;
-    }
+    const buf = readInput(file, "a model");
     let info: ReturnType<typeof modelInfo>;
     let facts: ReturnType<typeof animationFacts> | undefined;
     try {
