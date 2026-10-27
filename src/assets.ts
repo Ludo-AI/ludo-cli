@@ -29,6 +29,10 @@ export interface AssetEntry {
   job_id?: string;
   credits?: number;
   created_at: string;
+  // The generation's result URLs by field (spritesheet_url, video_url,
+  // audio_url...), so a later step can name the real one. They expire 7 days
+  // after created_at, as every API result does.
+  result_urls?: Record<string, string>;
   variation_set?: string;
   variation?: number;
   // false when the request is unknown (saved by `ludo jobs wait`).

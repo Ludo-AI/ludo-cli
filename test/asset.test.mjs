@@ -594,16 +594,31 @@ const writeJson = (file, value) => {
 };
 // One Ludo download as the CLI saves it: the sheet (stamped), its video, its
 // sound when it has one, and the asset log beside them.
-function download(dir, folder, { op = "animateSprite", job, model, days = 0, sound = false, cols = 4, hue = 0 }) {
+function download(dir, folder, { op = "animateSprite", job, model, days = 0, sound = false, cols = 4, hue = 0, urls }) {
   const at = path.join(dir, folder);
   const files = [`${op}-${job}-1.png`, `${op}-${job}-2.mp4`, ...(sound ? [`${op}-${job}-3.wav`] : [])];
   writeSheet(path.join(at, files[0]), figureSheet({ cols, rows: 1, hue }), { cols, rows: 1, frames: cols, fps: 10 });
   fs.writeFileSync(path.join(at, files[1]), "not really a video");
   if (sound) writeSound(path.join(at, files[2]), { seconds: 0.3, kind: "blip" });
   const created_at = new Date(Date.now() - days * DAY).toISOString();
-  writeJson(path.join(at, "ludo-assets.json"), { assets: files.map(file => ({ file, command: "sprite animate", operation_id: op, body: model ? { model } : {}, job_id: `${job}-0000-0000-0000-000000000000`, created_at })) });
+  writeJson(path.join(at, "ludo-assets.json"), { assets: files.map(file => ({ file, command: "sprite animate", operation_id: op, body: model ? { model } : {}, job_id: `${job}-0000-0000-0000-000000000000`, created_at, ...(urls ? { result_urls: urls } : {}) })) });
   return at;
 }
+
+test("a sheet without its sound gets create-audio with the video_url the asset log keeps", async () => {
+  const dir = tmp();
+  const video = "https://storage.googleapis.com/ludo-assets/api/0123456789abcdef0123456789abcdef.mp4";
+  download(dir, "hero-walk", { job: "1a2b3c4d", model: "forge", urls: { spritesheet_url: "https://storage.googleapis.com/ludo-assets/api/fedcba9876543210fedcba9876543210.webp", video_url: video } });
+  const r = await run(["toolbox", "asset", "manifest", dir]);
+  assert.equal(r.code, EXIT.OK, r.stderr);
+  const gap = r.json.gaps.find(g => g.kind === "sound");
+  assert.equal(gap.hint.command, `ludo sprite create-audio --spritesheet-video-url ${video}`);
+  // Past create-audio's 7 days the URL has expired, and is not offered.
+  const old = tmp();
+  download(old, "hero-walk", { job: "1a2b3c4d", model: "forge", days: 10, urls: { video_url: video } });
+  const stale = (await run(["toolbox", "asset", "manifest", old])).json.gaps.find(g => g.kind === "sound");
+  assert.doesNotMatch(stale.hint.command, /create-audio/);
+});
 
 test("loaders keep sheets that only look alike: distinct moves of one small character all load", async () => {
   const dir = tmp();

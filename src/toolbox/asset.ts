@@ -514,8 +514,9 @@ function fromLog(file: string, record: string, out: Map<string, Made>) {
     const created = Date.parse(e.created_at);
     const at = path.resolve(dir, e.file);
     const job = out.get(at); // a job record of the same file keeps what the log does not
+    const logged = typeof e.result_urls?.video_url === "string" ? { url: e.result_urls.video_url, record } : undefined;
     out.set(at, {
-      ...(job?.video ? { video: job.video } : {}),
+      ...(job?.video ? { video: job.video } : logged ? { video: logged } : {}),
       operation: e.operation_id,
       ...(e.job_id ? { job: e.job_id } : {}),
       ...(Number.isFinite(created) ? { created } : {}),

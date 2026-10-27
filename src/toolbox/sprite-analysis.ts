@@ -1432,7 +1432,7 @@ class AssetLogs {
         out.motion_prompt = typeof b.motion_prompt === "string" ? b.motion_prompt : undefined;
         out.model = typeof b.model === "string" ? b.model : undefined;
         out.made = at.entry.created_at;
-        if (!out.url) out.url = this.urlOf(at.entry, at.dir, file);
+        if (!out.url) out.url = at.entry.result_urls?.spritesheet_url ?? this.urlOf(at.entry, at.dir, file);
         break;
       }
       const src = typeof b.spritesheet_url === "string" ? b.spritesheet_url : undefined;

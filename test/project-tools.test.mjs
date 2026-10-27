@@ -245,6 +245,15 @@ test("a request whose price is unknown is refused under a limit unless --force",
   assert.equal(seen.slice(from).filter(s => s.method === "POST").length, 0);
 });
 
+test("the asset log keeps a generation's result URLs, for later steps that need them", async () => {
+  const cwd = tmp();
+  fs.writeFileSync(path.join(cwd, ".ludo.json"), "{}");
+  const r = await run(["audio", "sound-effect", "--description", "boom"], { cwd });
+  assert.equal(r.code, 0, r.stderr);
+  const [entry] = JSON.parse(fs.readFileSync(path.join(cwd, "ludo-assets.json"), "utf8")).assets;
+  assert.match(entry.result_urls.url, /^http:\/\/127\.0\.0\.1:\d+\/files\/.+\.mp3$/);
+});
+
 test("every saved file is logged, and ludo assets redo runs the same request with overrides", async () => {
   const cwd = tmp();
   fs.writeFileSync(path.join(cwd, ".ludo.json"), "{}");

@@ -308,6 +308,16 @@ export function directionsOf(result: any): Map<string, string> {
   return found;
 }
 
+// A result's own URL fields (spritesheet_url, video_url...), for the asset log.
+// Only a single result's top-level fields: a list of directions or variations
+// is not one sheet's.
+export function resultUrls(result: unknown): Record<string, string> | undefined {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(result)) if (/(^|_)url$/.test(k) && typeof v === "string" && /^https?:\/\//.test(v) && v.length < 2048) out[k] = v;
+  return Object.keys(out).length ? out : undefined;
+}
+
 // Records what a finished job spent and the files it saved.
 function bookkeep(ctx: Ctx, job: any, saved: SavedResult, prep?: Prepared, variationSet?: string) {
   noteJob(job.id, job.credits_charged);
@@ -322,6 +332,7 @@ function bookkeep(ctx: Ctx, job: any, saved: SavedResult, prep?: Prepared, varia
     const logDir = path.dirname(log);
     const fileFields = prep ? prep.command.fields.filter(f => f.isFile && f.in === "body").map(f => f.name) : [];
     const created = new Date().toISOString();
+    const urls = resultUrls(job.result);
     const entries: AssetEntry[] = saved.files.map(f => ({
       file: path.relative(logDir, path.resolve(f.path)),
       command: prep?.label || job.task_type || "job",
@@ -332,6 +343,7 @@ function bookkeep(ctx: Ctx, job: any, saved: SavedResult, prep?: Prepared, varia
       job_id: job.id,
       credits: typeof job.credits_charged === "number" ? job.credits_charged : undefined,
       created_at: created,
+      ...(urls ? { result_urls: urls } : {}),
       ...(variationSet ? { variation_set: variationSet, variation: f.variation } : {})
     }));
     appendAssets(log, entries);
