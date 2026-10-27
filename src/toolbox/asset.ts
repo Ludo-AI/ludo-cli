@@ -654,10 +654,13 @@ export interface Group {
   animations: { path: string; action: string | null; take?: number; variant?: string; frames: number; frame_width: number; frame_height: number }[];
 }
 
-// Sheets of one character: the same words once the move is taken out, and
-// frames of about the same height (within 25%: a take redrawn larger is
-// still the character; a sheet twice as tall is something else). A PNG and
-// the WebP of one download count once, as the PNG.
+// Sheets of one character: the same words once the move is taken out. Two
+// or more sheets of about one frame height (within 25%) and two or more of
+// another are two sets of the character, drawn at two sizes; a lone sheet
+// of another height joins the nearest set, since Ludo crops each move's
+// frames to the move (a jump is taller than a run), and the gaps count it
+// as the character's too. A PNG and the WebP of one download count once,
+// as the PNG.
 export function groupsOf(assets: Asset[], plan?: LoadPlan): Group[] {
   const by = new Map<string, Asset[]>();
   for (const a of assets) {
@@ -675,11 +678,19 @@ export function groupsOf(assets: Asset[], plan?: LoadPlan): Group[] {
       if (last && a.grid!.frame_height <= last[0].grid!.frame_height * 1.25) last.push(a);
       else clusters.push([a]);
     }
+    const sets = clusters.filter(c => c.length >= 2);
+    if (!sets.length && list.length >= 2) sets.push(sorted);
+    const height = (c: Asset[]) => c[0].grid!.frame_height;
     for (const c of clusters) {
-      if (c.length < 2) continue;
+      if (c.length >= 2 || !sets.length || sets.includes(sorted)) continue;
+      const h = height(c);
+      const nearest = sets.reduce((a, b) => (Math.abs(Math.log(h / height(b))) < Math.abs(Math.log(h / height(a))) ? b : a));
+      nearest.push(c[0]);
+    }
+    for (const c of sets) {
       const median = (vs: number[]) => vs.sort((x, y) => x - y)[Math.floor(vs.length / 2)];
       out.push({
-        character: clusters.filter(x => x.length >= 2).length > 1 ? `${character}_${c[0].grid!.frame_height}px` : character,
+        character: sets.length > 1 ? `${character}_${height(c)}px` : character,
         frame_width: median(c.map(a => a.grid!.frame_width)),
         frame_height: median(c.map(a => a.grid!.frame_height)),
         animations: c

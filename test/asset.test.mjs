@@ -742,6 +742,27 @@ test("directions, loops and takes stay one character, and two characters are no 
   assert.deepEqual((await run(["toolbox", "asset", "manifest", two])).json.gaps, []);
 });
 
+test("a move whose frames are taller than the rest stays in its character's group", async () => {
+  const dir = tmp();
+  const sheet = (name, ch, hue) => writeSheet(path.join(dir, name), figureSheet({ cols: 4, rows: 1, ch, figH: Math.round(ch * 0.6), hue }), { cols: 4, rows: 1, frames: 4, fps: 8 });
+  // Ludo crops each move to its frames: the frog's jump is a third taller
+  // than its run, Tali's slash half as tall as her idle.
+  sheet("frog/idle.png", 57, 0);
+  sheet("frog/run.png", 66, 20);
+  sheet("frog/jump.png", 88, 40);
+  sheet("tali/idle.png", 63, 60);
+  sheet("tali/jump.png", 60, 80);
+  sheet("tali/slash.png", 28, 100);
+  // Two sets at two sizes stay two groups.
+  for (const [move, ch] of [["idle", 40], ["walk", 42], ["idle_big", 120], ["walk_big", 124]]) sheet(`ogre/${move}.png`, ch, 120);
+  const r = await run(["toolbox", "asset", "manifest", dir]);
+  assert.equal(r.code, EXIT.OK, r.stderr);
+  const moves = Object.fromEntries(r.json.groups.map(g => [g.character, g.animations.map(a => a.action).sort().join(" ")]));
+  assert.equal(moves.frog, "idle jump run");
+  assert.equal(moves.tali, "idle jump slash");
+  assert.deepEqual(Object.keys(moves).filter(k => k.startsWith("ogre")).sort(), ["ogre_120px", "ogre_40px"]);
+});
+
 test("no rig suggested for a GLB whose rigged copy is here, by its geometry or the log", async () => {
   const dir = tmp();
   writeGltf(path.join(dir, "knight.glb"), { height: 1.8 });
