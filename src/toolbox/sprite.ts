@@ -405,7 +405,8 @@ TOOLS.push({
   details: [
     "The files go next to the sheet, which they refer to by name: keep them side by side.",
     "  --engine texturepacker  a JSON atlas (TexturePacker's JSON Hash) for PixiJS (Assets.load,",
-    "                          sheet.animations) and Phaser (load.atlas, anims.createFromAseprite)",
+    "                          sheet.animations) and Phaser (load.aseprite, then anims.createFromAseprite;",
+    "                          load.atlas loads the frames without the animation)",
     "  --engine godot          a Godot 4 SpriteFrames .tres for an AnimatedSprite2D",
     "  --engine unity          the sheet's .png.meta, which imports it sliced into one sprite per frame,",
     "                          and an .anim clip that plays them on a SpriteRenderer (in a Unity project,",
