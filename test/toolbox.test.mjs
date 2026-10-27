@@ -117,7 +117,7 @@ test("a toolbox event says what it read and what it suggested, never names or va
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-facts-"));
   const sheet = writeSheet(dir, "secret-hero.png", noise(32, 16), { cols: 2, rows: 1, frames: 2, fps: 8 });
   const from = events.length;
-  const r = await run(["toolbox", "sprite", "export", sheet, "--engine", "unity"], { LUDO_TELEMETRY: "", DO_NOT_TRACK: "", LUDO_API_URL: `http://127.0.0.1:${collector.address().port}` });
+  const r = await run(["toolbox", "sprite", "export", sheet, "--engine", "unity"], { CI: "", LUDO_TELEMETRY: "", DO_NOT_TRACK: "", LUDO_API_URL: `http://127.0.0.1:${collector.address().port}` });
   assert.equal(r.code, EXIT.OK, r.stderr);
   const [event] = events.slice(from);
   assert.equal(event.command, "toolbox sprite export");
@@ -126,6 +126,7 @@ test("a toolbox event says what it read and what it suggested, never names or va
     { inputs: 1, input_format: "png", ludo_sheet: true, grid_from: "stamp", frames: 2, engine: "unity", hint: "sprite animate" }
   );
   assert.doesNotMatch(JSON.stringify(event), /secret|hero/);
+  assert.equal(event.props.ci, false);
   // --quiet shows no hint, so none is reported.
   const quiet = events.length;
   await run(["toolbox", "sprite", "export", sheet, "--engine", "godot", "--quiet"], { LUDO_TELEMETRY: "", DO_NOT_TRACK: "", LUDO_API_URL: `http://127.0.0.1:${collector.address().port}` });

@@ -133,6 +133,9 @@ export function buildEvent(command: string, exitCode: number, durationMs: number
     json: flags.includes("--json") || !process.stdout.isTTY,
     quiet: flags.includes("--quiet"),
     tty: !!process.stdout.isTTY && !!process.stderr.isTTY,
+    // A CI machine starts with a fresh config dir, so a new install id, on
+    // every run: counted apart, it doesn't pass for a new user each time.
+    ci: !!process.env.CI && !["0", "false"].includes(process.env.CI.toLowerCase()),
     project: !!safe(() => findProjectFile()),
     logged_in: !!safe(() => resolveApiKey(argvValue(argv, "--api-key"))),
     version: VERSION,

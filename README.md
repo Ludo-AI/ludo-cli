@@ -342,7 +342,7 @@ when it finishes:
 
 - the command (`sprite animate`), its exit code and how long it took;
 - the names of the flags used (`--prompt`, `--n`), never their values;
-- the CLI, Node and OS versions, whether it ran at a terminal, and which coding agent ran it;
+- the CLI, Node and OS versions, whether it ran at a terminal or in CI, and which coding agent ran it;
 - for generations, the job ids and credits charged;
 - for toolbox tools, how many files they read and in which format, the frame count, whether a
   sheet was made by Ludo, the engine, which next step they suggested, and for `asset manifest`
