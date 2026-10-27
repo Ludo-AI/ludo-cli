@@ -1,7 +1,7 @@
 {
   "name": "@ludoai/cli",
   "version": "0.2.0",
-  "description": "Command-line access to the Ludo AI API for humans and coding agents: game sprites, animations, 3D models, video and audio.",
+  "description": "Ludo AI from the command line, for humans and coding agents: generate game sprites, animations, 3D models, video and audio, plus 32 free offline toolbox tools (spritesheet slicing, feet pivots, colliders, Godot/Unity/Phaser export, palettes, tilesets, audio checks).",
   "keywords": [
     "ludo",
     "ludo-ai",
@@ -25,9 +25,27 @@
     "codex",
     "cursor",
     "gemini-cli",
-    "mcp"
+    "mcp",
+    "toolbox",
+    "spritesheet-slicer",
+    "sprite-sheet",
+    "sprite-pivot",
+    "collision-box",
+    "tileset",
+    "texture-atlas",
+    "texturepacker",
+    "aseprite",
+    "phaser",
+    "pixijs",
+    "godot4",
+    "game-audio",
+    "loudness",
+    "glb",
+    "gltf",
+    "pixel-art-tools",
+    "free"
   ],
-  "homepage": "https://ludo.ai",
+  "homepage": "https://ludo.ai/developers/cli",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Ludo-AI/ludo-cli.git"
