@@ -610,8 +610,8 @@ TOOLS.push({
   summary: "Save a sound as WAV, OGG, MP3 or FLAC",
   details: [
     "OGG is Ogg Vorbis, which Godot and Unity import. WAV is written in-process; OGG, MP3 and FLAC",
-    "through ffmpeg. --mono mixes the channels into one (3D sound in Unity and Godot is positioned from",
-    "mono). A WAV keeps its sample depth unless --bits says otherwise."
+    "through ffmpeg. --mono mixes the channels into one. A WAV keeps its sample depth unless --bits",
+    "says otherwise."
   ],
   flags: [
     { flag: "--to", value: "format", description: "wav, ogg, mp3 or flac (default wav)" },
