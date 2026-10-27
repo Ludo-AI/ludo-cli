@@ -717,6 +717,9 @@ test("directions, loops and takes stay one character, and two characters are no 
   // The file names the knight: its folders are not part of its name.
   assert.deepEqual(characterOf("collide/knight-walk.webp"), { character: "knight", action: "walk" });
   assert.deepEqual(characterOf("compare/knight-walk-ts.webp"), { character: "knight", action: "walk", variant: "ts" });
+  // A working copy is the character's, not another character.
+  assert.deepEqual(characterOf("incoming/knight-raw/idle.png"), { character: "knight", action: "idle", variant: "raw" });
+  assert.deepEqual(characterOf("hero_attack_wip.png"), { character: "hero", action: "attack", variant: "wip" });
   const dir = tmp();
   const sheet = (name, cols, hue) => writeSheet(path.join(dir, name), figureSheet({ cols, rows: 1, hue }), { cols, rows: 1, frames: cols, fps: 8 });
   sheet("hero_walk_left.png", 4, 0);

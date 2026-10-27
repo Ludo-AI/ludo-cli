@@ -598,9 +598,11 @@ const ACTIONS = new Set(
 const GENERIC = new Set(["animatesprite", "adjustspritesheet", "editspritesheet", "transfermotion", "spritesheet", "spritesheets", "sheet", "sheets", "sprite", "sprites", "anim", "anims", "animation", "animations", "frames", "take", "v"]);
 // Words that say which way or how a move plays, not who makes it:
 // hero_walk_left and hero_walk_right are one hero, mt_walk_loop and
-// mt_walk_forward one character. "ts" is a True Size copy (sprite adjust).
+// mt_walk_forward one character. "ts" is a True Size copy (sprite adjust);
+// raw, wip, draft and the like are working copies: knight-raw/idle.png is
+// the knight's idle.
 const VARIANTS = new Set(
-  "left right up down front back side forward forwards backward backwards north south east west n s e w ne nw se sw loop loops looped looping cycle once start end ts".split(" ")
+  "left right up down front back side forward forwards backward backwards north south east west n s e w ne nw se sw loop loops looped looping cycle once start end ts raw wip draft orig original backup bak copy final".split(" ")
 );
 
 // The character a sheet shows and the move: hero_walk2.png -> hero, walk
