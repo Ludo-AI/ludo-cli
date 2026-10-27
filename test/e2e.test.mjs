@@ -719,6 +719,32 @@ test("skill install writes the bundled skill, updates its own copy and protects 
   assert.ok(!fs.existsSync(target));
 });
 
+test("a skill installed by an older ludo is brought up to date, and a project's copy gets a notice", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-"));
+  const env = { CLAUDE_CONFIG_DIR: path.join(cwd, "claude") };
+  const personal = path.join(cwd, "claude", "skills", "ludo", "SKILL.md");
+  const project = path.join(cwd, ".claude", "skills", "ludo", "SKILL.md");
+  await run(["skill", "install"], env, cwd);
+  await run(["skill", "install", "--project"], env, cwd);
+  const current = fs.readFileSync(personal, "utf8");
+  const old = current.replace(/<!-- ludo \S+ -->/, "<!-- ludo 0.1.0 -->").replace("## Workflow", "## Old workflow");
+  fs.writeFileSync(personal, old);
+  fs.writeFileSync(project, old);
+  let r = await run(["version"], env, cwd);
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(fs.readFileSync(personal, "utf8"), current);
+  assert.match(r.stderr, /Updated the Ludo skill for Claude Code from 0\.1\.0/);
+  // The project's copy is the repository's: told, not rewritten.
+  assert.equal(fs.readFileSync(project, "utf8"), old);
+  assert.match(r.stderr, /this project's \.claude\/skills is from 0\.1\.0; `ludo skill install --project`/);
+  // Up to date: nothing to say. A skill the user wrote is never touched.
+  fs.writeFileSync(project, current);
+  fs.writeFileSync(personal, "---\nname: ludo\n---\nmine\n");
+  r = await run(["version"], env, cwd);
+  assert.doesNotMatch(r.stderr, /skill/i);
+  assert.equal(fs.readFileSync(personal, "utf8"), "---\nname: ludo\n---\nmine\n");
+});
+
 test("skill install into a config folder that can't be created is a plain error", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-"));
   fs.writeFileSync(path.join(cwd, "not-a-folder"), "");

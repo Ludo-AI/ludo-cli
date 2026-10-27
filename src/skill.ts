@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { PACKAGE_ROOT, VERSION } from "./config.js";
 import { CliError, EXIT } from "./errors.js";
+import { addLocalNotice, compareVersions } from "./notices.js";
 
 // `ludo skill install`: puts the bundled Claude Code skill where Claude Code
 // finds it, so an agent knows how to use the CLI without loading every tool
@@ -65,6 +66,42 @@ export function installSkill(opts: { project: boolean; force: boolean }): SkillR
     );
   }
   return { path: target, action: existing === undefined ? "installed" : "updated" };
+}
+
+// The CLI version that wrote an installed skill, when ludo wrote it and it is
+// older than this one. A copy without the version line predates it.
+function staleSkill(project: boolean): string | undefined {
+  let text: string;
+  try {
+    text = fs.readFileSync(skillTarget(project), "utf8");
+  } catch {
+    return undefined;
+  }
+  if (!text.includes(MARKER)) return undefined;
+  const from = /<!-- ludo (\S+) -->/.exec(text)?.[1] ?? "0.0.0";
+  return compareVersions(from, VERSION) < 0 ? from : undefined;
+}
+
+// Runs after every command. Updating the CLI replaces the package, never the
+// copy in ~/.claude, so an agent would keep reading the skill of whichever
+// version installed it. The personal copy is rewritten; a project's copy is
+// part of its repository, so it only gets a notice.
+export function refreshSkills(): void {
+  try {
+    const from = staleSkill(false);
+    if (from) {
+      installSkill({ project: false, force: false });
+      addLocalNotice("skill-updated", `Updated the Ludo skill for Claude Code from ${from} to ${VERSION}; a new session picks it up.`);
+    }
+  } catch {
+    // Only costs the old skill for a while longer.
+  }
+  try {
+    const from = staleSkill(true);
+    if (from) addLocalNotice("skill-project-stale", `The Ludo skill in this project's .claude/skills is from ${from}; \`ludo skill install --project\` updates it to ${VERSION}.`);
+  } catch {
+    // As above.
+  }
 }
 
 export function uninstallSkill(opts: { project: boolean; force: boolean }): SkillResult {

@@ -359,9 +359,9 @@ To turn both off, set `LUDO_TELEMETRY=0` (or the standard `DO_NOT_TRACK=1`).
 
 - `ludo agent-help` prints a one-page guide to the CLI.
 - Claude Code: `ludo skill install` adds the Ludo skill to `~/.claude/skills` (or to this
-  project's `.claude/skills` with `--project`, to share it through the repository). Re-run it after
-  updating the CLI. It is also available as a plugin: `/plugin marketplace add Ludo-AI/ludo-cli`,
-  then `/plugin install ludo@ludo`.
+  project's `.claude/skills` with `--project`, to share it through the repository). After an
+  update the CLI rewrites the personal copy itself, and says when a project's copy is behind. It is also
+  available as a plugin: `/plugin marketplace add Ludo-AI/ludo-cli`, then `/plugin install ludo@ludo`.
 - Codex, Cursor, Gemini CLI, GitHub Copilot and other agents that read skills:
   `npx skills add Ludo-AI/ludo-cli` installs the same skill for the agents it finds.
 - Gemini CLI: `gemini extensions install https://github.com/Ludo-AI/ludo-cli`.

@@ -19,7 +19,7 @@ import { loadProject } from "./project.js";
 import { embeddedSpecPath, loadSpec } from "./spec.js";
 import { parseGrid, previewFile, previewSkipped } from "./tty/preview.js";
 import { logo } from "./tty/flair.js";
-import { installSkill, isInstalled, skillTarget, uninstallSkill } from "./skill.js";
+import { installSkill, isInstalled, refreshSkills, skillTarget, uninstallSkill } from "./skill.js";
 import { accountLine, accountSummary, agentName, billingUrlFor, browserLogin, canOpenBrowser, isAgent, openBrowser } from "./login.js";
 import { assets, BATCH_HELP, init, loadBatch, spend } from "./workspace.js";
 import { toolbox } from "./toolbox/index.js";
@@ -464,6 +464,7 @@ function finish(code: number) {
 
 run(process.argv.slice(2)).then(
   async code => {
+    refreshSkills();
     flushNotes(quietRun);
     await sendTelemetry(commandLabel, code, startedAt, argvForTelemetry);
     finish(code);
@@ -471,6 +472,7 @@ run(process.argv.slice(2)).then(
   async (err: unknown) => {
     err = localFsError(err) || err;
     const json = process.argv.includes("--json") || !process.stdout.isTTY;
+    refreshSkills();
     flushNotes(quietRun);
     if (err instanceof CliError) {
       if (json) printJson({ error: { message: err.message, exit_code: err.exitCode, hint: err.hint, details: err.details } }, false);
