@@ -8,9 +8,17 @@
 //  - An ext_resource path without a scheme is resolved relative to the .tres
 //    file, so a sheet + .tres pair outside any project keeps working once both
 //    are copied into one, as long as they stay side by side.
+//  - A trimmed sheet (ludo toolbox image trim) gives each AtlasTexture a
+//    `margin`: Rect2(offset, untrimmed size - frame size), which is how Godot
+//    puts a cut-down region back at its original size and place. An extruded
+//    one keeps the repeated border out of each region.
+//  - SpriteFrames has no pivot: with `sprite export --pivot` a `.tscn` scene
+//    also comes, an AnimatedSprite2D playing the .tres whose `offset` (with
+//    `centered` on, the default) puts the pivot at the node's origin.
 
 import fs from "node:fs";
 import path from "node:path";
+import type { FrameLayout } from "./texturepacker.js";
 
 export interface SheetGrid {
   cols: number;
@@ -60,17 +68,24 @@ export function spriteFramesTres(
   sheetHeight: number,
   grid: SheetGrid,
   animationName = "default",
+  layout: FrameLayout = {},
 ): string {
   const { w, h } = frameSize(sheetWidth, sheetHeight, grid);
+  const e = layout.extrude ?? 0;
+  if (!Number.isInteger(e) || e < 0 || 2 * e >= Math.min(w, h)) throw new Error(`Godot export: an extrude of ${e} does not fit ${w}x${h} frames`);
+  const [fw, fh] = [w - 2 * e, h - 2 * e];
+  const t = layout.trim && layout.trim.w === fw && layout.trim.h === fh ? layout.trim : undefined;
   const out: string[] = [];
   out.push(`[gd_resource type="SpriteFrames" format=3]`, "");
   out.push(`[ext_resource type="Texture2D" path=${quote(texturePath)} id="${TEXTURE_ID}"]`, "");
   for (let i = 0; i < grid.frames; i++) {
-    const x = (i % grid.cols) * w;
-    const y = Math.floor(i / grid.cols) * h;
+    const x = (i % grid.cols) * w + e;
+    const y = Math.floor(i / grid.cols) * h + e;
     out.push(`[sub_resource type="AtlasTexture" id="AtlasTexture_${i}"]`);
     out.push(`atlas = ExtResource("${TEXTURE_ID}")`);
-    out.push(`region = Rect2(${x}, ${y}, ${w}, ${h})`, "");
+    out.push(`region = Rect2(${x}, ${y}, ${fw}, ${fh})`);
+    if (t && (t.source_w !== fw || t.source_h !== fh)) out.push(`margin = Rect2(${t.x}, ${t.y}, ${t.source_w - fw}, ${t.source_h - fh})`);
+    out.push("");
   }
   const frames = Array.from(
     { length: grid.frames },
@@ -82,6 +97,66 @@ export function spriteFramesTres(
       `"name": &${quote(animationName)},\n"speed": ${godotFloat(grid.fps)}\n}]`,
   );
   return out.join("\n") + "\n";
+}
+
+/** Pure: the `.tscn` text, an AnimatedSprite2D playing `framesPath` with the pivot at its origin. */
+export function animatedSpriteScene(
+  framesPath: string,
+  nodeName: string,
+  sheetWidth: number,
+  sheetHeight: number,
+  grid: SheetGrid,
+  pivot: { x: number; y: number },
+  animationName = "default",
+  layout: FrameLayout = {},
+): string {
+  const { w, h } = frameSize(sheetWidth, sheetHeight, grid);
+  const e = layout.extrude ?? 0;
+  const [fw, fh] = [w - 2 * e, h - 2 * e];
+  // The frame Godot draws: the untrimmed one when the AtlasTexture has a margin.
+  const t = layout.trim && layout.trim.w === fw && layout.trim.h === fh ? layout.trim : undefined;
+  const [dw, dh] = t ? [t.source_w, t.source_h] : [fw, fh];
+  const name = nodeName.replace(/[.:@/"%]/g, "_") || "Sprite";
+  return [
+    `[gd_scene format=3]`,
+    ``,
+    `[ext_resource type="SpriteFrames" path=${quote(framesPath)} id="1_frames"]`,
+    ``,
+    `[node name=${quote(name)} type="AnimatedSprite2D"]`,
+    `sprite_frames = ExtResource("1_frames")`,
+    `animation = &${quote(animationName)}`,
+    `autoplay = ${quote(animationName)}`,
+    `offset = Vector2(${dw / 2 - pivot.x}, ${dh / 2 - pivot.y})`,
+    ``,
+  ].join("\n");
+}
+
+/**
+ * Writes `<.tres basename>.tscn` next to the SpriteFrames `tresPath` (never
+ * overwriting: adds -2, -3, ...) and returns its path.
+ */
+export function writeGodotScene(
+  tresPath: string,
+  sheetWidth: number,
+  sheetHeight: number,
+  grid: SheetGrid,
+  pivot: { x: number; y: number },
+  animationName?: string,
+  layout?: FrameLayout,
+): string {
+  const dir = path.dirname(path.resolve(tresPath));
+  const base = path.basename(tresPath, path.extname(tresPath));
+  const text = animatedSpriteScene(godotTexturePath(tresPath), animationName || base, sheetWidth, sheetHeight, grid, pivot, animationName, layout);
+  for (let n = 1; ; n++) {
+    const target = path.join(dir, `${base}${n > 1 ? `-${n}` : ""}.tscn`);
+    try {
+      fs.writeFileSync(target, text, { flag: "wx" });
+      return target;
+    } catch (err: any) {
+      if (err?.code === "EEXIST") continue;
+      throw new Error(`Could not write Godot scene ${target}: ${err?.code || err?.message || err}`);
+    }
+  }
 }
 
 /** The nearest directory at or above `dir` holding a project.godot, if any. */
@@ -114,8 +189,9 @@ export function writeGodotSpriteFrames(
   sheetHeight: number,
   grid: SheetGrid,
   animationName?: string,
+  layout?: FrameLayout,
 ): string {
-  const text = spriteFramesTres(godotTexturePath(sheetPath), sheetWidth, sheetHeight, grid, animationName);
+  const text = spriteFramesTres(godotTexturePath(sheetPath), sheetWidth, sheetHeight, grid, animationName, layout);
   const dir = path.dirname(path.resolve(sheetPath));
   const base = path.basename(sheetPath, path.extname(sheetPath));
   for (let n = 1; ; n++) {

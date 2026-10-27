@@ -1,0 +1,187 @@
+import { GLOBAL_FLAGS, type Parsed } from "../args.js";
+import { CliError, EXIT } from "../errors.js";
+import type { Ctx } from "../generate.js";
+import { hintId, noteFact } from "../telemetry.js";
+import { TOOL_GROUPS, TOOLS, type Tool, type ToolCall } from "./registry.js";
+import "./sprite.js";
+import "./sprite-pack.js";
+import "./sprite-sequence.js";
+import "./sprite-video.js";
+import "./image.js";
+import "./tiles.js";
+import "./audio.js";
+import "./model.js";
+import "./sprite-analysis.js";
+import "./preview.js";
+import "./asset.js";
+
+export { TOOLS } from "./registry.js";
+
+// `ludo toolbox <group> <tool>`: free tools that run offline, with no account
+// and no API spec. Everything under the one word `toolbox` is free, so these
+// names never collide with the paid commands generated from the API spec.
+// The image work itself lives in pure functions next to this file; a tool
+// here only reads its arguments, calls them and writes files.
+
+// Jobs Ludo itself does, so the toolbox leaves them out: two ways to do one
+// thing, one worse, and the free one ends up "fixing" Ludo's results. An
+// agent that reaches for one of these names is sent to Ludo's.
+const AT_LUDO: Record<string, { job: string; command: string }> = {
+  "image snap": { job: "Turning a picture into pixel art is Ludo's job (free: in the web app, or here with a Pro or Studio login)", command: "ludo image convert-to-pixel-art --image <file>" },
+  "image key": { job: "Taking a background away is Ludo's job (0.5 credits)", command: "ludo image remove-background --image <file>" },
+  "audio normalize": { job: "Ludo's sounds come loudness-matched already; to measure any sound's loudness", command: "ludo toolbox audio info <sound>" },
+  "audio loop": { job: "Ludo's music and ambiences loop already; to check any sound's loop seam", command: "ludo toolbox audio info <sound>" }
+};
+
+// Tools that became part of another, so an agent that learnt the old name
+// still lands somewhere.
+const MOVED: Record<string, { job: string; command: string }> = {
+  "sprite contact": { job: "The frames side by side, numbered, are sprite metrics' overlay now", command: "ludo toolbox sprite metrics <sheet> --overlay" },
+  "asset scale": { job: "Whether a character's sheets are drawn at one size, and one pixels per unit, are sprite compare's now", command: "ludo toolbox sprite compare <sheets...>" },
+  "audio onsets": { job: "A track's tempo is in audio info now", command: "ludo toolbox audio info <sound>" },
+  "model orient": { job: "Which way a rigged model faces is in model info now", command: "ludo toolbox model info <model>" },
+  "model clips": { job: "Each clip's first pose and a walk's speed are in model info now", command: "ludo toolbox model info <model>" }
+};
+
+const groupsInUse = () => Object.keys(TOOL_GROUPS).filter(g => TOOLS.some(t => t.group === g));
+
+const table = (rows: [string, string][]) => {
+  const width = Math.max(0, ...rows.map(r => r[0].length));
+  return rows.map(([a, b]) => `  ${a.padEnd(width)}  ${b}`).join("\n");
+};
+
+export function toolboxSummary(): string {
+  const groups = groupsInUse();
+  return groups.length ? groups.map(g => `${g} (${TOOLS.filter(t => t.group === g).map(t => t.name).join(", ")})`).join("; ") : "coming soon";
+}
+
+function toolboxHelp(): string {
+  const groups = groupsInUse();
+  return [
+    "Free tools: they run on your machine, offline, with no account and no credits.",
+    "",
+    "Usage:",
+    "  ludo toolbox <group> <tool> [flags]",
+    "  ludo toolbox <group> <tool> --help",
+    "",
+    groups.length
+      ? table(groups.map(g => [g, `${TOOL_GROUPS[g]}: ${TOOLS.filter(t => t.group === g).map(t => t.name).join(", ")}`]))
+      : "  No tools yet.",
+    "",
+    "Pixel art conversion and background removal are Ludo's: ludo image convert-to-pixel-art and",
+    "ludo image remove-background (`ludo pricing` says which plans).",
+    ""
+  ].join("\n");
+}
+
+function groupHelp(group: string): string {
+  return [
+    `ludo toolbox ${group}: ${TOOL_GROUPS[group]} (free, offline)`,
+    "",
+    table(TOOLS.filter(t => t.group === group).map(t => [`${t.name} ${t.args}`, t.summary])),
+    "",
+    `Run \`ludo toolbox ${group} <tool> --help\` for its flags.`,
+    ""
+  ].join("\n");
+}
+
+function toolHelp(tool: Tool): string {
+  return [
+    `Usage: ludo toolbox ${tool.group} ${tool.name} ${tool.args} [flags]`,
+    "",
+    tool.summary,
+    ...(tool.details?.length ? ["", ...tool.details] : []),
+    ...(tool.flags.length ? ["", "Flags:", table(tool.flags.map(f => [`${f.flag}${f.value ? ` <${f.value}>` : ""}`, f.description]))] : []),
+    "",
+    "Also: --out <dir> (default ./ludo-output), --json, --quiet. Free and offline: no login needed.",
+    ""
+  ].join("\n");
+}
+
+// Reads the tool's arguments from the raw argv. The first pass (parseArgv)
+// cannot know which flags take a value, so it may have taken a positional as
+// a flag's value; scanning again with the tool's own flags keeps the
+// positionals in their order, which matters for `join a.png b.png`.
+export function parseToolArgv(argv: string[], tool: Tool): ToolCall {
+  const known = new Map(tool.flags.map(f => [f.flag, f]));
+  const flags = new Map<string, string | true>();
+  const lists = new Map<string, string[]>();
+  const positionals: string[] = [];
+  let onlyPositionals = false;
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (onlyPositionals || token === "-" || !token.startsWith("-")) {
+      positionals.push(token);
+      continue;
+    }
+    if (token === "--") {
+      onlyPositionals = true;
+      continue;
+    }
+    if (token === "-h") continue;
+    const eq = token.indexOf("=");
+    const name = eq >= 0 ? token.slice(0, eq) : token;
+    const global = GLOBAL_FLAGS[name];
+    if (global) {
+      if (global.value && eq < 0) i++; // its value, already read by parseArgv
+      continue;
+    }
+    const spec = known.get(name);
+    if (!spec) {
+      const list = tool.flags.map(f => f.flag).join(", ");
+      throw new CliError(`Unknown flag for ludo toolbox ${tool.group} ${tool.name}: ${name}`, EXIT.USAGE, list ? `Flags: ${list}` : undefined);
+    }
+    if (!spec.value) {
+      if (eq >= 0) throw new CliError(`${name} does not take a value`, EXIT.USAGE);
+      flags.set(name, true);
+      continue;
+    }
+    const value = eq >= 0 ? token.slice(eq + 1) : argv[++i];
+    if (value === undefined) throw new CliError(`${name} needs a value`, EXIT.USAGE);
+    flags.set(name, value);
+    lists.set(name, [...(lists.get(name) ?? []), value]);
+  }
+  return { args: positionals.slice(3), flags, lists };
+}
+
+// `ludo toolbox ...`. parsed.words starts with "toolbox"; argv is the whole
+// command line. setLabel names the command for usage telemetry as soon as it
+// is known, so a tool that fails is still counted as itself.
+export async function toolbox(ctx: Ctx, parsed: Parsed, argv: string[], setLabel: (label: string) => void): Promise<number> {
+  const [, group, name] = parsed.words;
+  const help = parsed.globals.help;
+  setLabel("toolbox");
+  if (!group) {
+    process.stdout.write(toolboxHelp());
+    return help ? EXIT.OK : EXIT.USAGE;
+  }
+  if (!groupsInUse().includes(group)) {
+    throw new CliError(`Unknown toolbox group: ${group}`, EXIT.USAGE, `Groups: ${groupsInUse().join(", ") || "none yet"}. Run \`ludo toolbox\`.`);
+  }
+  if (!name) {
+    process.stdout.write(groupHelp(group));
+    return help ? EXIT.OK : EXIT.USAGE;
+  }
+  const tool = TOOLS.find(t => t.group === group && t.name === name);
+  const atLudo = AT_LUDO[`${group} ${name}`];
+  const moved = MOVED[`${group} ${name}`];
+  // A name sent elsewhere counts as itself, with where it was sent: `image
+  // key` is someone who wanted a background removed.
+  if (!tool && (atLudo || moved)) {
+    setLabel(`toolbox ${group} ${name}`);
+    const id = hintId((atLudo || moved).command);
+    if (id) noteFact("hint", id);
+  }
+  if (!tool && atLudo) throw new CliError(`ludo toolbox ${group} ${name} is not a toolbox tool`, EXIT.USAGE, `${atLudo.job}: ${atLudo.command}`);
+  if (!tool && moved) throw new CliError(`ludo toolbox ${group} ${name} is no longer a tool of its own`, EXIT.USAGE, `${moved.job}: ${moved.command}`);
+  if (!tool) {
+    const names = TOOLS.filter(t => t.group === group).map(t => t.name);
+    throw new CliError(`Unknown tool: ludo toolbox ${group} ${name}`, EXIT.USAGE, `Tools: ${names.join(", ")}`);
+  }
+  setLabel(`toolbox ${group} ${name}`);
+  if (help) {
+    process.stdout.write(toolHelp(tool));
+    return EXIT.OK;
+  }
+  return tool.run(ctx, parseToolArgv(argv, tool));
+}

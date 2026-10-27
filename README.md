@@ -77,6 +77,15 @@ ludo docs search --query "which animation model should I use for pixel art?"
 - WebP results are also saved as PNG, side by side (engines and most tools want PNG).
 - `--engine godot` also writes a Godot 4 `SpriteFrames` resource (`.tres`) next to a spritesheet:
   drop it on an `AnimatedSprite2D`. Inside a Godot project it uses a `res://` path.
+- `--engine texturepacker` writes a TexturePacker JSON atlas (`.json`) next to a spritesheet, with
+  the animation named after the file. PixiJS: `const sheet = await Assets.load("knight-walk.json")`,
+  then `new AnimatedSprite(sheet.animations["knight-walk"])`. Phaser:
+  `this.load.aseprite("knight", "knight-walk.png", "knight-walk.json")`, then
+  `this.anims.createFromAseprite("knight")` (`load.atlas` gives the frames alone).
+- `--engine unity` writes the sheet's `.png.meta`, which imports it sliced into one sprite per
+  frame, and an `.anim` clip that plays them on a `SpriteRenderer`. Export into your project's
+  `Assets/` folder (or copy the PNG, `.meta` and `.anim` there together). A `.meta` already there
+  keeps its guid, so scenes and prefabs that use the sprites still find them.
 
 ### In the terminal
 
@@ -124,6 +133,108 @@ replaced by its path.
 | 9 | Timed out waiting; the job keeps running |
 | 10 | This version of ludo is no longer supported; update it |
 | 11 | Refused by the spending guard (`--max-credits` or the budget) |
+| 12 | `ludo toolbox`: an input file it cannot read or use, or a detection it is not sure of |
+
+## Free tools
+
+`ludo toolbox` holds tools that run on your machine: offline, with no account, no API key and no
+credits. They work on any spritesheet or sound, not only Ludo's.
+
+```sh
+# Cut a spritesheet into one PNG per frame. The grid comes from --grid, from the sheet's Ludo
+# stamp, or is detected; when detection is not sure it stops and asks for --grid.
+ludo toolbox sprite slice knight-walk.png
+
+# Put frames back together into a sheet that remembers its grid (ludo preview plays it)
+ludo toolbox sprite join ludo-output/knight-walk/ --cols 4 --fps 12
+
+# Edit the frames of a sheet: drop frame 7, hold frame 4 for three frames, play as a ping-pong
+ludo toolbox sprite frames knight-walk.png --drop 7 --hold 4x3 --pingpong
+
+# How well it loops, 0 to 1: the seam from the last frame back to the first, against the clip's
+# pace (0.8 and up is clean, under 0.5 a hitch you see). It only measures; Ludo's sheets come cut to
+# their loop, and `ludo sprite edit --edit-mode fix_loop` repairs one that does not loop.
+ludo toolbox sprite loop knight-walk.png
+# Several takes of one animation (like --n 4): which loops cleanest, the cleanest first.
+ludo toolbox sprite loop walk-1.png walk-2.png walk-3.png walk-4.png
+
+# Image edits. On a sheet (its Ludo stamp, or --grid) every frame gets the same edit, so the
+# frames stay aligned.
+ludo toolbox image trim knight-walk.png             # cut the empty border, one box for all frames
+ludo toolbox image pad trimmed.png --restore        # put back what trim cut
+ludo toolbox image pad hero.png --to 128x128 --anchor bottom
+ludo toolbox image extrude tiles.png --by 2 --grid 8x8
+ludo toolbox image scale hero.png --by 4            # nearest neighbour; --by 1/4 scales down
+ludo toolbox image scale hero.png --by 1.5 --filter lanczos   # any factor; Pillow's filters
+ludo toolbox image flip knight-walk.png             # face the other way; --vertical for upside down
+ludo toolbox image rotate hero.png --by 90
+ludo toolbox image outline hero.png --color "#1a1c2c" # 1 px, no corners; --shape square, --width 2
+ludo toolbox image shadow hero.png --offset 2,2 --opacity 40
+ludo toolbox image convert hero.png --to webp       # lossless WebP
+
+# Palettes: list and save one (.hex, .gpl, .pal, .txt, .png), map onto a Lospec palette or
+# another sprite's colours, or swap colours (a red enemy becomes a blue one).
+ludo toolbox image palette hero.png --save hero.gpl
+ludo toolbox image recolor knight-walk.png --palette pico-8.hex
+ludo toolbox image recolor slime.png --swap "#3fa34d,#2a6e33" --to "#3b6fd1,#24478a"
+
+# Tilesets: one PNG per tile, or the files Tiled (--tiled), Godot and Unity read. repeat lays a
+# tile out 3x3 and says whether its edges meet without a seam.
+ludo toolbox image tiles terrain.png --size 16x16 --spacing 1 --tiled --engine godot
+ludo toolbox image repeat grass.png
+
+# An animated GIF for sharing: one palette for every frame (the sheet's own colours when it has
+# 256 or fewer), 1-bit transparency (--alpha-threshold, --matte for soft edges), loops forever
+# unless --once. --scale 4 enlarges small pixel art.
+ludo toolbox sprite gif knight-walk.png --fps 12 --scale 4
+
+# Several animations of one character at one size and ground line, in one frame size: the web
+# app's Export Pack. Nudge one by file name, label or position; pack.json re-runs it exactly.
+ludo toolbox sprite pack idle.png walk.png jump.png --name knight --engine texturepacker
+ludo toolbox sprite pack --manifest ludo-output/knight/pack.json --size walk=1.1 --ground jump=3
+
+# Animations played one after another, each placed so it continues from the last frame of the one
+# before (the web's image matching, run locally; --align ground lines up the feet instead): the web app's Export Sequence.
+# The output gives each transition's offset; sequence.json re-runs it, and you can edit them there.
+ludo toolbox sprite sequence idle.png jump.png land.png --name knight-jump --frame-size 256x256
+ludo toolbox sprite sequence idle.png jump.png --mode separate --engine godot
+
+# A GIF or animated WebP reads as a sheet of its frames, so every sprite and image tool takes one.
+ludo toolbox sprite slice dance.gif
+
+# Video (needs ffmpeg): a clip to a sheet, and a sheet to WebM or MOV with transparency, or MP4.
+ludo toolbox sprite from-video knight-walk.mp4 --fps 12
+ludo toolbox sprite video knight-walk.png --format webm --loops 3
+
+# Sound. WAV and MP3 are read in-process; OGG, FLAC and the rest, and writing OGG or MP3, need
+# ffmpeg. Loudness is LUFS (ITU-R BS.1770).
+ludo toolbox audio info zap.mp3                     # length, loudness, true peak, silence, loop seam; music: tempo
+ludo toolbox audio trim zap.mp3                     # silence off both ends (Ludo's come trimmed)
+ludo toolbox audio convert theme.mp3 --to ogg       # Ogg Vorbis for Godot and Unity; --mono, --bits
+
+# What is in a 3D model: meshes, triangles, size, textures, skeleton and animations; for a rigged
+# one which way it faces, and per clip whether it returns to its first pose and a walk's speed.
+ludo toolbox model info knight.glb
+
+# Setting a character up: where its feet and pivot are, its colliders, and one pixels per unit for
+# all its sheets (and which sheet is drawn at another size). They only report.
+ludo toolbox sprite metrics knight-walk.png --overlay   # bounds, ground line, feet pivot; a picture to check
+ludo toolbox sprite collide knight-walk.png --ppu 280   # box and capsule for Godot, Unity, Phaser, Box2D
+ludo toolbox sprite compare knight_*.png --reference knight_walk.png=1.8m
+ludo toolbox image contact icons/*.png                  # one labelled picture of many images
+
+# A folder at a glance: what each asset is, what the game still lacks (with the Ludo command that
+# makes it) and loaders for Phaser or Pixi.
+ludo toolbox asset manifest assets/ --emit phaser
+
+# Engine files for a sheet you already have. Any toolbox tool that writes a sheet takes --engine
+# too, and a trimmed or extruded sheet exports each frame's original size and offset.
+ludo toolbox sprite export knight-walk.png --engine texturepacker
+ludo toolbox sprite export knight-walk.png --engine godot
+ludo toolbox sprite export knight-walk.png --engine unity --pivot feet --ppu 280
+```
+
+Files are saved under `./ludo-output` (or `--out <dir>`) and never overwrite anything.
 
 ## Projects
 
@@ -145,7 +256,9 @@ project uses Claude Code). Every command run anywhere below that folder uses it:
 ```
 
 - `out`: where generated files are saved (instead of `./ludo-output`).
-- `engine`: as `--engine` on every command.
+- `engine`: as `--engine` on every command (`godot`, `texturepacker` or `unity`). `ludo init` picks
+  `godot` in a Godot project, `unity` in a Unity project (and saves under `Assets/Ludo`), and
+  `texturepacker` in one that depends on Phaser or PixiJS.
 - `max_credits`: an optional spending budget (below). Not set by `ludo init`: without it there is no limit.
 - `style_image`: used by operations that take a `style_image` (`image generate-with-style`).
 - `defaults`: API fields per command, by `"group command"` or API id.
@@ -209,7 +322,9 @@ by `ludo login` (in `~/.config/ludo/config.json`, readable only by you).
 ## Credits
 
 `ludo account` shows your balance, plan and auto top-up settings. `ludo billing` opens the page to
-buy credits, change plan or set up auto top-up. When a generation fails for lack of credits (exit
+buy credits, change plan or set up auto top-up. `ludo pricing` (no login needed) lists the plans, what
+each includes, what each call costs, and the billing rules: generating through the CLI, API or MCP needs
+Pro or Studio, and costs credits on every plan. When a generation fails for lack of credits (exit
 code 5) at a terminal, the CLI offers to open that page.
 
 ## Feedback
@@ -227,8 +342,11 @@ when it finishes:
 
 - the command (`sprite animate`), its exit code and how long it took;
 - the names of the flags used (`--prompt`, `--n`), never their values;
-- the CLI, Node and OS versions, whether it ran at a terminal, and which coding agent ran it;
+- the CLI, Node and OS versions, whether it ran at a terminal or in CI, and which coding agent ran it;
 - for generations, the job ids and credits charged;
+- for toolbox tools, how many files they read and in which format, the frame count, whether a
+  sheet was made by Ludo, the engine, which next step they suggested, and for `asset manifest`
+  how many gaps it found and of which kinds (never which files or characters);
 - a random install id (kept in `~/.config/ludo/install_id`), and your account when you are logged
   in, so usage can be tied to it.
 
@@ -244,9 +362,9 @@ To turn both off, set `LUDO_TELEMETRY=0` (or the standard `DO_NOT_TRACK=1`).
 
 - `ludo agent-help` prints a one-page guide to the CLI.
 - Claude Code: `ludo skill install` adds the Ludo skill to `~/.claude/skills` (or to this
-  project's `.claude/skills` with `--project`, to share it through the repository). Re-run it after
-  updating the CLI. It is also available as a plugin: `/plugin marketplace add Ludo-AI/ludo-cli`,
-  then `/plugin install ludo@ludo`.
+  project's `.claude/skills` with `--project`, to share it through the repository). After an
+  update the CLI rewrites the personal copy itself, and says when a project's copy is behind. It is also
+  available as a plugin: `/plugin marketplace add Ludo-AI/ludo-cli`, then `/plugin install ludo@ludo`.
 - Codex, Cursor, Gemini CLI, GitHub Copilot and other agents that read skills:
   `npx skills add Ludo-AI/ludo-cli` installs the same skill for the agents it finds.
 - Gemini CLI: `gemini extensions install https://github.com/Ludo-AI/ludo-cli`.

@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { encodePng } from "../dist/tty/png.js";
+import { encodePng, readPng } from "../dist/tty/png.js";
+import { readWebp } from "../dist/tty/webp.js";
 import { readGrid } from "../dist/tty/preview.js";
 
 // Drives the built CLI against a fake Ludo API: upload, submit, long-poll and
@@ -35,6 +37,19 @@ const ACCOUNT = {
   plan: { name: "Pro", api_access: true },
   auto_topup: { enabled: true, threshold: 200, credits: 1000 },
   billing_url: "http://web.test/account/billing"
+};
+
+const PRICING = {
+  currency: "usd",
+  summary: "Ludo generates game assets.",
+  plans: [
+    { id: "free-trial", name: "Free Trial", api_access: false, credits_per_month: null, credits_at_signup: 30, seats: 1, active_projects: "1", queue_concurrency: 1, prices: [], included: ["1 seat"], not_included: [] },
+    { id: "pro", name: "Pro", api_access: true, credits_per_month: 1000, credits_at_signup: null, seats: 1, active_projects: "unlimited", queue_concurrency: 2, prices: [{ interval: "month", amount: 50, credits_granted: 1000 }, { interval: "year", amount: 420, per_month: 35, credits_granted: 12000 }], included: ["API, MCP and CLI access"], not_included: [] }
+  ],
+  top_ups: { currency: "usd", min_credits: 250, max_credits: 17000, step_credits: 50, brackets: [{ credits: 250, cents: 1500 }], eligible: "any active paid plan" },
+  rules: [{ id: "api_always_pays", text: "Every generation through the API, MCP or CLI costs credits." }],
+  costs: [{ operation: "createImage", credits: "0.5 credits per result" }],
+  links: { pricing: "https://ludo.ai/pricing", billing: "http://web.test/account/billing" }
 };
 
 function json(res, status, body) {
@@ -76,7 +91,7 @@ before(async () => {
     }
     if (req.method === "GET" && url.pathname === "/files/sheet.webp") {
       res.writeHead(200);
-      return res.end(fs.readFileSync(new URL("./fixtures/sheet.webp", import.meta.url)));
+      return res.end(fs.readFileSync(new URL("./corpus/webp/made-sheet-lossless.webp", import.meta.url)));
     }
     if (req.method === "GET" && url.pathname === "/files/sheet.png") {
       res.writeHead(200);
@@ -121,6 +136,10 @@ before(async () => {
       if (loginOutcome === "denied") return json(res, 200, { status: "denied" });
       if (loginPolls < 2) return json(res, 200, { status: "pending" });
       return json(res, 200, { status: "approved", api_key: "ludo_minted" });
+    }
+    if (req.method === "GET" && url.pathname === "/api/pricing") {
+      // Open with or without a key, like the server.
+      return json(res, 200, PRICING);
     }
     if (req.method === "GET" && url.pathname === "/api/assets/account") {
       if (!["ApiKey ludo_minted", "ApiKey test-key"].includes(req.headers.authorization)) return json(res, 403, { message: "Unauthorized" });
@@ -687,6 +706,22 @@ test("billing prints the billing page without opening a browser for a non-termin
   assert.equal(JSON.parse(stdout).billing_url, "http://web.test/account/billing");
 });
 
+test("pricing works logged out and passes the server's guide through", async () => {
+  const before = seen.length;
+  const { code, stdout, stderr } = await run(["pricing", "--json"], { LUDO_API_KEY: "" });
+  assert.equal(code, 0, stderr);
+  assert.deepEqual(JSON.parse(stdout), PRICING);
+  const call = seen.slice(before).find(r => r.path === "/api/pricing");
+  assert.equal(call.headers.authorization, undefined);
+});
+
+test("no API key points at ludo login and ludo pricing", async () => {
+  const { code, stderr } = await run(["image", "create", "--prompt", "x", "--image-type", "sprite"], { LUDO_API_KEY: "" });
+  assert.equal(code, 3);
+  assert.match(stderr, /ludo login/);
+  assert.match(stderr, /ludo pricing/);
+});
+
 test("out of credits points at ludo billing", async () => {
   const { code, stderr } = await run(["image", "create", "--prompt", "x", "--image-type", "sprite"]);
   assert.equal(code, 5);
@@ -725,9 +760,9 @@ test("a spritesheet is saved with its grid inside, and machine output stays plai
 });
 
 test("--engine rejects engines it does not support", async () => {
-  const { code, stderr } = await run(["sprite", "animate", "--initial-image", "x", "--motion-prompt", "y", "--engine", "unity"]);
+  const { code, stderr } = await run(["sprite", "animate", "--initial-image", "x", "--motion-prompt", "y", "--engine", "gamemaker"]);
   assert.equal(code, 2);
-  assert.match(stderr, /--engine supports: godot/);
+  assert.match(stderr, /--engine supports: godot, texturepacker, unity/);
 });
 
 test("preview refuses to draw for a non-terminal", async () => {
@@ -747,6 +782,20 @@ test("--engine godot writes a SpriteFrames resource next to the sheet and lists 
   assert.match(text, /\[gd_resource type="SpriteFrames" format=3\]/);
   assert.equal((text.match(/type="AtlasTexture"/g) || []).length, 4);
   assert.match(text, /"speed": 8\.0/);
+});
+
+test("--engine texturepacker writes a JSON atlas next to the sheet and lists it", async () => {
+  const { code, stdout, stderr, cwd } = await run(["sprite", "animate", "--initial-image", "https://example.com/k.png", "--motion-prompt", "walk", "--engine", "texturepacker", "--json"]);
+  assert.equal(code, 0, stderr);
+  const files = JSON.parse(stdout).files;
+  const atlas = files.find(f => f.path.endsWith(".json"));
+  assert.ok(atlas, "the atlas is listed in files");
+  const sheet = files.find(f => f.path.endsWith(".png"));
+  const json = JSON.parse(fs.readFileSync(path.join(cwd, atlas.path), "utf8"));
+  assert.equal(json.meta.image, path.basename(sheet.path));
+  assert.deepEqual(Object.keys(json.frames), ["0", "1", "2", "3"]);
+  assert.equal(json.frames["0"].duration, 125);
+  assert.deepEqual(json.meta.frameTags[0], { name: path.basename(sheet.path, ".png"), from: 0, to: 3, direction: "forward" });
 });
 
 test("skill install writes the bundled skill, updates its own copy and protects others", async () => {
@@ -773,6 +822,32 @@ test("skill install writes the bundled skill, updates its own copy and protects 
   assert.ok(!fs.existsSync(target));
 });
 
+test("a skill installed by an older ludo is brought up to date, and a project's copy gets a notice", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-"));
+  const env = { CLAUDE_CONFIG_DIR: path.join(cwd, "claude") };
+  const personal = path.join(cwd, "claude", "skills", "ludo", "SKILL.md");
+  const project = path.join(cwd, ".claude", "skills", "ludo", "SKILL.md");
+  await run(["skill", "install"], env, cwd);
+  await run(["skill", "install", "--project"], env, cwd);
+  const current = fs.readFileSync(personal, "utf8");
+  const old = current.replace(/<!-- ludo \S+ -->/, "<!-- ludo 0.1.0 -->").replace("## Workflow", "## Old workflow");
+  fs.writeFileSync(personal, old);
+  fs.writeFileSync(project, old);
+  let r = await run(["version"], env, cwd);
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(fs.readFileSync(personal, "utf8"), current);
+  assert.match(r.stderr, /Updated the Ludo skill for Claude Code from 0\.1\.0/);
+  // The project's copy is the repository's: told, not rewritten.
+  assert.equal(fs.readFileSync(project, "utf8"), old);
+  assert.match(r.stderr, /this project's \.claude\/skills is from 0\.1\.0; `ludo skill install --project`/);
+  // Up to date: nothing to say. A skill the user wrote is never touched.
+  fs.writeFileSync(project, current);
+  fs.writeFileSync(personal, "---\nname: ludo\n---\nmine\n");
+  r = await run(["version"], env, cwd);
+  assert.doesNotMatch(r.stderr, /skill/i);
+  assert.equal(fs.readFileSync(personal, "utf8"), "---\nname: ludo\n---\nmine\n");
+});
+
 test("skill install into a config folder that can't be created is a plain error", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-"));
   fs.writeFileSync(path.join(cwd, "not-a-folder"), "");
@@ -782,16 +857,9 @@ test("skill install into a config folder that can't be created is a plain error"
   assert.match(r.stderr, /CLAUDE_CONFIG_DIR/);
 });
 
-// A converter is on every macOS machine (sips); on Linux it needs dwebp,
-// ImageMagick or ffmpeg, which CI images normally carry.
-const { convertToPng } = await import("../dist/tty/image.js");
-const canConvertWebp = (() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-conv-"));
-  return convertToPng(new URL("./fixtures/sheet.webp", import.meta.url).pathname, path.join(dir, "probe.png"));
-})();
-
-test("a WebP spritesheet gets a PNG copy that carries the grid and feeds the Godot export", { skip: !canConvertWebp && "no WebP converter here" }, async () => {
-  const { code, stdout, stderr, cwd } = await run(["sprite", "animate", "--initial-image", "https://example.com/k.png", "--motion-prompt", "webp", "--engine", "godot", "--json"]);
+// WebP is decoded in-process: no converter on PATH is needed (or used).
+test("a WebP spritesheet gets a PNG copy that carries the grid and feeds the Godot export", async () => {
+  const { code, stdout, stderr, cwd } = await run(["sprite", "animate", "--initial-image", "https://example.com/k.png", "--motion-prompt", "webp", "--engine", "godot", "--json"], { PATH: "" });
   assert.equal(code, 0, stderr);
   const files = JSON.parse(stdout).files.map(f => f.path);
   const webp = files.find(p => p.endsWith(".webp"));
@@ -799,6 +867,11 @@ test("a WebP spritesheet gets a PNG copy that carries the grid and feeds the God
   assert.ok(webp && png, `both copies are listed: ${files.join(", ")}`);
   assert.equal(png, webp.replace(/\.webp$/, ".png"), "the PNG sits next to the WebP");
   assert.deepEqual(readGrid(fs.readFileSync(path.join(cwd, png))), { cols: 2, rows: 2, frames: 4, fps: 8 });
+  const copy = readPng(fs.readFileSync(path.join(cwd, png))).image;
+  // (RGB under fully transparent pixels is written as 0.)
+  const want = Buffer.from(readWebp(fs.readFileSync(path.join(cwd, webp))).rgba);
+  for (let i = 0; i < want.length; i += 4) if (want[i + 3] === 0) want.fill(0, i, i + 3);
+  assert.deepEqual(Buffer.from(copy.rgba), want, "the PNG holds the WebP's pixels");
   const tres = files.find(p => p.endsWith(".tres"));
   assert.ok(tres, "the Godot export was written");
   assert.match(fs.readFileSync(path.join(cwd, tres), "utf8"), new RegExp(`path="${path.basename(png).replace(".", "\\.")}"`));
@@ -822,12 +895,53 @@ test("each command sends one usage event: facts and flag names, never values", a
   assert.equal(sent.headers.authorization, "ApiKey test-key");
   assert.doesNotMatch(sent.raw.toString(), /secret|knight|sprite/);
 
-  // The install id is kept, so a second command reports the same install.
+  // A second command soon after waits in the queue...
   const from2 = seen.length;
   await run(["account"], { LUDO_TELEMETRY: "1" }, cwd);
-  const again = JSON.parse(telemetryEvents(from2)[0].raw);
+  assert.equal(telemetryEvents(from2).length, 0);
+  assert.match(fs.readFileSync(path.join(cwd, ".config", "telemetry-queue.jsonl"), "utf8"), /"command":"account show"/);
+  // ...and goes with the next one once the last send is old enough, from the
+  // same install.
+  const stamp = path.join(cwd, ".config", "telemetry-sent");
+  fs.utimesSync(stamp, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+  const from3 = seen.length;
+  await run(["version"], { LUDO_TELEMETRY: "1" }, cwd);
+  const sends = telemetryEvents(from3);
+  assert.equal(sends.length, 1);
+  const again = JSON.parse(sends[0].raw);
   assert.equal(again.install_id, body.install_id);
-  assert.equal(again.events[0].command, "account show");
+  assert.deepEqual(again.events.map(e => e.command), ["account show", "version"]);
+  assert.ok(!fs.existsSync(path.join(cwd, ".config", "telemetry-queue.jsonl")));
+});
+
+test("a burst of commands sends a few requests, and nothing is lost", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-burst-"));
+  const from = seen.length;
+  for (let i = 0; i < 25; i++) await run(["version"], { LUDO_TELEMETRY: "1" }, cwd);
+  const sends = telemetryEvents(from).map(s => JSON.parse(s.raw).events.length);
+  // The first sends at once; the next 20 queue and go together.
+  assert.deepEqual(sends, [1, 20]);
+  const left = fs.readFileSync(path.join(cwd, ".config", "telemetry-queue.jsonl"), "utf8").trim().split("\n");
+  assert.equal(left.length, 4);
+});
+
+test("events the server did not take wait for the next send", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-retry-"));
+  // Nothing listens there.
+  const closed = await new Promise(resolve => {
+    const s = net.createServer().listen(0, "127.0.0.1", () => {
+      const port = s.address().port;
+      s.close(() => resolve(`http://127.0.0.1:${port}`));
+    });
+  });
+  await run(["version"], { LUDO_TELEMETRY: "1", LUDO_API_URL: closed }, cwd);
+  const queued = fs.readFileSync(path.join(cwd, ".config", "telemetry-queue.jsonl"), "utf8").trim().split("\n");
+  assert.equal(queued.length, 1);
+  fs.utimesSync(path.join(cwd, ".config", "telemetry-sent"), new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+  const from = seen.length;
+  await run(["version"], { LUDO_TELEMETRY: "1" }, cwd);
+  const [sent] = telemetryEvents(from);
+  assert.equal(JSON.parse(sent.raw).events.length, 2);
 });
 
 test("usage events honour LUDO_TELEMETRY=0 and DO_NOT_TRACK", async () => {

@@ -53,7 +53,8 @@ test("decodes RGBA round trip", () => {
   const src = img(5, 3, (x, y) => [x * 50, y * 80, 7, x === 0 ? 0 : 255]);
   const out = decodePng(encodePng(src));
   assert.equal(out.width, 5);
-  assert.deepEqual(Array.from(out.rgba), Array.from(src.rgba));
+  // Fully transparent pixels come back as 0,0,0,0.
+  assert.deepEqual(Array.from(out.rgba), Array.from(img(5, 3, (x, y) => (x === 0 ? [0, 0, 0, 0] : [x * 50, y * 80, 7, 255])).rgba));
 });
 
 test("decodes a 2-bit palette PNG with transparency", () => {
@@ -63,14 +64,14 @@ test("decodes a 2-bit palette PNG with transparency", () => {
   assert.deepEqual(Array.from(out.rgba), [255, 0, 0, 0, 0, 255, 0, 255, 0, 0, 255, 255, 9, 9, 9, 255]);
 });
 
-test("takes the high byte of 16-bit RGB", () => {
+test("scales 16-bit RGB to 8 bits", () => {
   const png = rawPng({ width: 1, height: 1, depth: 16, colorType: 2, rows: [[0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc]] });
   assert.deepEqual(Array.from(decodePng(png).rgba), [0x12, 0x56, 0x9a, 255]);
 });
 
-test("declines interlaced PNGs and non-PNG input", () => {
+test("reads interlaced PNGs and declines non-PNG input", () => {
   const png = rawPng({ width: 1, height: 1, depth: 8, colorType: 0, rows: [[1]], interlace: 1 });
-  assert.equal(decodePng(png), undefined);
+  assert.deepEqual(Array.from(decodePng(png).rgba), [1, 1, 1, 255]);
   assert.equal(decodePng(Buffer.from("GIF89a....")), undefined);
 });
 

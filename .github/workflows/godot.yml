@@ -8,12 +8,16 @@ on:
     branches: [main]
     paths:
       - src/tty/godot.ts
+      - src/tty/engines.ts
+      - src/toolbox/**
       - test/godot/**
       - test/godot.test.mjs
       - .github/workflows/godot.yml
   pull_request:
     paths:
       - src/tty/godot.ts
+      - src/tty/engines.ts
+      - src/toolbox/**
       - test/godot/**
       - test/godot.test.mjs
       - .github/workflows/godot.yml

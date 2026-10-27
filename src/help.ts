@@ -1,6 +1,7 @@
 import { GLOBAL_FLAGS } from "./args.js";
 import { Command, Field, GROUP_INFO, groupsOf } from "./commands.js";
 import { VERSION } from "./config.js";
+import { TOOLS, toolboxSummary } from "./toolbox/index.js";
 
 const WIDTH = Math.min(process.stdout.columns || 100, 110);
 
@@ -47,11 +48,13 @@ export function mainHelp(commands: Command[]): string {
     "Groups:",
     table(rows),
     "",
+    ...(TOOLS.length ? ["Free tools (offline, no account):", table([["toolbox", toolboxSummary()]]), ""] : []),
     "Other commands:",
     table([
       ["login", "Log in with your browser (--with-key to paste an API key instead)"],
       ["logout", "Log out and revoke this CLI login"],
       ["billing", "Open the billing page: buy credits, change plan or auto top-up"],
+      ["pricing", "Plans, what each includes, what calls cost (no login needed)"],
       ["feedback <message>", "Tell the Ludo team about a limitation, bug, idea or win"],
       ["init", "Set this folder up as a project: .ludo.json, agent instructions"],
       ["batch <jobs.json>", "Run a list of generations side by side"],
@@ -92,6 +95,15 @@ export const BUILTIN_HELP: Record<string, string> = {
   ].join("\n"),
   logout: ["Usage: ludo logout", "", "Forgets the saved key, and revokes it when `ludo login` created it.", ""].join("\n"),
   billing: ["Usage: ludo billing", "", "Opens the billing page (buy credits, change plan or auto top-up), or prints its URL.", ""].join("\n"),
+  pricing: [
+    "Usage: ludo pricing",
+    "",
+    "Ludo's plans: prices, credits, seats and what each includes or lacks; credit top-ups;",
+    "what each API call costs; and the billing rules (the API, MCP and CLI need Pro or Studio,",
+    "and there every generation costs credits). Free, and works without logging in. JSON with",
+    "--json, or when the output is not a terminal.",
+    ""
+  ].join("\n"),
   update: [
     "Usage: ludo update",
     "",
@@ -196,14 +208,21 @@ Every command maps to one Ludo API operation; its \`--help\` is generated from t
 
 ${groups}
 
-## Call
+${TOOLS.length ? `## Free tools (offline, no account, no credits)
+- \`ludo toolbox\` lists them; \`ludo toolbox <group> <tool> --help\` gives the flags. They need no login and no network.
+${TOOLS.map(t => `- \`ludo toolbox ${t.group} ${t.name} ${t.args}\`: ${t.summary}`).join("\n")}
+- A GIF or animated WebP reads as a sheet of its frames, so every sprite and image tool takes one; \`ludo toolbox sprite gif <sheet>\` goes the other way.
+- A tool's JSON may carry \`hint: {text, command}\`, the natural next step; mention it to the user once if it fits.
+- Exit code 12: an input file it cannot read or use, or a grid it cannot tell for sure; pass \`--grid <cols>x<rows>\`.
+
+` : ""}## Call
 - Flags are the API fields in kebab-case: \`image_type\` -> \`--image-type\`. Booleans: \`--crop\` / \`--no-crop\`.
 - Files: pass a local path to any image/audio/video/model flag (\`--image ./knight.png\`); the CLI uploads it (15MB max). URLs work too. Never base64-encode files yourself.
 - Complex bodies: \`--input body.json\` (or \`--input -\` for stdin); flags override its fields.
 - Generations block until done, then save every result file to \`./ludo-output\` (\`--out <dir>\` to change).
   Name them with \`--name <base>\` (\`--name sfx_pump\` -> \`sfx_pump.mp3\`) rather than renaming files afterwards;
   an existing file is never overwritten (the new one gets \`-2\`).
-- Game engines: \`--engine godot\` also writes a Godot 4 SpriteFrames \`.tres\` next to a spritesheet (listed in \`files\`).
+- Game engines: \`--engine godot\` also writes a Godot 4 SpriteFrames \`.tres\` next to a spritesheet, \`--engine texturepacker\` a TexturePacker JSON atlas for PixiJS and Phaser, \`--engine unity\` the sheet's \`.png.meta\` (sliced into sprites) and an \`.anim\` clip (listed in \`files\`; in a Unity project, save under \`Assets/\`). In Phaser load it with \`this.load.aseprite(key, png, json)\` so \`this.anims.createFromAseprite(key)\` builds the animation. \`ludo toolbox sprite export <sheet> --engine ...\` does it for a sheet you already have.
 - Directional Sprites (a character seen from up to 8 directions that line up): make a rigged model
   (\`ludo model create --image hero.png --rig\`), pick a style (\`ludo sprite directional-styles\`), check the look
   with \`ludo sprite directional-preview\` (free; saves the frames as images to look at; one preview at a time per
@@ -231,7 +250,8 @@ ${groups}
 ## Exit codes
 0 ok, 1 error, 2 bad usage, 3 auth, 4 rejected by the API, 5 not enough credits, 6 job failed (credits refunded;
 in a batch, at least one item failed), 7 job canceled, 8 rate limited / too many queued jobs, 9 timed out waiting
-(job keeps running), 10 this CLI version is too old (update it), 11 refused by the spending guard.
+(job keeps running), 10 this CLI version is too old (update it), 11 refused by the spending guard, 12 a toolbox
+input it cannot use.
 
 ## Auth and credits
 - The key comes from \`LUDO_API_KEY\`, a prior \`ludo login\`, or \`--api-key\`.
@@ -242,6 +262,9 @@ in a batch, at least one item failed), 7 job canceled, 8 rate limited / too many
   auto top-up; check it before an expensive batch.
 - On exit code 5, do not retry. Tell the user they are out of credits (or their plan lacks API access) and
   that \`ludo billing\` opens the page to buy credits or change plan.
+- Before advising a user to sign up, upgrade or buy credits, run \`ludo pricing\` (free, no login): the plans,
+  what each includes, what calls cost, and the rules (generating here needs Pro or Studio, and costs credits
+  on every plan). Quote it rather than guessing prices.
 
 ## Feedback
 - When you hit a limitation you cannot work around, a bug, or something the user needed that Ludo

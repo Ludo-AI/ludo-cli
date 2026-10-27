@@ -35,7 +35,7 @@ export class Api {
       throw new CliError(
         "No API key. Run `ludo login`, set LUDO_API_KEY, or pass --api-key.",
         EXIT.AUTH,
-        "`ludo login` logs you in with your browser, and can create an account."
+        "`ludo login` logs you in with your browser, and can create an account. Generating needs a Pro or Studio plan: `ludo pricing` compares them."
       );
     }
   }
@@ -121,7 +121,7 @@ export function apiError(res: ApiResponse): CliError {
   if (res.status === 401 || res.status === 403) hint = "Your API key was rejected. Log in again with `ludo login`.";
   if (res.status === 402) {
     hint = /API access/i.test(String(message))
-      ? "Your plan does not include API access. Change plan with `ludo billing`."
+      ? "Your plan does not include API access (Pro and Studio do): `ludo pricing` compares the plans, `ludo billing` changes plan."
       : "Not enough credits. Buy credits or set up auto top-up with `ludo billing`; `ludo account` shows your balance.";
   }
   if (res.status === 429) {

@@ -309,6 +309,16 @@ test("inline base64 in a file field is sent as is, with one tip per run, and non
   assert.doesNotMatch(fromPath.stderr, tip);
 });
 
+test("ludo init picks the TexturePacker export for a Phaser or PixiJS project", async () => {
+  for (const dep of ["phaser", "pixi.js"]) {
+    const cwd = tmp();
+    fs.writeFileSync(path.join(cwd, "package.json"), JSON.stringify({ dependencies: { [dep]: "^1.0.0" } }));
+    const r = await run(["init", "--json"], { cwd });
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(cwd, ".ludo.json"), "utf8")).engine, "texturepacker", dep);
+  }
+});
+
 test("ludo init writes the config and agent instructions, and re-running changes nothing", async () => {
   const cwd = tmp();
   fs.mkdirSync(path.join(cwd, ".cursor"));

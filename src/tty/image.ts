@@ -2,12 +2,13 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { decodePng, isPng, type Image } from "./png.js";
+import { decodePng, encodePng, isPng, type Image } from "./png.js";
+import { decodeWebpPreview, isWebp } from "./webp.js";
 
-// Any image a preview might meet. PNG is decoded in-process; WebP, JPEG and
-// the rest go through a converter the system already has (sips on macOS,
-// dwebp, ImageMagick or ffmpeg elsewhere) into a temporary PNG. No converter,
-// no preview: the caller says so and nothing else changes.
+// Any image a preview might meet. PNG and WebP are decoded in-process; JPEG
+// and the rest go through a converter the system already has (sips on
+// macOS, ImageMagick or ffmpeg elsewhere) into a temporary PNG. No
+// converter, no preview: the caller says so and nothing else changes.
 
 function which(cmd: string): boolean {
   try {
@@ -20,15 +21,21 @@ function which(cmd: string): boolean {
 function converters(src: string, dst: string): [string, string[]][] {
   const list: [string, string[]][] = [];
   if (process.platform === "darwin") list.push(["sips", ["-s", "format", "png", src, "--out", dst]]);
-  if (/\.webp$/i.test(src)) list.push(["dwebp", ["-quiet", src, "-o", dst]]);
   list.push(["magick", [src, `png:${dst}`]], ["convert", [src, `png:${dst}`]], ["ffmpeg", ["-loglevel", "quiet", "-y", "-i", src, "-frames:v", "1", dst]]);
   return list;
 }
 
-// Writes a PNG copy of any image the system can convert. Returns false when
-// no converter is available or the conversion failed (dst is then absent).
+// Writes a PNG copy of any image: a WebP (an animation's first frame) in
+// process, anything else through a converter. Returns false when it cannot
+// (dst is then absent).
 export function convertToPng(src: string, dst: string): boolean {
   try {
+    const buf = fs.readFileSync(src);
+    if (isWebp(buf)) {
+      const img = decodeWebpPreview(buf);
+      if (img) fs.writeFileSync(dst, encodePng(img));
+      return !!img;
+    }
     for (const [cmd, args] of converters(src, dst)) {
       if (!(process.platform === "darwin" && cmd === "sips") && !which(cmd)) continue;
       const res = spawnSync(cmd, args, { stdio: "ignore", timeout: 60_000 });
@@ -49,6 +56,7 @@ export function loadImage(file: string): Image | undefined {
     return undefined;
   }
   if (isPng(buf)) return decodePng(buf);
+  if (isWebp(buf)) return decodeWebpPreview(buf);
 
   const tmp = path.join(os.tmpdir(), `ludo-preview-${process.pid}-${Date.now()}.png`);
   try {

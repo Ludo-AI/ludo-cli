@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { CliError, EXIT } from "./errors.js";
 import { isInlineFile } from "./inline.js";
+import { ENGINES, type Engine } from "./tty/engines.js";
 
 // A project's `.ludo.json`, found by walking up from the current directory
 // (never above the home directory). Every agent session and teammate in the
@@ -11,7 +12,7 @@ import { isInlineFile } from "./inline.js";
 //
 //   {
 //     "out": "assets/generated",            where files are saved
-//     "engine": "godot",                    as --engine
+//     "engine": "godot",                    as --engine (godot, texturepacker or unity)
 //     "max_credits": 200,                   session budget (see budget.ts)
 //     "style_image": "art/style.png",       for operations with a style_image field
 //     "defaults": {                         per command ("group command" or API id)
@@ -27,7 +28,7 @@ export const STATE_DIR = ".ludo";
 
 export interface ProjectConfig {
   out?: string;
-  engine?: "godot";
+  engine?: Engine;
   max_credits?: number;
   style_image?: string;
   defaults?: Record<string, Record<string, unknown>>;
@@ -59,7 +60,7 @@ export function validateConfig(raw: unknown, file: string): ProjectConfig {
   const c = raw as Record<string, unknown>;
   for (const key of Object.keys(c)) if (!FIELDS.includes(key)) throw bad(`unknown field "${key}"`);
   if (c.out !== undefined && (typeof c.out !== "string" || !c.out.trim())) throw bad(`"out" must be a folder path`);
-  if (c.engine !== undefined && c.engine !== "godot") throw bad(`"engine" supports: godot`);
+  if (c.engine !== undefined && !(ENGINES as readonly unknown[]).includes(c.engine)) throw bad(`"engine" supports: ${ENGINES.join(", ")}`);
   if (c.max_credits !== undefined && (typeof c.max_credits !== "number" || !(c.max_credits >= 0))) throw bad(`"max_credits" must be a number of credits`);
   if (c.style_image !== undefined && (typeof c.style_image !== "string" || !c.style_image.trim())) throw bad(`"style_image" must be a file path or URL`);
   if (c.defaults !== undefined) {

@@ -70,6 +70,11 @@ export function observeHeaders(headers: Headers) {
   if (notice) notices.set(notice.id, notice);
 }
 
+// A notice from the CLI itself rather than the API, shown like one.
+export function addLocalNotice(id: string, message: string) {
+  notices.set(id, { id, level: "info", message });
+}
+
 export function upgradeRequired(body: any): CliError {
   const min = typeof body?.min_version === "string" ? clean(body.min_version, 40) : undefined;
   return new CliError(

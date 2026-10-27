@@ -19,9 +19,11 @@ import { loadProject } from "./project.js";
 import { embeddedSpecPath, loadSpec } from "./spec.js";
 import { parseGrid, previewFile, previewSkipped } from "./tty/preview.js";
 import { logo } from "./tty/flair.js";
-import { installSkill, isInstalled, skillTarget, uninstallSkill } from "./skill.js";
+import { installSkill, isInstalled, refreshSkills, skillTarget, uninstallSkill } from "./skill.js";
 import { accountLine, accountSummary, agentName, billingUrlFor, browserLogin, canOpenBrowser, isAgent, openBrowser } from "./login.js";
 import { assets, BATCH_HELP, init, loadBatch, spend } from "./workspace.js";
+import { toolbox } from "./toolbox/index.js";
+import { pricing } from "./pricing-guide.js";
 
 async function promptSecret(question: string): Promise<string> {
   if (!process.stdin.isTTY) return fs.readFileSync(0, "utf8").trim();
@@ -171,7 +173,7 @@ async function preview(ctx: Ctx, parsed: Parsed, words: string[]): Promise<numbe
     throw new CliError(
       `Could not preview ${file}`,
       EXIT.USAGE,
-      process.platform === "darwin" ? "Previews read PNG, WebP and JPEG images." : "Previews read PNG; for WebP or JPEG install dwebp (libwebp), ImageMagick or ffmpeg."
+      process.platform === "darwin" ? "Previews read PNG, WebP and JPEG images." : "Previews read PNG and WebP; for JPEG install ImageMagick or ffmpeg."
     );
   }
   return EXIT.OK;
@@ -297,7 +299,7 @@ async function main(argv: string[]): Promise<number> {
   const { globals, words } = parsed;
   const ctx = makeCtx(globals);
   const [first, second] = words;
-  if (["version", "login", "logout", "billing", "update", "spec", "help", "agent-help", "preview", "skill", "feedback", "init", "assets", "spend", "batch"].includes(first)) commandLabel = first;
+  if (["version", "login", "logout", "billing", "pricing", "update", "spec", "help", "agent-help", "preview", "skill", "feedback", "init", "assets", "spend", "batch"].includes(first)) commandLabel = first;
 
   if (globals.help && BUILTIN_HELP[first]) {
     process.stdout.write(BUILTIN_HELP[first]);
@@ -310,9 +312,12 @@ async function main(argv: string[]): Promise<number> {
   if (first === "login") return login(ctx, parsed, words.slice(1));
   if (first === "logout") return logout(ctx);
   if (first === "billing") return billing(ctx);
+  if (first === "pricing") return pricing(ctx);
   if (first === "feedback") return feedback(ctx, parsed, words.slice(1));
   if (first === "update") return update(ctx);
   if (first === "init") return init(ctx, parsed);
+  // Free and offline: dispatched before the API spec is loaded.
+  if (first === "toolbox") return toolbox(ctx, parsed, argv, label => (commandLabel = label));
 
   const apiUrl = resolveApiUrl(globals.apiUrl);
   if (first === "spec") {
@@ -341,7 +346,7 @@ async function main(argv: string[]): Promise<number> {
   }
 
   if (first === "skill") {
-    commandLabel = "skill";
+    commandLabel = ["install", "uninstall", "path"].includes(second) ? `skill ${second}` : "skill";
     return skill(ctx, parsed, words.slice(1));
   }
   if (first === "preview") {
@@ -459,6 +464,7 @@ function finish(code: number) {
 
 run(process.argv.slice(2)).then(
   async code => {
+    refreshSkills();
     flushNotes(quietRun);
     await sendTelemetry(commandLabel, code, startedAt, argvForTelemetry);
     finish(code);
@@ -466,6 +472,7 @@ run(process.argv.slice(2)).then(
   async (err: unknown) => {
     err = localFsError(err) || err;
     const json = process.argv.includes("--json") || !process.stdout.isTTY;
+    refreshSkills();
     flushNotes(quietRun);
     if (err instanceof CliError) {
       if (json) printJson({ error: { message: err.message, exit_code: err.exitCode, hint: err.hint, details: err.details } }, false);

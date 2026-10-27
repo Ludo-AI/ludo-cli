@@ -28,6 +28,10 @@ export function agentInstructions(): string {
     "`ludo` CLI. Settings live in `.ludo.json`; every file generated so far is listed in",
     "`ludo-assets.json`.",
     "",
+    "- `ludo toolbox` is free and offline, with no account: slicing and joining spritesheets, GIFs, a",
+    "  sprite's pivot and collision box, engine export, palettes, tiles, a sound's loudness and loop.",
+    "  Use it instead of writing your own script. Everything else generates with Ludo AI: it needs a",
+    "  plan with API access (Pro or Studio) and costs credits; `ludo pricing` (free) has the details.",
     "- Run `ludo agent-help` once, and `ludo <group> <command> --help` before using a command.",
     "- Check `ludo assets` before generating: the asset may already exist. `ludo assets redo <file>`",
     "  remakes one with changed flags.",
@@ -84,9 +88,15 @@ export async function init(ctx: Ctx, parsed: Parsed): Promise<number> {
   if (fs.existsSync(configPath) && !ctx.globals.force) {
     note(configPath, "kept (pass --force to overwrite)");
   } else {
-    const config: Record<string, unknown> = { out: "assets/ludo", defaults: {} };
-    // A Godot project gets SpriteFrames next to every spritesheet.
+    // A Unity project only imports what is under Assets/.
+    const unity = fs.existsSync(path.join(root, "ProjectSettings", "ProjectVersion.txt")) && fs.existsSync(path.join(root, "Assets"));
+    const config: Record<string, unknown> = { out: unity ? "Assets/Ludo" : "assets/ludo", defaults: {} };
+    // A Godot project gets SpriteFrames next to every spritesheet; a Phaser or
+    // PixiJS one, a TexturePacker JSON atlas; a Unity one, sliced sprites and
+    // a clip.
     if (fs.existsSync(path.join(root, "project.godot"))) config.engine = "godot";
+    else if (unity) config.engine = "unity";
+    else if (usesAtlasEngine(root)) config.engine = "texturepacker";
     note(configPath, writeIfChanged(configPath, JSON.stringify(config, null, 2) + "\n"));
   }
 
@@ -262,4 +272,15 @@ export function loadBatch(ctx: Ctx, parsed: Parsed, file: string, commands: Comm
     return base ? { ...prep, name: base } : prep;
   });
   return { preps, limit };
+}
+
+// Phaser or PixiJS among the package.json dependencies.
+function usesAtlasEngine(root: string): boolean {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    return Object.keys(deps).some(d => d === "phaser" || d === "pixi.js" || d.startsWith("@pixi/"));
+  } catch {
+    return false;
+  }
 }

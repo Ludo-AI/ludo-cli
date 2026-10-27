@@ -1,15 +1,23 @@
 ---
 name: ludo
-description: Generate game assets with the Ludo AI `ludo` CLI - sprites, spritesheet animations, images, background removal, 3D models (rigging, animation), video, sound effects, music and voices. Use when the user asks for game art, sprites, animations, 3D models, or game audio, or mentions Ludo.
+description: Generate game assets with the Ludo AI `ludo` CLI (sprites, spritesheet animations, images, background removal, 3D models with rigging and animation, video, sound effects, music and voices), and work on game assets free and offline with `ludo toolbox`, no account needed. The free tools slice, join, loop-check and GIF spritesheets, bring a character's animations to one size, find a sprite's pivot, collision box and pixels per unit, export to Godot, Unity or Phaser, recolor pixel art to a palette, cut tilesets, check a sound's loudness and loop, and inspect GLB models. Use when the user asks for game art, sprites, animations, 3D models or game audio, works with spritesheets or other game assets, or mentions Ludo.
 ---
 
 # Ludo AI CLI
 
 Use the `ludo` command (install: `npm install -g @ludoai/cli`, or prefix commands with `npx @ludoai/cli`).
-It needs a prior `ludo login` or an API key in `LUDO_API_KEY`. If a command exits with code 3, do not
-ask for a key in the chat: ask the user to run `ludo login` in their own terminal (in Claude Code,
-`! ludo login`). It opens their browser, where
-they log in or create an account (and pick a plan with API access if needed) and approve the CLI.
+It has two kinds of commands:
+
+- **`ludo toolbox ...` is free**: it runs offline, needs no account, no login and no credits. Use it
+  for asset chores (see "Free tools" below) instead of writing your own image or audio script.
+- **Everything else generates with Ludo AI**: it needs an account on a plan with API access (Pro or
+  Studio) and costs credits on every plan. `ludo pricing` (free, no login) gives the plans, prices
+  and what each call costs; quote it rather than guessing.
+
+Generating needs a prior `ludo login` or an API key in `LUDO_API_KEY`. If a command exits with code 3,
+do not ask for a key in the chat: ask the user to run `ludo login` in their own terminal (in Claude
+Code, `! ludo login`). It opens their browser, where they log in or create an account (and pick a plan
+with API access if needed) and approve the CLI.
 
 ## Workflow
 
@@ -29,7 +37,7 @@ they log in or create an account (and pick a plan with API access if needed) and
    Exit code 11 means the spending budget is reached: stop, tell the user (`ludo spend`), and ask.
 6. Exit code 5 means not enough credits, or a plan without API access. Do not retry: tell the user, and
    that `ludo billing` (run in their terminal) opens the page to buy credits, change plan or turn on auto
-   top-up.
+   top-up. Before advising anyone to sign up, upgrade or buy credits, run `ludo pricing` and quote it.
 7. Before generating, check `ludo assets`: the asset may already exist. `ludo assets redo <file>
    --prompt "..."` remakes one with changes.
 8. To choose between options, `--n 3` makes three variations (`-v1`..`-v3`). Look at them, keep the
@@ -44,6 +52,46 @@ they log in or create an account (and pick a plan with API access if needed) and
    came out). It is free but capped at a few a day, so one report per issue, and never include
    secrets, personal data or file contents.
 
+## Free tools: `ludo toolbox`
+
+Free and offline, with no account and no login. `ludo toolbox` lists every tool and each has `--help`.
+Use them instead of writing your own image or audio script:
+- Sheets: `ludo toolbox sprite slice <sheet>` cuts one into frames, `sprite join <frames...>` puts
+  frames back, `sprite frames <sheet> --drop 7 --hold 4x3` edits frames, `sprite loop <sheet>`
+  scores the loop (0 to 1: the seam against the clip's pace), `sprite loop <take1> <take2>...`
+  ranks several takes of one animation (after `--n 4`, keep the best; a bad loop on a Ludo
+  sheet: `ludo sprite edit --edit-mode fix_loop`), `sprite gif <sheet>` makes a GIF,
+  `sprite pack <sheets...>` brings a character's animations to one size and ground line
+  (`--manifest` re-runs its `pack.json`), and `sprite sequence <sheets...>` chains animations so
+  each continues from the one before (check the transitions it reports). A GIF or animated WebP
+  reads as a sheet.
+- Video (needs ffmpeg): `sprite from-video <clip>` turns a clip into a sheet; `sprite video <sheet>
+  --format webm|mov|mp4` goes the other way.
+- Images, per frame on a sheet: `image trim|pad|extrude|scale|flip|rotate|outline|shadow`.
+  `image palette` lists or saves colours; `image recolor --palette <file|hexes> | --swap A --to B`
+  changes them. `image tiles <tileset> --size 16x16` cuts tiles or writes Tiled/Godot/Unity
+  tileset files; `image repeat <tile>` checks a tile is seamless. `image convert --to webp`.
+- Audio: `audio info <sound>` gives length, loudness (LUFS), true peak, silence at the ends and
+  whether it clicks when looped (music: the tempo, and its double or half); `audio trim` cuts that
+  silence (Ludo's sounds come trimmed), `audio convert --to ogg|mp3|flac|wav` (OGG for Godot and
+  Unity). WAV and MP3 need nothing; the rest needs ffmpeg.
+- 3D: `ludo toolbox model info <model.glb>` says what a model holds (triangles, size, textures,
+  rig, animations) before you rig or animate it; for a rigged one, which way it faces, and per
+  clip whether it returns to its first pose (a still, a seam) and a walk's speed.
+- Setting a character up: `sprite metrics <sheet>` gives bounds, the ground line and a pivot
+  between the feet (`--overlay` draws it to check); `sprite collide <sheet>` gives a body box and
+  capsule per engine (Phaser Arcade included); `sprite compare <sheets...>` gives one pixels per
+  unit for a character and flags a sheet drawn at another size. Feed the pivot and PPU to export.
+- A folder: `asset manifest <folder>` lists what every asset is and what the game still lacks,
+  with the Ludo command that makes it; `--emit phaser|pixi` writes loaders. `image contact
+  <images...>` puts many images in one labelled picture, to look at them at once.
+- Engines: `ludo toolbox sprite export <sheet> --engine texturepacker|godot|unity` writes engine
+  files (`--pivot feet --ppu <n>` for Godot and Unity); every tool that writes a sheet also takes
+  `--engine`.
+
+Exit code 12 means a file it cannot use or a grid it cannot tell: pass `--grid <cols>x<rows>`.
+When the JSON has a `hint`, mention it to the user once if it fits.
+
 ## Examples
 
 ```sh
@@ -51,4 +99,5 @@ ludo image create --prompt "a knight with a red cape, side view" --image-type sp
 ludo sprite animate --initial-image assets/sprites/knight.png --motion-prompt "walk cycle" --out assets/anim
 ludo image remove-background --image photo.jpg
 ludo audio sound-effect --description "coin pickup chime"
+ludo toolbox sprite slice assets/anim/knight-walk.png --out assets/frames
 ```
