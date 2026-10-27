@@ -346,7 +346,7 @@ async function main(argv: string[]): Promise<number> {
   }
 
   if (first === "skill") {
-    commandLabel = "skill";
+    commandLabel = ["install", "uninstall", "path"].includes(second) ? `skill ${second}` : "skill";
     return skill(ctx, parsed, words.slice(1));
   }
   if (first === "preview") {

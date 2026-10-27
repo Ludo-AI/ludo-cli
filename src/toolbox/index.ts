@@ -1,6 +1,7 @@
 import { GLOBAL_FLAGS, type Parsed } from "../args.js";
 import { CliError, EXIT } from "../errors.js";
 import type { Ctx } from "../generate.js";
+import { hintId, noteFact } from "../telemetry.js";
 import { TOOL_GROUPS, TOOLS, type Tool, type ToolCall } from "./registry.js";
 import "./sprite.js";
 import "./sprite-pack.js";
@@ -163,8 +164,15 @@ export async function toolbox(ctx: Ctx, parsed: Parsed, argv: string[], setLabel
   }
   const tool = TOOLS.find(t => t.group === group && t.name === name);
   const atLudo = AT_LUDO[`${group} ${name}`];
-  if (!tool && atLudo) throw new CliError(`ludo toolbox ${group} ${name} is not a toolbox tool`, EXIT.USAGE, `${atLudo.job}: ${atLudo.command}`);
   const moved = MOVED[`${group} ${name}`];
+  // A name sent elsewhere counts as itself, with where it was sent: `image
+  // key` is someone who wanted a background removed.
+  if (!tool && (atLudo || moved)) {
+    setLabel(`toolbox ${group} ${name}`);
+    const id = hintId((atLudo || moved).command);
+    if (id) noteFact("hint", id);
+  }
+  if (!tool && atLudo) throw new CliError(`ludo toolbox ${group} ${name} is not a toolbox tool`, EXIT.USAGE, `${atLudo.job}: ${atLudo.command}`);
   if (!tool && moved) throw new CliError(`ludo toolbox ${group} ${name} is no longer a tool of its own`, EXIT.USAGE, `${moved.job}: ${moved.command}`);
   if (!tool) {
     const names = TOOLS.filter(t => t.group === group).map(t => t.name);

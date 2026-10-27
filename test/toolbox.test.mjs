@@ -132,6 +132,31 @@ test("a toolbox event says what it read and what it suggested, never names or va
   assert.equal(events[quiet].props.hint, undefined);
 });
 
+test("a name sent to Ludo or to another tool is counted as itself, with where it was sent", async () => {
+  const env = { LUDO_TELEMETRY: "", DO_NOT_TRACK: "", LUDO_API_URL: `http://127.0.0.1:${collector.address().port}` };
+  const from = events.length;
+  assert.equal((await run(["toolbox", "image", "key", "a.png"], env)).code, EXIT.USAGE);
+  assert.equal((await run(["toolbox", "sprite", "contact", "a.png"], env)).code, EXIT.USAGE);
+  assert.deepEqual(
+    events.slice(from).map(e => [e.command, e.props.hint]),
+    [
+      ["toolbox image key", "image remove-background"],
+      ["toolbox sprite contact", "toolbox sprite metrics"]
+    ]
+  );
+});
+
+test("asset manifest reports how many gaps it found and of which kinds, never what they are", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-gaps-"));
+  for (const [i, name] of ["hero_walk", "hero_attack", "rogue_walk", "rogue_attack", "knight_walk"].entries()) writeSheet(dir, `${name}.png`, noise(32, 16, 0, 11 + i * 7), { cols: 2, rows: 1, frames: 2, fps: 8 });
+  const from = events.length;
+  const r = await run(["toolbox", "asset", "manifest", dir], { LUDO_TELEMETRY: "", DO_NOT_TRACK: "", LUDO_API_URL: `http://127.0.0.1:${collector.address().port}` });
+  assert.equal(r.code, EXIT.OK, r.stderr);
+  const [event] = events.slice(from);
+  assert.deepEqual([event.props.gaps, event.props.gap_kinds, event.props.hint], [1, "animation", "sprite animate"]);
+  assert.doesNotMatch(JSON.stringify(event), /knight|attack/);
+});
+
 test("tool flags keep the positionals in order and reject what the tool does not know", () => {
   const tool = {
     group: "sprite",

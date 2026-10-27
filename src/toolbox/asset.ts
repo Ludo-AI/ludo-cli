@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { noteFact } from "../telemetry.js";
 import fs from "node:fs";
 import path from "node:path";
 import { CliError, EXIT } from "../errors.js";
@@ -1350,6 +1351,8 @@ TOOLS.push({
     const emitted = [...new Set(emits as Emit[])].map(e => emit(ctx, e, found.root, assets, manifest, plan, textFlag(call, "--base")));
     const notes = [...new Set(emitted.flatMap(e => e.notes))];
     const firstSheet = assets.find(a => a.kind === "spritesheet" && !a.animated && !plan.left.has(a));
+    noteFact("gaps", gaps.length);
+    if (gaps.length) noteFact("gap_kinds", [...new Set(gaps.map(g => g.kind))].sort().join(" "));
     const next = gaps.length
       ? hint(gaps[0].hint.text, gaps[0].hint.command)
       : firstSheet

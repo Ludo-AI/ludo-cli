@@ -86,10 +86,12 @@ export function noteJob(id: unknown, credits?: unknown) {
 
 // Facts a command learns while it runs, beyond its flags: what the toolbox
 // read (counts and formats, never names), which engine files it wrote, which
-// "Next:" line it showed.
+// "Next:" line it showed, how many gaps `asset manifest` found and of which
+// kinds, and whether the installed skill was brought up to date.
 const facts: Record<string, string | number | boolean> = {};
-export function noteFact(key: "engine" | "grid_from" | "hint", value: string): void;
-export function noteFact(key: "frames", value: number): void;
+export function noteFact(key: "engine" | "grid_from" | "hint" | "gap_kinds", value: string): void;
+export function noteFact(key: "frames" | "gaps", value: number): void;
+export function noteFact(key: "skill_refreshed", value: boolean): void;
 export function noteFact(key: string, value: string | number | boolean) {
   facts[key] = value;
 }

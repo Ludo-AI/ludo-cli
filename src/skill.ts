@@ -4,6 +4,7 @@ import path from "node:path";
 import { PACKAGE_ROOT, VERSION } from "./config.js";
 import { CliError, EXIT } from "./errors.js";
 import { addLocalNotice, compareVersions } from "./notices.js";
+import { noteFact } from "./telemetry.js";
 
 // `ludo skill install`: puts the bundled Claude Code skill where Claude Code
 // finds it, so an agent knows how to use the CLI without loading every tool
@@ -91,6 +92,7 @@ export function refreshSkills(): void {
     const from = staleSkill(false);
     if (from) {
       installSkill({ project: false, force: false });
+      noteFact("skill_refreshed", true);
       addLocalNotice("skill-updated", `Updated the Ludo skill for Claude Code from ${from} to ${VERSION}; a new session picks it up.`);
     }
   } catch {
