@@ -614,7 +614,7 @@ test("loop on several takes ranks them, the best loop first", async () => {
 
 test("the jobs Ludo does are not toolbox tools: their names point at Ludo's", async () => {
   for (const [group, name, command] of [
-    ["image", "snap", /ludo image pixel-art/],
+    ["image", "snap", /ludo image convert-to-pixel-art/],
     ["image", "key", /ludo image remove-background/],
     ["audio", "normalize", /ludo toolbox audio info/],
     ["audio", "loop", /ludo toolbox audio info/]

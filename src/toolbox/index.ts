@@ -27,7 +27,7 @@ export { TOOLS } from "./registry.js";
 // thing, one worse, and the free one ends up "fixing" Ludo's results. An
 // agent that reaches for one of these names is sent to Ludo's.
 const AT_LUDO: Record<string, { job: string; command: string }> = {
-  "image snap": { job: "Turning a picture into pixel art is Ludo's job (free: in the web app, or here with a Pro or Studio login)", command: "ludo image pixel-art --image <file>" },
+  "image snap": { job: "Turning a picture into pixel art is Ludo's job (free: in the web app, or here with a Pro or Studio login)", command: "ludo image convert-to-pixel-art --image <file>" },
   "image key": { job: "Taking a background away is Ludo's job (0.5 credits)", command: "ludo image remove-background --image <file>" },
   "audio normalize": { job: "Ludo's sounds come loudness-matched already; to measure any sound's loudness", command: "ludo toolbox audio info <sound>" },
   "audio loop": { job: "Ludo's music and ambiences loop already; to check any sound's loop seam", command: "ludo toolbox audio info <sound>" }
@@ -68,8 +68,8 @@ function toolboxHelp(): string {
       ? table(groups.map(g => [g, `${TOOL_GROUPS[g]}: ${TOOLS.filter(t => t.group === g).map(t => t.name).join(", ")}`]))
       : "  No tools yet.",
     "",
-    "Pixel art conversion and background removal are Ludo's: ludo image pixel-art, ludo image",
-    "remove-background (`ludo pricing` says which plans).",
+    "Pixel art conversion and background removal are Ludo's: ludo image convert-to-pixel-art and",
+    "ludo image remove-background (`ludo pricing` says which plans).",
     ""
   ].join("\n");
 }

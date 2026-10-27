@@ -396,7 +396,7 @@ TOOLS.push({
     "                           (an enemy in red becomes one in blue); colours not in A stay",
     "Palettes are files (.hex, .gpl, .pal, .txt, or an image's colours from .png) or hex lists",
     "(#1a1c2c,#5d275d). Nearest is by RGB distance. To turn a picture into pixel art with fewer",
-    "colours, Ludo converts it: ludo image pixel-art."
+    "colours, Ludo converts it: ludo image convert-to-pixel-art."
   ],
   flags: [
     { flag: "--palette", value: "file|hexes", description: "Map every colour to its nearest in this palette" },
