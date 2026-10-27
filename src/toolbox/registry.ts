@@ -43,6 +43,15 @@ export interface Hint {
   command: string;
 }
 
+// A path as the person would type it in their shell: bare when nothing in it
+// needs quoting, else in double quotes. On Windows backslashes are the path's
+// own (cmd and PowerShell don't escape with them), and a ~ inside a short
+// name (RUNNER~1) is only a letter.
+export const shellArg = (p: string): string => {
+  if (process.platform === "win32") return /^(?!~)[\w.\\/@:+~-]+$/.test(p) ? p : `"${p.replace(/"/g, '\\"')}"`;
+  return /^[\w./@:+-]+$/.test(p) ? p : `"${p.replace(/(["\\$`])/g, "\\$1")}"`;
+};
+
 export const hint = (text: string, command: string): Hint => {
   const id = hintId(command);
   if (id) noteFact("hint", id);

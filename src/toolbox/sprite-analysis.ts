@@ -28,7 +28,7 @@ import { pad } from "./pixels.js";
 import { crop, sliceSheet } from "./sheet.js";
 import { resolveGrid } from "./sprite.js";
 import { gridFlag, positiveInt, positiveNumber, textFlag } from "./flags.js";
-import { hint, TOOLS, type ToolCall, type ToolFlag } from "./registry.js";
+import { hint, shellArg, TOOLS, type ToolCall, type ToolFlag } from "./registry.js";
 
 export type Point = [number, number];
 
@@ -993,7 +993,6 @@ const gridJson = (sh: Sheet) => ({ cols: sh.grid.cols, rows: sh.grid.rows, frame
 const howGrid = (from: string) => (from === "stamp" ? "from its Ludo stamp" : from === "gif" ? "the GIF's frames" : from === "webp" ? "the WebP's frames" : from === "flag" ? "from --grid" : "detected");
 const pt = (p: Point) => `${r2(p[0])}, ${r2(p[1])}`;
 const titleOf = (sh: Sheet) => `${path.basename(sh.src.file)} · ${sh.grid.frames} frames of ${sh.fw}x${sh.fh} · ${sh.grid.cols}x${sh.grid.rows} · ${sh.grid.fps} fps`;
-const quoted = (p: string) => (/^[\w./@:+-]+$/.test(p) ? p : `"${p.replace(/"/g, '\\"')}"`);
 
 function savePicture(ctx: Ctx, sheet: Sheet, img: Image, what: string): string {
   const file = freeName(ctx.outDir, `${ctx.globals.name || baseOf(sheet.src.file)}-${what}`, ".png");
@@ -1057,7 +1056,7 @@ TOOLS.push({
     const picture = call.flags.has("--overlay") ? metricsPicture(sheet.frames, titleOf(sheet), s, every) : undefined;
     const overlay = picture && savePicture(ctx, sheet, picture.image, "metrics");
     const sheetArg = shown(sheet.src.file);
-    const next = hint("Write the engine files with this pivot", `ludo toolbox sprite export ${quoted(sheetArg)} --engine unity --pivot ${s.pivot.kind === "flag" ? `${s.pivot.x},${s.pivot.y}` : s.pivot.kind}`);
+    const next = hint("Write the engine files with this pivot", `ludo toolbox sprite export ${shellArg(sheetArg)} --engine unity --pivot ${s.pivot.kind === "flag" ? `${s.pivot.x},${s.pivot.y}` : s.pivot.kind}`);
     if (ctx.jsonOut) {
       printJson(
         {
@@ -1205,7 +1204,7 @@ TOOLS.push({
       writeJson(full, { sheet: shown(sheet.src.file), pivot: s.pivot, ppu, coordinates: "pixels from the pivot, x right, y down", frames: result.map((r, i) => ({ frame: i + 1, ...(r ?? { shapes: null }) })) });
     }
     const sheetArg = shown(sheet.src.file);
-    const next = hint("Import the sprite with the same pivot and pixels per unit", `ludo toolbox sprite export ${quoted(sheetArg)} --engine unity --pivot ${s.pivot.kind === "flag" ? `${s.pivot.x},${s.pivot.y}` : s.pivot.kind} --ppu ${ppu}`);
+    const next = hint("Import the sprite with the same pivot and pixels per unit", `ludo toolbox sprite export ${shellArg(sheetArg)} --engine unity --pivot ${s.pivot.kind === "flag" ? `${s.pivot.x},${s.pivot.y}` : s.pivot.kind} --ppu ${ppu}`);
 
     if (ctx.jsonOut) {
       printJson(
@@ -1449,7 +1448,7 @@ class AssetLogs {
 const sameImage = (a?: string, b?: string) => !!a && !!b && (a === b || (!isUrl(a) && !isUrl(b) && !!md5Of(a) && md5Of(a) === md5Of(b)));
 const ageDays = (iso?: string) => (iso && !Number.isNaN(Date.parse(iso)) ? (Date.now() - Date.parse(iso)) / 86_400_000 : undefined);
 const animateCommand = (o: Origin, image: string, trueSize: boolean) =>
-  [`ludo sprite animate --initial-image ${quoted(isUrl(image) ? image : shown(image))}`, `--motion-prompt ${JSON.stringify(o.motion_prompt ?? "<what it does>")}`, o.model ? `--model ${o.model}` : "", trueSize ? "--frame-size -9" : ""]
+  [`ludo sprite animate --initial-image ${shellArg(isUrl(image) ? image : shown(image))}`, `--motion-prompt ${JSON.stringify(o.motion_prompt ?? "<what it does>")}`, o.model ? `--model ${o.model}` : "", trueSize ? "--frame-size -9" : ""]
     .filter(Boolean)
     .join(" ");
 
@@ -1606,7 +1605,7 @@ TOOLS.push({
       // True Size draws every sheet at its input image's size, which can be
       // smaller than the art wants: scaling the sheets to one body height is
       // the other way to one size.
-      const pack = `ludo toolbox sprite pack ${list.map(r => quoted(shown(r.sheet.src.file))).join(" ")}${character ? ` --name ${character}` : ""}`;
+      const pack = `ludo toolbox sprite pack ${list.map(r => shellArg(shown(r.sheet.src.file))).join(" ")}${character ? ` --name ${character}` : ""}`;
       const sheets = list.map(r => {
         const size = r4(r.height / ref.height);
         const info = { ...sheetInfo(r), size_vs_reference: size, ...(r === ref ? { reference: true } : {}) };
@@ -1696,8 +1695,8 @@ TOOLS.push({
         ? hint("Bring the character's sheets to one size and ground line (or see the outlier for True Size)", toFix.alternative)
         : hint(toFix.cause === "input_image" ? "Animate the move again from the reference's input image" : "Animate the move again at True Size", toFix.fix)
       : first
-        ? hint("Write each sheet's engine files with its feet pivot and the character's pixels per unit", `ludo toolbox sprite export ${quoted(first.reference.sheet)} --engine unity --pivot feet --ppu ${first.pixels_per_unit}`)
-        : hint("Name the character to compare these sheets", `ludo toolbox sprite compare ${files.map(f => quoted(shown(f))).join(" ")} --character <name>`);
+        ? hint("Write each sheet's engine files with its feet pivot and the character's pixels per unit", `ludo toolbox sprite export ${shellArg(first.reference.sheet)} --engine unity --pivot feet --ppu ${first.pixels_per_unit}`)
+        : hint("Name the character to compare these sheets", `ludo toolbox sprite compare ${files.map(f => shellArg(shown(f))).join(" ")} --character <name>`);
     const consistent = judged.every(c => c.consistent !== false);
     if (ctx.jsonOut) {
       printJson({ characters, consistent, ...(ctx.globals.quiet ? {} : { hint: next }) }, false);
