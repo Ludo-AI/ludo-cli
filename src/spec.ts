@@ -110,9 +110,16 @@ export async function loadSpec(apiUrl: string, opts: { forceRefresh?: boolean; n
         const spec = JSON.parse(text);
         // A broken deploy must not take every CLI down with it.
         if (looksLikeSpec(spec)) {
-          fs.mkdirSync(paths.dir, { recursive: true });
-          writeAtomic(paths.spec, text);
-          writeMeta(paths, { etag: res.headers.get("etag") || undefined, fetched_at: Date.now() });
+          // A cache that can't be written (a sandboxed agent, a read-only
+          // home) must not cost us the spec just fetched: the embedded copy
+          // it would fall back to can offer models the API has since retired.
+          try {
+            fs.mkdirSync(paths.dir, { recursive: true });
+            writeAtomic(paths.spec, text);
+            writeMeta(paths, { etag: res.headers.get("etag") || undefined, fetched_at: Date.now() });
+          } catch {
+            // Fetched again on the next run.
+          }
           return { spec, source: "server", location: specUrl(apiUrl) };
         }
       }

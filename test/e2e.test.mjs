@@ -32,6 +32,8 @@ let flakyUploads = 0;
 let flakyJobGets = 0;
 let rateLimitedUploads = false;
 let slowSpecMs = 0;
+// When set, the spec the server answers with instead of spec/openapi.json.
+let servedSpec = null;
 const ACCOUNT = {
   credits: { available: 1840.5, plan_credits: 2000, used: 460, extra: 300.5, resets_at: 1790000000, team_pool: false, paused: false, grace_until: null },
   plan: { name: "Pro", api_access: true },
@@ -72,7 +74,7 @@ before(async () => {
         return res.end();
       }
       res.writeHead(200, { "Content-Type": "application/json", ETag: '"v2"' });
-      return res.end(fs.readFileSync(SPEC));
+      return res.end(servedSpec || fs.readFileSync(SPEC));
     }
     if (req.method === "POST" && url.pathname === "/api/assets/sprite/animate") {
       // "webp" in the prompt: answer like hydra, whose sheets come as WebP.
@@ -416,6 +418,24 @@ test("a refresh that did not get through is not retried on every run", async () 
   assert.equal(code, 0, stderr);
   await new Promise(r => setTimeout(r, 300));
   assert.equal(specFetches(from).length, 0);
+});
+
+test("a fetched spec is used even when the cache cannot be written", async () => {
+  // The server's spec has dropped removeBackground; the embedded copy still
+  // has it, so running the command tells the two apart.
+  const live = JSON.parse(fs.readFileSync(SPEC, "utf8"));
+  delete live.paths["/assets/image/remove-background"];
+  servedSpec = JSON.stringify(live);
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-"));
+  // A file where the cache directory should be: every cache write throws.
+  fs.writeFileSync(path.join(cwd, "blocked"), "");
+  try {
+    const { code, stderr } = await run(["image", "remove-background", "--image", "https://example.com/a.png", "--no-wait"], { LUDO_SPEC: "", LUDO_CACHE_DIR: path.join(cwd, "blocked", "cache") }, cwd);
+    assert.equal(code, 2, stderr);
+    assert.match(stderr, /Unknown command: ludo image remove-background/);
+  } finally {
+    servedSpec = null;
+  }
 });
 
 test("help on a first run does not wait for the server", async () => {
