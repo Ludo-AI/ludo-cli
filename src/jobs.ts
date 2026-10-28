@@ -84,26 +84,85 @@ export async function downloadAll(
   for (const [i, url] of urls.entries()) {
     const ext = path.extname(new URL(url).pathname) || "";
     const target = freePath(dir, `${prefix}${suffix(i, urls.length)}`, ext);
-    const failed = (err: any) => new CliError(`Download failed for ${url}: ${err?.cause?.code || err?.message || err}`, EXIT.ERROR);
-    let res: Response;
-    try {
-      res = await fetch(url, { signal: AbortSignal.timeout(5 * 60 * 1000) });
-    } catch (err: any) {
-      throw failed(err);
-    }
-    if (!res.ok) throw new CliError(`Download failed for ${url}: HTTP ${res.status}`, EXIT.ERROR);
-    // The timeout also covers the body: a slow download can abort here.
-    let data: ArrayBuffer;
-    try {
-      data = await res.arrayBuffer();
-    } catch (err: any) {
-      throw failed(err);
-    }
-    fs.writeFileSync(target, Buffer.from(data));
+    await fetchToFile(url, target, log);
     log?.(`Saved ${target}`);
     saved.push({ url, path: target });
   }
   return saved;
+}
+
+const DOWNLOAD_ATTEMPTS = 4;
+
+// Streams url into target through a .part file. A transfer that stalls (no
+// data for idleMs) or drops part-way is picked up with a Range request from
+// the bytes already written, so a long video on a flaky line is neither lost
+// nor fetched from zero again. A server that ignores Range starts it over.
+export async function fetchToFile(url: string, target: string, log?: (msg: string) => void, idleMs = 60_000): Promise<void> {
+  const part = `${target}.part`;
+  const state = { written: 0 };
+  try {
+    for (let attempt = 1; ; attempt++) {
+      let problem: string;
+      try {
+        if (await fetchOnce(url, part, state, idleMs)) break;
+        problem = "the connection closed early";
+      } catch (err: any) {
+        if (err instanceof CliError) throw err;
+        problem = err?.cause?.code || err?.message || String(err);
+      }
+      if (attempt === DOWNLOAD_ATTEMPTS) throw new CliError(`Download failed for ${url}: ${problem}`, EXIT.ERROR);
+      log?.(`Download of ${path.basename(target)} interrupted (${problem}); resuming from byte ${state.written.toLocaleString("en-US")}.`);
+    }
+    fs.renameSync(part, target);
+  } finally {
+    fs.rmSync(part, { force: true });
+  }
+}
+
+// One request, appending to part from state.written. True once the whole
+// file is there.
+async function fetchOnce(url: string, part: string, state: { written: number }, idleMs: number): Promise<boolean> {
+  const ctrl = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
+  const kick = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => ctrl.abort(new Error(`no data for ${idleMs / 1000}s`)), idleMs);
+  };
+  kick();
+  try {
+    const res = await fetch(url, { headers: state.written ? { Range: `bytes=${state.written}-` } : {}, signal: ctrl.signal });
+    const rangeTotal = () => Number(/\/(\d+)$/.exec(res.headers.get("content-range") || "")?.[1]) || undefined;
+    let total: number | undefined;
+    if (res.status === 206) {
+      total = rangeTotal();
+    } else if (res.status === 416 && state.written) {
+      // Everything had arrived; only the end of the last response was lost.
+      if (rangeTotal() === state.written) return true;
+      state.written = 0;
+      return false;
+    } else if (res.ok) {
+      state.written = 0;
+      total = Number(res.headers.get("content-length")) || undefined;
+    } else {
+      throw new CliError(`Download failed for ${url}: HTTP ${res.status}`, EXIT.ERROR);
+    }
+    const fd = fs.openSync(part, state.written ? "a" : "w");
+    try {
+      for await (const chunk of (res.body || []) as unknown as AsyncIterable<Uint8Array>) {
+        fs.writeSync(fd, chunk);
+        state.written += chunk.length;
+        kick();
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+    return total === undefined || state.written >= total;
+  } catch (err) {
+    if (ctrl.signal.aborted && !(err instanceof CliError)) throw ctrl.signal.reason;
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // Inline base64 in a result (hydra's `audio_b64`) is written to a file and
