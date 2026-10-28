@@ -1,5 +1,5 @@
 {
   "name": "ludo",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Generate game assets with Ludo AI: sprites, spritesheet animations, images, 3D models (rigging, animation), video, sound effects, music and voices, through the ludo CLI. Plus free offline tools for spritesheets, pixel art, audio and engine export."
 }
