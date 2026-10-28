@@ -273,11 +273,14 @@ export async function saveResult(ctx: Ctx, job: any, label: string, naming: Nami
     }
     sheet = stamped[0]?.png;
     const sheetFile = stamped[0]?.file;
+    // A WebP sheet that saved but would not convert is a sheet all the same:
+    // "no spritesheet" sent agents filing API bugs over a local decode.
+    const unconverted = downloaded.find(f => /\.webp$/i.test(f.path) && !pngOf.has(f.path) && sheetResults.some(r => r?.spritesheet_url === f.url));
     const engineFiles = !globals.engine
       ? []
       : stamped.length
       ? (await Promise.all(stamped.map(s => engineExport(ctx, s.png, s.grid)))).flat()
-      : await engineExport(ctx, undefined, undefined);
+      : await engineExport(ctx, undefined, undefined, unconverted && `could not convert the WebP spritesheet ${path.relative(process.cwd(), unconverted.path)} to PNG, so there is nothing to export.`);
     const constant = naming.variationOf?.(-1);
     const rel = (p: string) => path.relative(process.cwd(), p) || p;
     files = [
@@ -416,10 +419,10 @@ function handOff(ctx: Ctx, files: { path: string }[], sheet?: string) {
   }
 }
 
-async function engineExport(ctx: Ctx, sheet: string | undefined, grid: ReturnType<typeof gridFromResult>): Promise<{ url: string; path: string }[]> {
+async function engineExport(ctx: Ctx, sheet: string | undefined, grid: ReturnType<typeof gridFromResult>, missing?: string): Promise<{ url: string; path: string }[]> {
   const engine = ctx.globals.engine!;
   if (!sheet || !grid) {
-    ctx.log(`--engine ${engine}: this result has no spritesheet, so there is nothing to export.`);
+    ctx.log(`--engine ${engine}: ${missing || "this result has no spritesheet, so there is nothing to export."}`);
     return [];
   }
   try {

@@ -78,13 +78,15 @@ before(async () => {
     }
     if (req.method === "POST" && url.pathname === "/api/assets/sprite/animate") {
       // "webp" in the prompt: answer like hydra, whose sheets come as WebP.
-      const webp = JSON.parse(raw).motion_prompt === "webp";
+      // "brokenwebp": a WebP sheet no decoder can read.
+      const prompt = JSON.parse(raw).motion_prompt;
+      const file = prompt === "webp" ? "sheet.webp" : prompt === "brokenwebp" ? "broken.webp" : "sheet.png";
       return json(res, 200, {
         id: "job-sheet001",
         status: "succeeded",
         task_type: "animateSprite",
         credits_charged: 9,
-        result: { spritesheet_url: `${base}/files/sheet.${webp ? "webp" : "png"}`, audio_url: `${base}/files/sfx.mp3`, num_frames: 4, num_cols: 2, num_rows: 2, duration: 0.5 }
+        result: { spritesheet_url: `${base}/files/${file}`, audio_url: `${base}/files/sfx.mp3`, num_frames: 4, num_cols: 2, num_rows: 2, duration: 0.5 }
       });
     }
     if (req.method === "GET" && url.pathname === "/files/sfx.mp3") {
@@ -94,6 +96,10 @@ before(async () => {
     if (req.method === "GET" && url.pathname === "/files/sheet.webp") {
       res.writeHead(200);
       return res.end(fs.readFileSync(new URL("./corpus/webp/made-sheet-lossless.webp", import.meta.url)));
+    }
+    if (req.method === "GET" && url.pathname === "/files/broken.webp") {
+      res.writeHead(200);
+      return res.end(Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4, 0xff), Buffer.from("WEBPVP8 "), Buffer.alloc(32, 7)]));
     }
     if (req.method === "GET" && url.pathname === "/files/sheet.png") {
       res.writeHead(200);
@@ -875,6 +881,13 @@ test("skill install into a config folder that can't be created is a plain error"
   assert.equal(r.code, 1);
   assert.match(r.stderr, /Could not create .*: part of the path is not a folder/);
   assert.match(r.stderr, /CLAUDE_CONFIG_DIR/);
+});
+
+test("--engine says a WebP sheet would not convert, not that there is no spritesheet", async () => {
+  const { code, stderr } = await run(["sprite", "animate", "--initial-image", "https://example.com/k.png", "--motion-prompt", "brokenwebp", "--engine", "godot"], { PATH: "" });
+  assert.equal(code, 0, stderr);
+  assert.match(stderr, /--engine godot: could not convert the WebP spritesheet \S+\.webp to PNG/);
+  assert.doesNotMatch(stderr, /no spritesheet/);
 });
 
 // WebP is decoded in-process: no converter on PATH is needed (or used).
