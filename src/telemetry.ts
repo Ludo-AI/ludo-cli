@@ -22,11 +22,19 @@ import { findProjectFile } from "./project.js";
 // drop), and most runs then make no request at all. An event the server did
 // not get goes back in the queue; ones over a week old are dropped, as the
 // server would no longer date them.
+//
+// A send that times out may still have been stored, so each event carries a
+// random id and the server stores an id once. The timeout leaves room for a
+// fresh TLS connection from far away (a second was not enough from Asia, and
+// every event went again on each run) while keeping what a hung API costs an
+// offline toolbox command small, and one run sends at most MAX_BATCHES
+// requests, leaving the rest queued for the next.
 
-const SEND_TIMEOUT_MS = 1000;
+const SEND_TIMEOUT_MS = 2000;
 const FLUSH_EVERY_MS = 10_000;
 const FLUSH_AT = 20; // queued events that send at once
 const BATCH = 20; // events per request (the server's maxItems)
+const MAX_BATCHES = 2; // requests per run
 const MAX_QUEUED = 400;
 const MAX_AGE_S = 7 * 24 * 3600;
 const QUEUE = "telemetry-queue.jsonl";
@@ -152,7 +160,7 @@ export function buildEvent(command: string, exitCode: number, durationMs: number
     const credits = jobs.reduce((sum, j) => sum + (j.credits || 0), 0);
     props.credits = Math.round(credits * 100) / 100;
   }
-  return { command, at: Math.floor(Date.now() / 1000), props };
+  return { command, id: crypto.randomBytes(12).toString("base64url"), at: Math.floor(Date.now() / 1000), props };
 }
 
 function safe<T>(fn: () => T): T | undefined {
@@ -165,6 +173,7 @@ function safe<T>(fn: () => T): T | undefined {
 
 interface Queued {
   command: string;
+  id?: string; // missing on events queued by 0.2.0
   at: number;
   props: Record<string, unknown>;
 }
@@ -233,7 +242,7 @@ function sentAgo(dir: string): number {
 }
 
 // Queues the command's event and sends the queue when it is due. Never
-// throws, never changes the exit code, and gives up after a second.
+// throws, never changes the exit code, and gives up after SEND_TIMEOUT_MS.
 export async function sendTelemetry(command: string | undefined, exitCode: number, startedAt: number, argv: string[]): Promise<void> {
   if (!armed || !telemetryEnabled()) return;
   try {
@@ -254,6 +263,9 @@ export async function sendTelemetry(command: string | undefined, exitCode: numbe
       events = [event]; // No queue here: send this one alone.
     }
     if (!events.length) return;
+    const later = events.slice(MAX_BATCHES * BATCH);
+    events = events.slice(0, MAX_BATCHES * BATCH);
+    safe(() => appendQueue(dir, later));
     const key = safe(() => resolveApiKey(argvValue(argv, "--api-key")));
     const apiUrl = safe(() => resolveApiUrl(argvValue(argv, "--api-url"))) || "https://api.ludo.ai";
     const batches: Queued[][] = [];

@@ -889,6 +889,7 @@ test("each command sends one usage event: facts and flag names, never values", a
   assert.match(body.install_id, /^[A-Za-z0-9_-]{8,64}$/);
   const [event] = body.events;
   assert.equal(event.command, "image create");
+  assert.match(event.id, /^[A-Za-z0-9_-]{16}$/);
   assert.equal(event.props.exit_code, first.code);
   assert.deepEqual(event.props.flags, ["--prompt", "--image-type", "--json"]);
   assert.equal(event.props.logged_in, true);
@@ -941,7 +942,28 @@ test("events the server did not take wait for the next send", async () => {
   const from = seen.length;
   await run(["version"], { LUDO_TELEMETRY: "1" }, cwd);
   const [sent] = telemetryEvents(from);
-  assert.equal(JSON.parse(sent.raw).events.length, 2);
+  const events = JSON.parse(sent.raw).events;
+  assert.equal(events.length, 2);
+  // The same id as queued, so the server can tell a second try from a new event.
+  assert.equal(events[0].id, JSON.parse(queued[0]).id);
+  assert.notEqual(events[0].id, events[1].id);
+});
+
+test("one run sends at most two requests, the rest waits", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-backlog-"));
+  const dir = path.join(cwd, ".config");
+  fs.mkdirSync(dir, { recursive: true });
+  const at = Math.floor(Date.now() / 1000);
+  const backlog = Array.from({ length: 59 }, (_, i) => JSON.stringify({ command: "version", id: `queued-${String(i).padStart(4, "0")}`, at, props: {} }));
+  fs.writeFileSync(path.join(dir, "telemetry-queue.jsonl"), backlog.join("\n") + "\n");
+  const from = seen.length;
+  await run(["version"], { LUDO_TELEMETRY: "1" }, cwd);
+  const sends = telemetryEvents(from).map(s => JSON.parse(s.raw).events);
+  assert.deepEqual(sends.map(e => e.length), [20, 20]);
+  // The oldest go first.
+  assert.equal(sends[0][0].id, "queued-0000");
+  const left = fs.readFileSync(path.join(dir, "telemetry-queue.jsonl"), "utf8").trim().split("\n");
+  assert.equal(left.length, 20);
 });
 
 test("usage events honour LUDO_TELEMETRY=0 and DO_NOT_TRACK", async () => {

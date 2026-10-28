@@ -96,8 +96,8 @@ test("an API that hangs costs a toolbox command at most the telemetry timeout", 
   const quiet = await run(["toolbox", "--help"]);
   const hanging = await run(["toolbox", "--help"], { LUDO_TELEMETRY: "", DO_NOT_TRACK: "" });
   assert.equal(hanging.code, EXIT.OK, hanging.stderr);
-  // The send gives up after 1 s; the rest is slack for slow CI machines.
-  assert.ok(hanging.ms - quiet.ms < 2000, `${hanging.ms} ms vs ${quiet.ms} ms`);
+  // The send gives up after 2 s; the rest is slack for slow CI machines.
+  assert.ok(hanging.ms - quiet.ms < 3000, `${hanging.ms} ms vs ${quiet.ms} ms`);
 });
 
 test("a file that won't open is a usage error that says why, never a crash (LUDO-CLI-A)", async () => {
