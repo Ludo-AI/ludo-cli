@@ -230,7 +230,7 @@ before(async () => {
       // "variations" in the prompt: one finished job holding one image per n.
       const body = JSON.parse(raw);
       if (body.prompt === "variations") {
-        const result = Array.from({ length: body.n || 1 }, (_, i) => ({ url: `${base}/files/out.png?i=${i}` }));
+        const result = Array.from({ length: body.n || 1 }, (_, i) => ({ url: `${base}/files/out.png?i=${i}`, model: "klimt", prompt: `rewritten ${i}` }));
         return json(res, 200, { id: `job-imgs${body.n}000`, status: "succeeded", task_type: "createImage", credits_charged: body.n, result });
       }
       return json(res, 402, { message: "Error: Not enough credits" });
@@ -482,6 +482,18 @@ test("--n saves one file per variation", async () => {
     ["succeeded", "job-imgs2000", 1, undefined]
   ]);
   assert.equal(out.urls, undefined);
+});
+
+test("the asset log keeps the model and prompt of the image each file came from", async () => {
+  const { code, stdout, stderr, cwd } = await run(["image", "create", "--prompt", "variations", "--image-type", "sprite", "--n", "2", "--json"]);
+  assert.equal(code, 0, stderr);
+  const files = JSON.parse(stdout).variations.map(v => v.files[0]);
+  const log = JSON.parse(fs.readFileSync(path.join(cwd, path.dirname(files[0]), "ludo-assets.json"), "utf8")).assets;
+  const entry = file => log.find(e => e.file === path.basename(file));
+  assert.deepEqual([entry(files[0]), entry(files[1])].map(e => [e.model, e.prompt]), [
+    ["klimt", "rewritten 0"],
+    ["klimt", "rewritten 1"]
+  ]);
 });
 
 test("--n with --no-download on a one-per-job command keeps each job's URLs", async () => {

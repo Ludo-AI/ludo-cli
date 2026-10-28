@@ -29,6 +29,11 @@ export interface AssetEntry {
   job_id?: string;
   credits?: number;
   created_at: string;
+  // The model that made the file and the prompt it received (the rewritten
+  // one with augment_prompt on), when the result names them: a log of
+  // generations can then tell a model change from a prompt change.
+  model?: string;
+  prompt?: string;
   // The generation's result URLs by field (spritesheet_url, video_url,
   // audio_url...), so a later step can name the real one. They expire 7 days
   // after created_at, as every API result does.

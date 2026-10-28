@@ -321,6 +321,18 @@ export function resultUrls(result: unknown): Record<string, string> | undefined 
   return Object.keys(out).length ? out : undefined;
 }
 
+// The model that made a saved file and the prompt it received, read from the
+// result item the file came from: image results report both (with
+// augment_prompt on, the prompt is the rewritten one). In a list, the item
+// holding the file's URL; otherwise the result itself.
+export function madeBy(result: unknown, url: string): { model?: string; prompt?: string } {
+  const item: any = Array.isArray(result) ? result.find(i => i && typeof i === "object" && Object.values(i).includes(url)) : result;
+  return {
+    ...(typeof item?.model === "string" ? { model: item.model } : {}),
+    ...(typeof item?.prompt === "string" ? { prompt: item.prompt } : {})
+  };
+}
+
 // Records what a finished job spent and the files it saved.
 function bookkeep(ctx: Ctx, job: any, saved: SavedResult, prep?: Prepared, variationSet?: string) {
   noteJob(job.id, job.credits_charged);
@@ -346,6 +358,7 @@ function bookkeep(ctx: Ctx, job: any, saved: SavedResult, prep?: Prepared, varia
       job_id: job.id,
       credits: typeof job.credits_charged === "number" ? job.credits_charged : undefined,
       created_at: created,
+      ...madeBy(job.result, f.url),
       ...(urls ? { result_urls: urls } : {}),
       ...(variationSet ? { variation_set: variationSet, variation: f.variation } : {})
     }));
