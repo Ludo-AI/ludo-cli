@@ -13,6 +13,9 @@ export interface Grid {
   rows: number;
   frames: number;
   fps: number;
+  // false for a one-shot animation (an attack, a death); missing means it
+  // loops. The engine exports read it.
+  loop?: boolean;
 }
 
 export const GRID_KEY = "ludo:grid";
@@ -33,7 +36,9 @@ export function gridFromResult(result: any): Grid | undefined {
   const rate = Number(result?.fps);
   const duration = Number(result?.duration);
   const fps = rate > 0 ? rate : duration > 0 ? frames / duration : 10;
-  return { cols, rows, frames, fps: Math.round(fps * 100) / 100 };
+  const grid: Grid = { cols, rows, frames, fps: Math.round(fps * 100) / 100 };
+  if (result?.loop === false) grid.loop = false;
+  return grid;
 }
 
 export function stampGrid(file: string, grid: Grid) {
@@ -49,7 +54,11 @@ export function stampGrid(file: string, grid: Grid) {
 export function readGrid(buf: Buffer): Grid | undefined {
   try {
     const g = JSON.parse(readText(buf)[GRID_KEY] || "null");
-    if (g && g.cols > 0 && g.rows > 0 && g.frames > 0) return { cols: g.cols, rows: g.rows, frames: g.frames, fps: g.fps > 0 ? g.fps : 10 };
+    if (g && g.cols > 0 && g.rows > 0 && g.frames > 0) {
+      const grid: Grid = { cols: g.cols, rows: g.rows, frames: g.frames, fps: g.fps > 0 ? g.fps : 10 };
+      if (g.loop === false) grid.loop = false;
+      return grid;
+    }
   } catch {
     // Not ours.
   }

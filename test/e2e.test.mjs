@@ -79,14 +79,16 @@ before(async () => {
     if (req.method === "POST" && url.pathname === "/api/assets/sprite/animate") {
       // "webp" in the prompt: answer like hydra, whose sheets come as WebP.
       // "brokenwebp": a WebP sheet no decoder can read.
-      const prompt = JSON.parse(raw).motion_prompt;
+      const body = JSON.parse(raw);
+      const prompt = body.motion_prompt;
       const file = prompt === "webp" ? "sheet.webp" : prompt === "brokenwebp" ? "broken.webp" : "sheet.png";
       return json(res, 200, {
         id: "job-sheet001",
         status: "succeeded",
         task_type: "animateSprite",
         credits_charged: 9,
-        result: { spritesheet_url: `${base}/files/${file}`, audio_url: `${base}/files/sfx.mp3`, num_frames: 4, num_cols: 2, num_rows: 2, duration: 0.5 }
+        // The result echoes loop, as the ML's does.
+        result: { spritesheet_url: `${base}/files/${file}`, audio_url: `${base}/files/sfx.mp3`, num_frames: 4, num_cols: 2, num_rows: 2, duration: 0.5, loop: body.loop !== false }
       });
     }
     if (req.method === "GET" && url.pathname === "/files/sfx.mp3") {
@@ -820,6 +822,20 @@ test("--engine godot writes a SpriteFrames resource next to the sheet and lists 
   assert.match(text, /\[gd_resource type="SpriteFrames" format=3\]/);
   assert.equal((text.match(/type="AtlasTexture"/g) || []).length, 4);
   assert.match(text, /"speed": 8\.0/);
+  assert.match(text, /"loop": true/);
+});
+
+test("--engine exports of a one-shot animation (--loop false) do not loop", async () => {
+  const godot = await run(["sprite", "animate", "--initial-image", "https://example.com/k.png", "--motion-prompt", "attack", "--loop", "false", "--engine", "godot", "--json"]);
+  assert.equal(godot.code, 0, godot.stderr);
+  const files = JSON.parse(godot.stdout).files;
+  assert.match(fs.readFileSync(path.join(godot.cwd, files.find(f => f.path.endsWith(".tres")).path), "utf8"), /"loop": false/);
+  // The sheet's stamp keeps it, so a later toolbox export agrees.
+  assert.equal(readGrid(fs.readFileSync(path.join(godot.cwd, files.find(f => f.path.endsWith(".png")).path))).loop, false);
+  const unity = await run(["sprite", "animate", "--initial-image", "https://example.com/k.png", "--motion-prompt", "attack", "--loop", "false", "--engine", "unity", "--json"]);
+  assert.equal(unity.code, 0, unity.stderr);
+  const clip = JSON.parse(unity.stdout).files.find(f => f.path.endsWith(".anim"));
+  assert.match(fs.readFileSync(path.join(unity.cwd, clip.path), "utf8"), /m_LoopTime: 0/);
 });
 
 test("--engine texturepacker writes a JSON atlas next to the sheet and lists it", async () => {

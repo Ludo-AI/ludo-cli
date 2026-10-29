@@ -441,7 +441,7 @@ async function engineExport(ctx: Ctx, sheet: string | undefined, grid: ReturnTyp
   try {
     const img = loadImage(sheet);
     if (!img) throw new Error("could not read the spritesheet");
-    const files = writeEngineFile(engine, sheet, img.width, img.height, { cols: grid.cols, rows: grid.rows, frames: grid.frames, fps: grid.fps });
+    const files = writeEngineFile(engine, sheet, img.width, img.height, grid);
     return files.map(file => ({ url: `(${ENGINE_FILE[engine]})`, path: file }));
   } catch (err) {
     ctx.log(`--engine ${engine}: ${(err as Error).message}`);

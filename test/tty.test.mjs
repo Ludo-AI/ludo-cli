@@ -90,6 +90,11 @@ test("reads the grid from an API result, falling back to a square", () => {
   assert.deepEqual(gridFromResult({ num_frames: 16 }), { cols: 4, rows: 4, frames: 16, fps: 10 });
   assert.equal(gridFromResult({ num_frames: 7 }), undefined);
   assert.equal(gridFromResult({}), undefined);
+  // A one-shot animation says so; a looping one stays as before.
+  assert.deepEqual(gridFromResult({ num_frames: 4, num_cols: 2, num_rows: 2, duration: 0.5, loop: false }), { cols: 2, rows: 2, frames: 4, fps: 8, loop: false });
+  assert.deepEqual(gridFromResult({ num_frames: 4, num_cols: 2, num_rows: 2, duration: 0.5, loop: true }), { cols: 2, rows: 2, frames: 4, fps: 8 });
+  const png = encodePng(img(4, 2, () => [1, 2, 3, 255]));
+  assert.equal(readGrid(withText(png, GRID_KEY, JSON.stringify({ cols: 2, rows: 1, frames: 2, fps: 8, loop: false }))).loop, false);
   assert.deepEqual(parseGrid("8x4"), { cols: 8, rows: 4 });
   assert.equal(parseGrid("8 by 4"), undefined);
 });
