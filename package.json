@@ -1,6 +1,6 @@
 {
   "name": "@ludoai/cli",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Ludo AI from the command line, for humans and coding agents: generate game sprites, animations, 3D models, video and audio, plus 32 free offline toolbox tools (spritesheet slicing, feet pivots, colliders, Godot/Unity/Phaser export, palettes, tilesets, audio checks).",
   "keywords": [
     "ludo",

@@ -4781,6 +4781,10 @@
             "type": "number",
             "format": "float"
           },
+          "loop": {
+            "type": "boolean",
+            "description": "The loop setting the sheet was made with. false is a one-shot animation (an attack, a death) that should play once in an engine."
+          },
           "request_id": {
             "type": "string"
           },
@@ -7844,6 +7848,10 @@
           },
           "render_3d": {
             "$ref": "#/components/schemas/DirectionalSpriteRender"
+          },
+          "loop": {
+            "type": "boolean",
+            "description": "Whether the animation loops: the loop you asked for, else the animation's own. false is a one-shot (a jump, a death) that should play once in an engine."
           }
         }
       },
