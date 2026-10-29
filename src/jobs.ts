@@ -97,8 +97,11 @@ const DOWNLOAD_ATTEMPTS = 4;
 // data for idleMs) or drops part-way is picked up with a Range request from
 // the bytes already written, so a long video on a flaky line is neither lost
 // nor fetched from zero again. A server that ignores Range starts it over.
+// The .part file is this process's own: two ludo processes saving the same
+// file (the same job waited on twice) would otherwise write into one, and
+// the second rename fails.
 export async function fetchToFile(url: string, target: string, log?: (msg: string) => void, idleMs = 60_000): Promise<void> {
-  const part = `${target}.part`;
+  const part = `${target}.${process.pid}.part`;
   const state = { written: 0 };
   try {
     for (let attempt = 1; ; attempt++) {

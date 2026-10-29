@@ -73,7 +73,7 @@ test("a dropped connection resumes from the bytes already saved", async () => {
   assert.match(requests[1].range, /^bytes=\d+-$/);
   assert.ok(Number(/\d+/.exec(requests[1].range)[0]) > 0, "the second request skips what arrived");
   assert.match(logs[0], /interrupted .*resuming from byte/);
-  assert.ok(!fs.existsSync(`${file}.part`));
+  assert.ok(!fs.existsSync(`${file}.${process.pid}.part`));
 });
 
 test("a stalled transfer is abandoned after the idle time and resumed", async () => {
@@ -98,5 +98,5 @@ test("an HTTP error is not retried and leaves nothing behind", async () => {
   const file = target();
   await assert.rejects(fetchToFile(`${base}/missing.mp4`, file), /Download failed for .*: HTTP 404/);
   assert.equal(requests.length, 1);
-  assert.ok(!fs.existsSync(file) && !fs.existsSync(`${file}.part`));
+  assert.ok(!fs.existsSync(file) && !fs.existsSync(`${file}.${process.pid}.part`));
 });
