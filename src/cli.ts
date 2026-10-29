@@ -10,7 +10,7 @@ import { buildCommands, findCommand, groupsOf } from "./commands.js";
 import { readConfig, resolveApiKey, resolveApiUrl, VERSION, writeConfig } from "./config.js";
 import { armCrashReports, reportCrash } from "./crash.js";
 import { exitNow, handleSignals, onExit } from "./shutdown.js";
-import { armTelemetry, noteFact, sendTelemetry, triedName } from "./telemetry.js";
+import { armTelemetry, forgetFact, noteFact, sendTelemetry, triedName } from "./telemetry.js";
 import { CliError, EXIT, localFsError, specMismatch } from "./errors.js";
 import { makeCtx, printJson, runBatch, runCommand, runJobWait, type Ctx } from "./generate.js";
 import { agentHelp, BUILTIN_HELP, commandHelp, groupHelp, mainHelp } from "./help.js";
@@ -290,6 +290,8 @@ async function run(argv: string[]): Promise<number> {
     if (!(err instanceof CliError && err.specMismatch && (specInUse?.source === "cache" || specInUse?.source === "embedded"))) throw err;
     const fresh = await loadSpec(specInUse.apiUrl, { forceRefresh: true });
     if (fresh.source !== "server") throw err;
+    // The command may exist in the newer spec; if not, main notes it again.
+    forgetFact("tried");
     return main(argv);
   }
 }

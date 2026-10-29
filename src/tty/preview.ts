@@ -41,6 +41,9 @@ export function gridFromResult(result: any): Grid | undefined {
   return grid;
 }
 
+// A new grid for frames that came from `from`: a one-shot animation stays one.
+export const keepLoop = (grid: Grid, from?: Grid): Grid => (from?.loop === false ? { ...grid, loop: false } : grid);
+
 export function stampGrid(file: string, grid: Grid) {
   try {
     const buf = fs.readFileSync(file);

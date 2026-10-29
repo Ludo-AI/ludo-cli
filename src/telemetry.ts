@@ -106,6 +106,11 @@ export function noteFact(key: string, value: string | number | boolean) {
   facts[key] = value;
 }
 
+// A fact that no longer holds: `tried` once a refreshed spec has the command.
+export function forgetFact(key: "tried") {
+  delete facts[key];
+}
+
 // One input file read: its format, and whether Ludo made it (its grid stamp).
 export function noteInput(format: string, ludoSheet: boolean) {
   facts.inputs = Number(facts.inputs ?? 0) + 1;

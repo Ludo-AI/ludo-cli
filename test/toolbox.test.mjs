@@ -152,6 +152,25 @@ test("a toolbox event says what it read and what it suggested, never names or va
   assert.equal(events[quiet].props.hint, undefined);
 });
 
+test("a one-shot sheet stays one through frame and image edits, into the engine files", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-oneshot-"));
+  const file = writeSheet(dir, "attack.png", noise(64, 16, 0, 5), { cols: 4, rows: 1, frames: 4, fps: 8, loop: false });
+  const out = path.join(dir, "out");
+  const edited = await run(["toolbox", "sprite", "frames", file, "--drop", "1", "--engine", "godot", "--out", out]);
+  assert.equal(edited.code, EXIT.OK, edited.stderr);
+  const sheet = JSON.parse(edited.stdout).sheet;
+  assert.equal(readGrid(fs.readFileSync(path.resolve(sheet))).loop, false);
+  assert.match(fs.readFileSync(path.resolve(sheet).replace(/\.png$/, ".tres"), "utf8"), /"loop": false/);
+  const flipped = await run(["toolbox", "image", "flip", file, "--engine", "unity", "--out", out]);
+  assert.equal(flipped.code, EXIT.OK, flipped.stderr);
+  const clip = fs.readdirSync(out).find(f => f.endsWith(".anim"));
+  assert.match(fs.readFileSync(path.join(out, clip), "utf8"), /m_LoopTime: 0/);
+  // A looping sheet still loops.
+  const walk = writeSheet(dir, "walk.png", noise(64, 16, 0, 6), { cols: 4, rows: 1, frames: 4, fps: 8 });
+  const again = await run(["toolbox", "sprite", "frames", walk, "--drop", "1", "--engine", "godot", "--out", out]);
+  assert.match(fs.readFileSync(path.resolve(JSON.parse(again.stdout).sheet).replace(/\.png$/, ".tres"), "utf8"), /"loop": true/);
+});
+
 test("a hint is reported as its command alone, and agents are shown Ludo's next step, not a terminal preview", async () => {
   assert.equal(hintId("ludo preview caminhada-1.png"), "preview");
   assert.equal(hintId("ludo preview borboleta-anim"), "preview");

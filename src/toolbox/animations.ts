@@ -4,7 +4,7 @@ import path from "node:path";
 import { CliError, EXIT } from "../errors.js";
 import type { Image } from "../tty/png.js";
 import type { Grid } from "../tty/preview.js";
-import { parseGrid } from "../tty/preview.js";
+import { keepLoop, parseGrid } from "../tty/preview.js";
 import { baseOf, loadImageFile, shown, type Loaded } from "./io.js";
 import { crop, joinFrames, sliceSheet } from "./sheet.js";
 import { frameFiles, resolveGrid } from "./sprite.js";
@@ -57,13 +57,13 @@ function loadAnimation(input: string, grid?: { cols: number; rows: number; frame
       cols
     );
     const frames = sliceSheet(sheet, cols, rows, loaded.length);
-    return { input, kind: "frames", name: path.basename(path.resolve(input)), frames, grid: { cols, rows: grid?.rows ?? rows, frames: frames.length, fps: loaded[0].grid?.fps ?? 10 }, src: loaded[0] };
+    return { input, kind: "frames", name: path.basename(path.resolve(input)), frames, grid: keepLoop({ cols, rows: grid?.rows ?? rows, frames: frames.length, fps: loaded[0].grid?.fps ?? 10 }, loaded[0].grid), src: loaded[0] };
   }
   const src = loadImageFile(input);
   let resolved: Grid;
   if (grid?.frames) {
     if (grid.cols * grid.rows < grid.frames || grid.cols > src.image.width || grid.rows > src.image.height) throw usage(`The manifest's ${grid.cols}x${grid.rows} grid does not fit ${input}`);
-    resolved = { cols: grid.cols, rows: grid.rows, frames: grid.frames, fps: src.grid?.fps ?? 10 };
+    resolved = keepLoop({ cols: grid.cols, rows: grid.rows, frames: grid.frames, fps: src.grid?.fps ?? 10 }, src.grid);
   } else {
     resolved = resolveGrid(src, grid, gridFlag).grid;
   }

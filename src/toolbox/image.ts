@@ -3,7 +3,7 @@ import path from "node:path";
 import { CliError, EXIT } from "../errors.js";
 import { printJson, type Ctx } from "../generate.js";
 import { MAX_TOOLBOX_PIXELS, type Image } from "../tty/png.js";
-import type { Grid } from "../tty/preview.js";
+import { keepLoop, type Grid } from "../tty/preview.js";
 import { countFrames } from "./grid.js";
 import { baseOf, carriedChunks, engineFiles, freeName, loadImageFile, shown, writePng, type Loaded } from "./io.js";
 import { crop, joinFrames, sliceSheet } from "./sheet.js";
@@ -79,7 +79,7 @@ async function runEdit(ctx: Ctx, call: ToolCall, usage: string, edit: (frames: I
     throw new CliError(`The result would be over ${MAX_TOOLBOX_PIXELS / 1024 / 1024} megapixels`, EXIT.USAGE);
   }
   const out: Image = grid ? joinFrames(done.frames, grid.cols).sheet : done.frames[0];
-  const outGrid: Grid | undefined = grid ? { cols: grid.cols, rows, frames: done.frames.length, fps: grid.fps, ...(grid.loop === false ? { loop: false } : {}) } : undefined;
+  const outGrid: Grid | undefined = grid ? keepLoop({ cols: grid.cols, rows, frames: done.frames.length, fps: grid.fps }, grid) : undefined;
 
   const inPlace = call.flags.has("--in-place");
   if (inPlace && !/\.png$/i.test(src.file)) throw new CliError("--in-place only replaces PNG files", EXIT.USAGE);

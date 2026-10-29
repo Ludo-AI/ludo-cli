@@ -3,7 +3,7 @@ import path from "node:path";
 import { EXIT } from "../errors.js";
 import { printJson, type Ctx } from "../generate.js";
 import { MAX_TOOLBOX_PIXELS } from "../tty/png.js";
-import type { Grid } from "../tty/preview.js";
+import { keepLoop, type Grid } from "../tty/preview.js";
 import { carriedChunks, engineFiles, freeName, shown, writePng } from "./io.js";
 import { layoutSheet } from "./sheet.js";
 import { buildPack, type ArtMode } from "./pack.js";
@@ -116,7 +116,7 @@ TOOLS.push({
     const results = animations.map((a, i) => {
       const packed = pack.animations[i];
       const fps = at(fpsFlags, i, manifest?.animations[i].fps) ?? a.grid.fps;
-      const grid: Grid = { cols: a.grid.cols, rows: a.grid.rows, frames: a.grid.frames, fps };
+      const grid: Grid = keepLoop({ cols: a.grid.cols, rows: a.grid.rows, frames: a.grid.frames, fps }, a.grid);
       let files: string[];
       let engine: string[] = [];
       if (mode === "sheets") {

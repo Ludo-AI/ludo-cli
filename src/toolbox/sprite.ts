@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { CliError, EXIT } from "../errors.js";
 import { printJson, type Ctx } from "../generate.js";
-import type { Grid } from "../tty/preview.js";
+import { keepLoop, type Grid } from "../tty/preview.js";
 import { backgroundOf, CONFIDENT, countFrames, guessGrid } from "./grid.js";
 import { baseOf, carriedChunks, engineFiles, freeName, loadImageFile, shown, writePng, type Layout, type Loaded } from "./io.js";
 import { noteFact } from "../telemetry.js";
@@ -27,7 +27,7 @@ export function resolveGrid(src: Loaded, flagGrid: { cols: number; rows: number 
   const { width, height } = src.image;
   let out: ReturnType<typeof resolveGrid>;
   if (flagGrid) {
-    out = { grid: { ...flagGrid, frames: countFrames(src.image, flagGrid.cols, flagGrid.rows), fps: src.grid?.fps ?? 10 }, from: "flag" };
+    out = { grid: keepLoop({ ...flagGrid, frames: countFrames(src.image, flagGrid.cols, flagGrid.rows), fps: src.grid?.fps ?? 10 }, src.grid), from: "flag" };
   } else if (src.grid) {
     out = { grid: src.grid, from: src.animation ?? "stamp" };
   } else {
@@ -256,7 +256,7 @@ TOOLS.push({
       order.map(f => cells[f - 1]),
       cols
     );
-    const out: Grid = { cols, rows, frames: order.length, fps };
+    const out: Grid = keepLoop({ cols, rows, frames: order.length, fps }, grid);
     const inPlace = call.flags.has("--in-place");
     if (inPlace && !/\.png$/i.test(src.file)) throw new CliError("--in-place only replaces PNG files", EXIT.USAGE);
     const file = inPlace ? src.file : freeName(ctx.outDir, ctx.globals.name || baseOf(src.file), ".png");

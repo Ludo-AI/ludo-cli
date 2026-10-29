@@ -3,7 +3,7 @@ import path from "node:path";
 import { CliError, EXIT } from "../errors.js";
 import { printJson, type Ctx } from "../generate.js";
 import { MAX_TOOLBOX_PIXELS, type Image } from "../tty/png.js";
-import type { Grid } from "../tty/preview.js";
+import { keepLoop, type Grid } from "../tty/preview.js";
 import { carriedChunks, engineFiles, freeName, shown, writePng } from "./io.js";
 import { layoutSheet } from "./sheet.js";
 import type { ArtMode } from "./pack.js";
@@ -171,7 +171,7 @@ TOOLS.push({
     } else if (mode === "separate") {
       seq.frames.forEach((frames, i) => {
         const { cols, rows } = sheetGrids[i];
-        const grid: Grid = { cols, rows, frames: frames.length, fps: fps[i] };
+        const grid: Grid = keepLoop({ cols, rows, frames: frames.length, fps: fps[i] }, animations[i].grid);
         const sheet = sheetOf(frames, cols, rows);
         const file = path.join(dir, `${String(i + 1).padStart(2, "0")}-${labels[i]}.png`);
         writePng(file, sheet, chunks(i, grid));

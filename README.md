@@ -348,8 +348,8 @@ when it finishes:
   sheet was made by Ludo, the engine, which next step they suggested (the command's name, like
   `sprite animate`), and for `asset manifest` how many gaps it found and of which kinds (never
   which files or characters);
-- for a command that does not exist, the name tried (`sprite generate`), when it is made of
-  command-like words only;
+- for a command that does not exist, the name tried (`sprite generate`): only lowercase words
+  with no dots, slashes or spaces, so a mistyped single word where a command goes is sent as is;
 - a random install id (kept in `~/.config/ludo/install_id`), and your account when you are logged
   in, so usage can be tied to it.
 

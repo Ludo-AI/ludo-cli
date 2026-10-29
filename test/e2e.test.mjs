@@ -87,7 +87,7 @@ before(async () => {
         status: "succeeded",
         task_type: "animateSprite",
         credits_charged: 9,
-        // The result echoes loop, as the ML's does.
+        // The result carries loop, as the API's does (since Oct 29 2026).
         result: { spritesheet_url: `${base}/files/${file}`, audio_url: `${base}/files/sfx.mp3`, num_frames: 4, num_cols: 2, num_rows: 2, duration: 0.5, loop: body.loop !== false }
       });
     }
@@ -340,9 +340,16 @@ test("rejects a bad key with the auth exit code", async () => {
 });
 
 test("usage errors exit 2", async () => {
-  const { code, stderr } = await run(["image", "nope"]);
+  const from = seen.length;
+  const { code, stderr } = await run(["image", "nope"], { LUDO_TELEMETRY: "1" });
   assert.equal(code, 2);
   assert.match(stderr, /Unknown command: ludo image nope/);
+  // The name tried is reported; a file name where a command goes is not.
+  const [sent] = telemetryEvents(from).map(s => JSON.parse(s.raw).events[0]);
+  assert.deepEqual([sent.command, sent.props.tried], ["unknown", "image nope"]);
+  const from2 = seen.length;
+  assert.equal((await run(["image", "hero.png"], { LUDO_TELEMETRY: "1" })).code, 2);
+  assert.equal(telemetryEvents(from2).map(s => JSON.parse(s.raw).events[0])[0].props.tried, undefined);
 });
 
 test("help is generated for every command", async () => {
@@ -378,10 +385,13 @@ const specFetches = from => seen.slice(from).filter(s => s.path === "/api-docume
 test("a command the cached spec does not know refreshes the spec and runs", async () => {
   const from = seen.length;
   const args = ["image", "remove-background", "--image", "https://example.com/a.png", "--no-wait", "--json"];
-  const { code, stdout, stderr } = await run(args, { LUDO_SPEC: "" }, staleCache('"v1"'));
+  const { code, stdout, stderr } = await run(args, { LUDO_SPEC: "", LUDO_TELEMETRY: "1" }, staleCache('"v1"'));
   assert.equal(code, 0, stderr);
   assert.equal(JSON.parse(stdout).id, "job-12345678");
   assert.equal(specFetches(from).length, 1);
+  // The first pass did not know the command; the event is the run that worked.
+  const [sent] = telemetryEvents(from).map(s => JSON.parse(s.raw).events[0]);
+  assert.deepEqual([sent.command, sent.props.tried], ["image remove-background", undefined]);
 });
 
 test("no retry when the server says the cached spec is current", async () => {
