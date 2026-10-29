@@ -26,7 +26,7 @@ import {
   type Sides,
   type Trim
 } from "./pixels.js";
-import { hint, TOOLS, type ToolCall, type ToolFlag } from "./registry.js";
+import { hint, playHint, TOOLS, type ToolCall, type ToolFlag } from "./registry.js";
 import { resizeNearest, resizePillow } from "./resample.js";
 import { PaletteMap } from "./quantize.js";
 import { coloursOf, hexOf, loadPalette, PALETTE_EXTENSIONS, PaletteError, savePalette } from "./palette.js";
@@ -79,7 +79,7 @@ async function runEdit(ctx: Ctx, call: ToolCall, usage: string, edit: (frames: I
     throw new CliError(`The result would be over ${MAX_TOOLBOX_PIXELS / 1024 / 1024} megapixels`, EXIT.USAGE);
   }
   const out: Image = grid ? joinFrames(done.frames, grid.cols).sheet : done.frames[0];
-  const outGrid: Grid | undefined = grid ? { cols: grid.cols, rows, frames: done.frames.length, fps: grid.fps } : undefined;
+  const outGrid: Grid | undefined = grid ? { cols: grid.cols, rows, frames: done.frames.length, fps: grid.fps, ...(grid.loop === false ? { loop: false } : {}) } : undefined;
 
   const inPlace = call.flags.has("--in-place");
   if (inPlace && !/\.png$/i.test(src.file)) throw new CliError("--in-place only replaces PNG files", EXIT.USAGE);
@@ -88,7 +88,7 @@ async function runEdit(ctx: Ctx, call: ToolCall, usage: string, edit: (frames: I
   const engine = outGrid ? engineFiles(ctx, file, out, outGrid, { trim: done.trim, extrude: done.extrude }) : [];
 
   const next = grid
-    ? hint("Preview it playing", `ludo preview ${shown(file)}`)
+    ? playHint(ctx, shown(file))
     : hint("Animate it with Ludo", `ludo sprite animate --initial-image ${shown(file)} --motion-prompt "<what it does>"`);
   if (ctx.jsonOut) {
     printJson(

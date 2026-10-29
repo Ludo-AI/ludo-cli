@@ -345,8 +345,11 @@ when it finishes:
 - the CLI, Node and OS versions, whether it ran at a terminal or in CI, and which coding agent ran it;
 - for generations, the job ids and credits charged;
 - for toolbox tools, how many files they read and in which format, the frame count, whether a
-  sheet was made by Ludo, the engine, which next step they suggested, and for `asset manifest`
-  how many gaps it found and of which kinds (never which files or characters);
+  sheet was made by Ludo, the engine, which next step they suggested (the command's name, like
+  `sprite animate`), and for `asset manifest` how many gaps it found and of which kinds (never
+  which files or characters);
+- for a command that does not exist, the name tried (`sprite generate`), when it is made of
+  command-like words only;
 - a random install id (kept in `~/.config/ludo/install_id`), and your account when you are logged
   in, so usage can be tied to it.
 

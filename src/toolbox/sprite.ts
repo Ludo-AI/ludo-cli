@@ -13,7 +13,7 @@ import { gridFlag, hexColour, positiveInt, positiveNumber, textFlag } from "./fl
 import { makeGif, MAX_GIF_FPS } from "./gif.js";
 import { scaleUp } from "./pixels.js";
 import { MAX_TOOLBOX_PIXELS } from "../tty/png.js";
-import { hint, TOOLS, type ToolCall } from "./registry.js";
+import { hint, playHint, TOOLS, type ToolCall } from "./registry.js";
 // Used when a tool runs, never as the modules load: the two import each other.
 import { metricsOrFail, pivotChoice, sheetFrames } from "./sprite-analysis.js";
 
@@ -176,7 +176,7 @@ TOOLS.push({
     writePng(file, sheet, carriedChunks(frames[0], grid, layout));
     const engine = engineFiles(ctx, file, sheet, grid, layout);
 
-    const next = hint("Preview it playing", `ludo preview ${shown(file)}`);
+    const next = playHint(ctx, shown(file));
     if (ctx.jsonOut) {
       printJson(
         {
@@ -263,7 +263,7 @@ TOOLS.push({
     writePng(file, sheet, carriedChunks(src, out, layoutOf(src)));
     const engine = engineFiles(ctx, file, sheet, out, layoutOf(src));
 
-    const next = hint("Preview it playing", `ludo preview ${shown(file)}`);
+    const next = playHint(ctx, shown(file));
     if (ctx.jsonOut) {
       printJson(
         {
@@ -307,7 +307,7 @@ function compareLoops(ctx: Ctx, call: ToolCall): number {
   rows.sort((a, b) => (b.quality ?? -1) - (a.quality ?? -1));
   const top = rows[0];
   const listed = rows.map(({ report, ...row }) => row);
-  const next = top.quality !== null ? hint("Preview the best one", `ludo preview ${top.sheet}`) : undefined;
+  const next = top.quality !== null ? playHint(ctx, top.sheet, "Preview the best one") : undefined;
   if (ctx.jsonOut) {
     printJson({ sheets: listed, best: top.quality !== null ? top.sheet : null, ...(ctx.globals.quiet || !next ? {} : { hint: next }) }, false);
     return EXIT.OK;
@@ -352,7 +352,7 @@ TOOLS.push({
       quality === null
         ? undefined
         : quality >= VISIBLE
-          ? hint("Preview it playing", `ludo preview ${sheetArg}`)
+          ? playHint(ctx, sheetArg)
           : hint("If Ludo made it, Ludo can repair the loop (1 credit a second)", "ludo sprite edit --spritesheet-url <its spritesheet_url> --edit-mode fix_loop");
 
     if (ctx.jsonOut) {

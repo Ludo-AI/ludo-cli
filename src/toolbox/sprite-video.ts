@@ -10,7 +10,7 @@ import { scaleUp } from "./pixels.js";
 import { gridFlag, hexColour, positiveInt, positiveNumber, textFlag } from "./flags.js";
 import { resolveGrid } from "./sprite.js";
 import { decodeVideo, encodeVideo, needFfmpeg, probeVideo, VIDEO_FORMATS, type VideoFormat } from "./video.js";
-import { hint, TOOLS, type ToolCall } from "./registry.js";
+import { hint, playHint, TOOLS, type ToolCall } from "./registry.js";
 
 // Spritesheets from video clips and back, through the system's ffmpeg.
 
@@ -60,7 +60,7 @@ TOOLS.push({
     const out = freeName(ctx.outDir, ctx.globals.name || baseOf(file), ".png");
     writePng(out, sheet, [textChunk(GRID_KEY, JSON.stringify(grid))]);
     const engine = engineFiles(ctx, out, sheet, grid);
-    const next = hint("Preview it playing", `ludo preview ${shown(out)}`);
+    const next = playHint(ctx, shown(out));
     if (ctx.jsonOut) {
       printJson(
         {

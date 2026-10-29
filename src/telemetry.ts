@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { configDir, launchedAsCli, resolveApiKey, resolveApiUrl, VERSION } from "./config.js";
+import { GROUP_INFO } from "./commands.js";
 import { agentName } from "./login.js";
 import { findProjectFile } from "./project.js";
 
@@ -95,9 +96,10 @@ export function noteJob(id: unknown, credits?: unknown) {
 // Facts a command learns while it runs, beyond its flags: what the toolbox
 // read (counts and formats, never names), which engine files it wrote, which
 // "Next:" line it showed, how many gaps `asset manifest` found and of which
-// kinds, and whether the installed skill was brought up to date.
+// kinds, whether the installed skill was brought up to date, and the command
+// name tried when there is no such command (see triedName).
 const facts: Record<string, string | number | boolean> = {};
-export function noteFact(key: "engine" | "grid_from" | "hint" | "gap_kinds", value: string): void;
+export function noteFact(key: "engine" | "grid_from" | "hint" | "gap_kinds" | "tried", value: string): void;
 export function noteFact(key: "frames" | "gaps", value: number): void;
 export function noteFact(key: "skill_refreshed", value: boolean): void;
 export function noteFact(key: string, value: string | number | boolean) {
@@ -111,9 +113,26 @@ export function noteInput(format: string, ludoSheet: boolean) {
   facts.ludo_sheet = facts.ludo_sheet === true || ludoSheet;
 }
 
-// The command a "Next:" hint suggests, as the words after `ludo`: "sprite
-// animate", "preview".
-export const hintId = (command: string) => /^ludo((?: [a-z][a-z0-9-]*){1,3})/.exec(command)?.[1].trim();
+// The command a "Next:" hint suggests, as the words after `ludo` that name
+// it: "sprite animate", "toolbox sprite gif", "preview". Never its arguments:
+// a file name looks like a word too (`ludo preview walk-1.png` read as
+// "preview walk-1" until 0.2.2), so the count of words comes from the command
+// itself: three for a toolbox tool, two in an API group, else one.
+export const hintId = (command: string) => {
+  const words = /^ludo((?: [a-z][a-z0-9-]*){1,3})/.exec(command)?.[1].trim().split(" ");
+  if (!words) return undefined;
+  const n = words[0] === "toolbox" ? 3 : Object.hasOwn(GROUP_INFO, words[0]) ? 2 : 1;
+  return words.slice(0, n).join(" ");
+};
+
+// The words of a command that does not exist (`ludo sprite generate` ->
+// "sprite generate"), so the commands agents guess at can be added or
+// pointed somewhere. Only words shaped like command names: a prompt has
+// spaces, a file a dot or a slash, and either drops the whole name.
+export function triedName(words: string[]): string | undefined {
+  const name = words.slice(0, 3).filter(Boolean);
+  return name.length && name.every(w => /^[a-z][a-z0-9-]{0,31}$/.test(w)) ? name.join(" ") : undefined;
+}
 
 // Flag names from argv, never their values: "--prompt=knight" and
 // "--prompt knight" both become "--prompt".

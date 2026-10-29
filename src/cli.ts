@@ -10,7 +10,7 @@ import { buildCommands, findCommand, groupsOf } from "./commands.js";
 import { readConfig, resolveApiKey, resolveApiUrl, VERSION, writeConfig } from "./config.js";
 import { armCrashReports, reportCrash } from "./crash.js";
 import { exitNow, handleSignals, onExit } from "./shutdown.js";
-import { armTelemetry, sendTelemetry } from "./telemetry.js";
+import { armTelemetry, noteFact, sendTelemetry, triedName } from "./telemetry.js";
 import { CliError, EXIT, localFsError, specMismatch } from "./errors.js";
 import { makeCtx, printJson, runBatch, runCommand, runJobWait, type Ctx } from "./generate.js";
 import { agentHelp, BUILTIN_HELP, commandHelp, groupHelp, mainHelp } from "./help.js";
@@ -406,6 +406,8 @@ async function main(argv: string[]): Promise<number> {
       process.stdout.write(groupHelp(commands, first) + "\n");
       return second || globals.help ? EXIT.OK : EXIT.USAGE;
     }
+    const tried = triedName(groups.includes(first) ? [first, second] : [first]);
+    if (tried) noteFact("tried", tried);
     if (groups.includes(first)) {
       throw specMismatch(`Unknown command: ludo ${first} ${second}`, `Commands: ${commands.filter(c => c.group === first && !c.hidden).map(c => c.name).join(", ")}`);
     }

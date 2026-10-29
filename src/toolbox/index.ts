@@ -1,7 +1,7 @@
 import { GLOBAL_FLAGS, type Parsed } from "../args.js";
 import { CliError, EXIT } from "../errors.js";
 import type { Ctx } from "../generate.js";
-import { hintId, noteFact } from "../telemetry.js";
+import { hintId, noteFact, triedName } from "../telemetry.js";
 import { TOOL_GROUPS, TOOLS, type Tool, type ToolCall } from "./registry.js";
 import "./sprite.js";
 import "./sprite-pack.js";
@@ -155,7 +155,9 @@ export async function toolbox(ctx: Ctx, parsed: Parsed, argv: string[], setLabel
     process.stdout.write(toolboxHelp());
     return help ? EXIT.OK : EXIT.USAGE;
   }
+  const tried = triedName(["toolbox", group, ...(groupsInUse().includes(group) ? [name] : [])]);
   if (!groupsInUse().includes(group)) {
+    if (tried) noteFact("tried", tried);
     throw new CliError(`Unknown toolbox group: ${group}`, EXIT.USAGE, `Groups: ${groupsInUse().join(", ") || "none yet"}. Run \`ludo toolbox\`.`);
   }
   if (!name) {
@@ -175,6 +177,7 @@ export async function toolbox(ctx: Ctx, parsed: Parsed, argv: string[], setLabel
   if (!tool && atLudo) throw new CliError(`ludo toolbox ${group} ${name} is not a toolbox tool`, EXIT.USAGE, `${atLudo.job}: ${atLudo.command}`);
   if (!tool && moved) throw new CliError(`ludo toolbox ${group} ${name} is no longer a tool of its own`, EXIT.USAGE, `${moved.job}: ${moved.command}`);
   if (!tool) {
+    if (tried) noteFact("tried", tried);
     const names = TOOLS.filter(t => t.group === group).map(t => t.name);
     throw new CliError(`Unknown tool: ludo toolbox ${group} ${name}`, EXIT.USAGE, `Tools: ${names.join(", ")}`);
   }

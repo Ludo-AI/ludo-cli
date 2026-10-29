@@ -8,6 +8,7 @@ import http from "node:http";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parseToolArgv } from "../dist/toolbox/index.js";
+import { hintId, triedName } from "../dist/telemetry.js";
 import { CONFIDENT, guessGrid } from "../dist/toolbox/grid.js";
 import { encodePng, readPng, withText } from "../dist/tty/png.js";
 import { readGrid } from "../dist/tty/preview.js";
@@ -149,6 +150,42 @@ test("a toolbox event says what it read and what it suggested, never names or va
   const quiet = events.length;
   await run(["toolbox", "sprite", "export", sheet, "--engine", "godot", "--quiet"], { LUDO_TELEMETRY: "", DO_NOT_TRACK: "", LUDO_API_URL: `http://127.0.0.1:${collector.address().port}` });
   assert.equal(events[quiet].props.hint, undefined);
+});
+
+test("a hint is reported as its command alone, and agents are shown Ludo's next step, not a terminal preview", async () => {
+  assert.equal(hintId("ludo preview caminhada-1.png"), "preview");
+  assert.equal(hintId("ludo preview borboleta-anim"), "preview");
+  assert.equal(hintId("ludo toolbox sprite gif walk-cycle.png"), "toolbox sprite gif");
+  assert.equal(hintId('ludo sprite animate --initial-image hero.png --motion-prompt "<what it does>"'), "sprite animate");
+  assert.equal(hintId("ludo jobs get abc-123"), "jobs get");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-hint-"));
+  const sheet = writeSheet(dir, "guerreira-1.png", noise(32, 16), { cols: 2, rows: 1, frames: 2, fps: 8 });
+  const from = events.length;
+  const r = await run(["toolbox", "image", "flip", sheet, "--json"], { LUDO_TELEMETRY: "", DO_NOT_TRACK: "", LUDO_API_URL: `http://127.0.0.1:${collector.address().port}` });
+  assert.equal(r.code, EXIT.OK, r.stderr);
+  assert.match(JSON.parse(r.stdout).hint.command, /^ludo sprite animate /);
+  assert.equal(events[from].props.hint, "sprite animate");
+  assert.doesNotMatch(JSON.stringify(events[from]), /guerreira/);
+});
+
+test("a toolbox name that does not exist is reported, unless it is not shaped like one", async () => {
+  assert.equal(triedName(["sprite", "generate"]), "sprite generate");
+  assert.equal(triedName(["create-sprite"]), "create-sprite");
+  assert.equal(triedName(["sprite", "knight.png"]), undefined);
+  assert.equal(triedName(["sprite", "a knight walking"]), undefined);
+  const env = { LUDO_TELEMETRY: "", DO_NOT_TRACK: "", LUDO_API_URL: `http://127.0.0.1:${collector.address().port}` };
+  const from = events.length;
+  assert.equal((await run(["toolbox", "sprite", "resize", "a.png"], env)).code, EXIT.USAGE);
+  assert.equal((await run(["toolbox", "sprites", "slice"], env)).code, EXIT.USAGE);
+  assert.equal((await run(["toolbox", "sprite", "My Hero.png"], env)).code, EXIT.USAGE);
+  assert.deepEqual(
+    events.slice(from).map(e => [e.command, e.props.tried]),
+    [
+      ["toolbox", "toolbox sprite resize"],
+      ["toolbox", "toolbox sprites"],
+      ["toolbox", undefined]
+    ]
+  );
 });
 
 test("a name sent to Ludo or to another tool is counted as itself, with where it was sent", async () => {
@@ -613,7 +650,8 @@ test("loop reports a sheet's quality and worst step, writes nothing, and points 
   const whole = writeSheet(dir, "whole.png", strip(frames.slice(0, 8), 4), { cols: 4, rows: 2, frames: 8, fps: 12 });
   const smooth = JSON.parse((await run(["toolbox", "sprite", "loop", whole])).stdout);
   assert.ok(smooth.quality >= CLEAN, String(smooth.quality));
-  assert.equal(smooth.hint.command.startsWith("ludo preview"), true);
+  // Not run in a terminal `ludo preview` could draw in, so Ludo's next step.
+  assert.match(smooth.hint.command, /^ludo sprite animate /);
 });
 
 test("loop on several takes ranks them, the best loop first", async () => {
@@ -627,7 +665,7 @@ test("loop on several takes ranks them, the best loop first", async () => {
   assert.equal(out.sheets[0].sheet, whole);
   assert.ok(out.sheets.every((x, i) => !i || x.quality <= out.sheets[i - 1].quality), JSON.stringify(out.sheets.map(x => x.quality)));
   assert.equal(out.best, whole);
-  assert.equal(out.hint.command, `ludo preview ${whole}`);
+  assert.match(out.hint.command, /^ludo sprite animate /);
 });
 
 test("the jobs Ludo does are not toolbox tools: their names point at Ludo's", async () => {

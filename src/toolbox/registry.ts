@@ -57,3 +57,11 @@ export const hint = (text: string, command: string): Hint => {
   if (id) noteFact("hint", id);
   return { text, command };
 };
+
+// The line after a tool writes a sheet that plays. `ludo preview` draws only
+// in an interactive terminal, and refuses everyone else, coding agents (most
+// toolbox runs) above all: they are shown Ludo's next step instead.
+export const playHint = (ctx: Ctx, sheet: string, text = "Preview it playing"): Hint =>
+  ctx.vis.enabled
+    ? hint(text, `ludo preview ${sheet}`)
+    : hint("Animate another move for the same character with Ludo", `ludo sprite animate --initial-image <a frame> --motion-prompt "<what it does>"`);
