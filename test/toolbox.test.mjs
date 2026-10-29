@@ -165,7 +165,9 @@ test("a one-shot sheet stays one through frame and image edits, into the engine 
   assert.equal(flipped.code, EXIT.OK, flipped.stderr);
   const clip = fs.readdirSync(out).find(f => f.endsWith(".anim"));
   assert.match(fs.readFileSync(path.join(out, clip), "utf8"), /m_LoopTime: 0/);
-  // A looping sheet still loops.
+  // A ping-pong is made to loop; a looping sheet still loops.
+  const pingpong = await run(["toolbox", "sprite", "frames", file, "--pingpong", "--out", out]);
+  assert.equal(readGrid(fs.readFileSync(path.resolve(JSON.parse(pingpong.stdout).sheet))).loop, undefined);
   const walk = writeSheet(dir, "walk.png", noise(64, 16, 0, 6), { cols: 4, rows: 1, frames: 4, fps: 8 });
   const again = await run(["toolbox", "sprite", "frames", walk, "--drop", "1", "--engine", "godot", "--out", out]);
   assert.match(fs.readFileSync(path.resolve(JSON.parse(again.stdout).sheet).replace(/\.png$/, ".tres"), "utf8"), /"loop": true/);

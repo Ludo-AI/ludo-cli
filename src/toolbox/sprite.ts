@@ -256,7 +256,8 @@ TOOLS.push({
       order.map(f => cells[f - 1]),
       cols
     );
-    const out: Grid = keepLoop({ cols, rows, frames: order.length, fps }, grid);
+    // A ping-pong is made to loop, whatever the source did.
+    const out: Grid = ops.pingpong ? { cols, rows, frames: order.length, fps } : keepLoop({ cols, rows, frames: order.length, fps }, grid);
     const inPlace = call.flags.has("--in-place");
     if (inPlace && !/\.png$/i.test(src.file)) throw new CliError("--in-place only replaces PNG files", EXIT.USAGE);
     const file = inPlace ? src.file : freeName(ctx.outDir, ctx.globals.name || baseOf(src.file), ".png");
