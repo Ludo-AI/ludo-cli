@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { buildCommands } from "../dist/commands.js";
-import { estimatePrice, parseModelRates } from "../dist/pricing.js";
+import { estimatePrice, modelLabels, parseModelRates } from "../dist/pricing.js";
 import { compareVersions, decodeNotice, pendingLines } from "../dist/notices.js";
 import { recordEstimate, recordFinal, totalOf } from "../dist/budget.js";
 import { validateConfig } from "../dist/project.js";
@@ -59,6 +59,22 @@ test("model price tables parse into rates, minimums and durations", () => {
   assert.equal(rates.find(r => r.id === "forge").minimum, 0);
   assert.equal(rates.find(r => r.id === "eagle").minimum, 4);
   assert.ok(rates.some(r => r.id === "eagle-audio"));
+});
+
+test("model labels map to their ids, and a flat-priced model costs its flat price", () => {
+  const animate = byId("animateSprite");
+  const labels = modelLabels(animate.fields.find(f => f.name === "model").description);
+  assert.equal(labels.get("Griffin"), "griffin-hd");
+  assert.equal(labels.get("Hydra+"), "hydra-plus");
+  const rates = parseModelRates(animate.creditDetail, labels);
+  assert.deepEqual(rates.find(r => r.id === "griffin-hd"), { id: "griffin-hd", rate: 0, minimum: 0, shortest: 0, longest: 0, flat: 12 });
+  assert.equal(rates.find(r => r.id === "hydra-plus").rate, 4);
+  for (const id of ["animateSprite", "animateSpriteKeyframes", "editSpritesheet"]) {
+    assert.deepEqual(estimatePrice(byId(id), { model: "griffin-hd", duration: 5 }), { credits: 12, exact: true }, id);
+  }
+  assert.equal(estimatePrice(animate, { model: "hydra-plus", duration: 5 }).credits, 20);
+  // An unlisted model still falls back to the dearest, flat prices included.
+  assert.equal(estimatePrice(animate, { model: "titan", duration: 3 }).credits, 12);
 });
 
 test("estimates follow the published prices", () => {

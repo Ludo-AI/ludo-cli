@@ -8,7 +8,8 @@ import type { Command } from "./commands.js";
 //   "consumes 3 credits per call"       flat
 //   "Available models: Hydra (3 credits/s, shortest duration 3s, so 9 credits
 //    minimum; 3s = 9, ...) · Forge (1.5 credits/s, minimum charge 4 credits
-//    per generation; ...)"             per model and second
+//    per generation; ...) · Griffin (flat 12 credits per generation)"
+//                                      per model and second, or flat per model
 //
 // Duration-priced jobs are charged max(rate x produced seconds, minimum),
 // never more than for the duration requested, so the estimate is the most the
@@ -29,23 +30,41 @@ interface ModelRate {
   minimum: number;
   shortest: number;
   longest: number;
+  // Billed this much per generation, whatever the duration ("Griffin (flat 12
+  // credits per generation)").
+  flat?: number;
 }
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
-// "Eagle with Audio" -> eagle-audio, "Griffin HD" -> griffin-hd.
-const modelId = (name: string) => name.trim().toLowerCase().replace(/\s+with\s+/g, "-").replace(/\s+/g, "-");
+// The price table names models by label ("Griffin", "Hydra+"); the model
+// field's description pairs each label with its id:
+//   - "griffin-hd" (Griffin): flat 12 credits per generation · ...
+export function modelLabels(description: string | undefined): Map<string, string> {
+  const labels = new Map<string, string>();
+  for (const m of (description || "").matchAll(/^\s*-\s*"([^"]+)"\s*\(([^)]+)\)/gm)) labels.set(m[2].trim(), m[1]);
+  return labels;
+}
 
-export function parseModelRates(text: string): ModelRate[] {
+// With no label listed: "Eagle with Audio" -> eagle-audio, "Forge Pixel" -> forge-pixel.
+const modelId = (name: string, labels?: Map<string, string>) =>
+  labels?.get(name.trim()) ?? name.trim().toLowerCase().replace(/\s+with\s+/g, "-").replace(/\s+/g, "-");
+
+export function parseModelRates(text: string, labels?: Map<string, string>): ModelRate[] {
   const listed = text.split(/Available models:\s*/)[1];
   if (!listed) return [];
   const rates: ModelRate[] = [];
   for (const part of listed.split(" · ")) {
+    const flat = /^(.+?) \(flat ([\d.]+) credits? per generation\)/.exec(part.trim());
+    if (flat) {
+      rates.push({ id: modelId(flat[1], labels), rate: 0, minimum: 0, shortest: 0, longest: 0, flat: Number(flat[2]) });
+      continue;
+    }
     const m = /^(.+?) \(([\d.]+) credits\/s(?:, shortest duration ([\d.]+)s, so ([\d.]+) credits minimum|, minimum charge ([\d.]+) credits? per generation)?(?:; ([^)]*))?\)/.exec(part.trim());
     if (!m) continue;
     const seconds = [...(m[6] || "").matchAll(/([\d.]+)s = /g)].map(x => Number(x[1]));
     rates.push({
-      id: modelId(m[1]),
+      id: modelId(m[1], labels),
       rate: Number(m[2]),
       minimum: Number(m[4] || m[5] || 0),
       // Newer specs state only the minimum charge ("minimum charge 9 credits
@@ -101,7 +120,7 @@ export function estimatePrice(command: Command, body: Record<string, unknown>): 
   const perCall = /consumes ([\d.]+) credits? per call/i.exec(text);
   if (perCall) return perCallPrice(command, body, text, Number(perCall[1]));
 
-  const rates = parseModelRates(text);
+  const rates = parseModelRates(text, modelLabels(command.fields.find(f => f.name === "model")?.description));
   const requested = typeof body.duration === "number" ? body.duration : (fieldDefault(command, "duration") as number | undefined);
   const longest = Math.max(0, ...rates.map(r => r.longest));
 
@@ -125,7 +144,9 @@ export function estimatePrice(command: Command, body: Record<string, unknown>): 
     const known = rates.find(r => r.id === model);
     // An unlisted model (an alias, a new one) is priced as the dearest listed.
     const candidates = known ? [known] : rates;
+    if (known?.flat !== undefined) return { credits: round1(known.flat), exact: true };
     const priceFor = (r: ModelRate) => {
+      if (r.flat !== undefined) return round1(r.flat);
       const seconds = Math.max(requested ?? (r.longest || longest), r.shortest);
       return round1(Math.max(r.rate * seconds, r.minimum));
     };
