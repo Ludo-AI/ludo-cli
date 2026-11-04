@@ -127,6 +127,8 @@ export function parseToolArgv(argv: string[], tool: Tool): ToolCall {
       continue;
     }
     const spec = known.get(name);
+    const refused = tool.refuses?.[name];
+    if (!spec && refused) throw new CliError(refused, EXIT.USAGE);
     if (!spec) {
       const list = tool.flags.map(f => f.flag).join(", ");
       throw new CliError(`Unknown flag for ludo toolbox ${tool.group} ${tool.name}: ${name}`, EXIT.USAGE, list ? `Flags: ${list}` : undefined);

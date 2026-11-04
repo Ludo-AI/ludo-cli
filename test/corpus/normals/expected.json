@@ -1,0 +1,122 @@
+{
+ "reference": "spritefusion-sprite-normals 0.1.0 (github.com/hugo-dz/spritefusion-sprite-normals d14b067), macOS arm64",
+ "cases": [
+  {
+   "input": "normals/islands.png",
+   "flags": [
+    "--normal-strength",
+    "4"
+   ],
+   "width": 32,
+   "height": 30,
+   "sha256": "1271c07058196be147d5745b0855660b85bfdae48219b466499530a9600895a0"
+  },
+  {
+   "input": "normals/islands.png",
+   "flags": [
+    "--normal-strength",
+    "0"
+   ],
+   "width": 32,
+   "height": 30,
+   "sha256": "268848de00e6ae90102e5dcfacf814375c7dc1793fd0f3744fce16962d0e7965"
+  },
+  {
+   "input": "normals/islands.png",
+   "flags": [
+    "--detail-strength",
+    "0"
+   ],
+   "width": 32,
+   "height": 30,
+   "sha256": "d7191fa399e98d8b37668211ff637d0abf9ea447c6d67d65b35f7cca8bec9ed0"
+  },
+  {
+   "input": "normals/islands.png",
+   "flags": [
+    "--detail-strength",
+    "8"
+   ],
+   "width": 32,
+   "height": 30,
+   "sha256": "73150984560385f8bb3897b0b8b60d4e6476e505b1deb7e742bed91b1bf889b9"
+  },
+  {
+   "input": "normals/islands.png",
+   "flags": [
+    "--detail-scale",
+    "2.5"
+   ],
+   "width": 32,
+   "height": 30,
+   "sha256": "d719af16493771c9657ce872630a7f73fa3f1638fdd77c900d8e63c733aa7439"
+  },
+  {
+   "input": "normals/islands.png",
+   "flags": [
+    "--shape-strength",
+    "3"
+   ],
+   "width": 32,
+   "height": 30,
+   "sha256": "53b156e0e279b626593cdcea3972c7e0e5366e345c60eef6ae5516b5028801cf"
+  },
+  {
+   "input": "normals/islands.png",
+   "flags": [
+    "--normal-format",
+    "directx"
+   ],
+   "width": 32,
+   "height": 30,
+   "sha256": "2ee2300ab293100665a54884180fb4742876a89099380c449080012487161215"
+  },
+  {
+   "input": "normals/soft.png",
+   "flags": [
+    "--detail-scale",
+    "1.7",
+    "--shape-strength",
+    "0.5",
+    "--normal-format",
+    "directx"
+   ],
+   "width": 32,
+   "height": 32,
+   "sha256": "1483da66c8f9790bb650cf64296756cc90a2f1b0a89caaab5da1d6b741d93a6f"
+  },
+  {
+   "input": "align/real-hero-walk-hit-b.png",
+   "flags": [],
+   "width": 592,
+   "height": 592,
+   "sha256": "24dd65cd4fb02a980d6eb66a1689ff5e1cf8f791e3c0d9777739136c749421f5"
+  },
+  {
+   "input": "align/real-skel-rise-idle-a.png",
+   "flags": [],
+   "width": 498,
+   "height": 630,
+   "sha256": "7dadd01698936625b76e5218e75dde9994d194686c481a525f285c4474f44973"
+  },
+  {
+   "input": "align/real-skel-rise-idle-a.png",
+   "flags": [
+    "--normal-strength",
+    "2.75",
+    "--detail-strength",
+    "3"
+   ],
+   "width": 498,
+   "height": 630,
+   "sha256": "c65df49665352a8c49735c59020c0f2afcee735cf914408c5d0065fae8812134"
+  },
+  {
+   "input": "gif/anim-gr.gif",
+   "flags": [],
+   "width": 200,
+   "height": 50,
+   "sha256": "49dc4d3a947624a5059154577eab14d0a866ffd9aa1e0c8ba307a8a6ccf2c786"
+  }
+ ]
+}

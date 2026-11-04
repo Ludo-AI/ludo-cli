@@ -170,6 +170,13 @@ ludo toolbox image flip knight-walk.png             # face the other way; --vert
 ludo toolbox image rotate hero.png --by 90
 ludo toolbox image outline hero.png --color "#1a1c2c" # 1 px, no corners; --shape square, --width 2
 ludo toolbox image shadow hero.png --offset 2,2 --opacity 40
+# A normal map so 2D lights shade the art: hero_n.png, its size and grid, every cell on its own.
+# Sprite Fusion Sprite Normals' algorithm: its very pixels at the default settings, and within 1 of
+# them otherwise. A data texture: import it as a normal map or linear, never as sRGB colour.
+ludo toolbox image normals hero.png                 # --normal-format directx flips green
+# Painted or HD art: the default --shape-radius 4 rounds only the rim. Raise it to about the
+# frame's longer side / 48, and smooth brush texture so it doesn't turn into bumps.
+ludo toolbox image normals boss.png --shape-radius 16 --detail-scale 3   # a 768 px character
 ludo toolbox image convert hero.png --to webp       # lossless WebP
 
 # Palettes: list and save one (.hex, .gpl, .pal, .txt, .png), map onto a Lospec palette or

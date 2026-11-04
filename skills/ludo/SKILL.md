@@ -1,6 +1,6 @@
 ---
 name: ludo
-description: Generate game assets with the Ludo AI `ludo` CLI (sprites, spritesheet animations, images, background removal, 3D models with rigging and animation, video, sound effects, music and voices), and work on game assets free and offline with `ludo toolbox`, no account needed. The free tools slice, join, loop-check and GIF spritesheets, bring a character's animations to one size, find a sprite's pivot, collision box and pixels per unit, export to Godot, Unity or Phaser, recolor pixel art to a palette, cut tilesets, check a sound's loudness and loop, and inspect GLB models. Use when the user asks for game art, sprites, animations, 3D models or game audio, works with spritesheets or other game assets, or mentions Ludo.
+description: Generate game assets with the Ludo AI `ludo` CLI (sprites, spritesheet animations, images, background removal, 3D models with rigging and animation, video, sound effects, music and voices), and work on game assets free and offline with `ludo toolbox`, no account needed. The free tools slice, join, loop-check and GIF spritesheets, bring a character's animations to one size, find a sprite's pivot, collision box and pixels per unit, export to Godot, Unity or Phaser, recolor pixel art to a palette, make normal maps for 2D lighting, cut tilesets, check a sound's loudness and loop, and inspect GLB models. Use when the user asks for game art, sprites, animations, 3D models or game audio, works with spritesheets or other game assets, or mentions Ludo.
 ---
 
 # Ludo AI CLI
@@ -67,7 +67,11 @@ Use them instead of writing your own image or audio script:
   reads as a sheet.
 - Video (needs ffmpeg): `sprite from-video <clip>` turns a clip into a sheet; `sprite video <sheet>
   --format webm|mov|mp4` goes the other way.
-- Images, per frame on a sheet: `image trim|pad|extrude|scale|flip|rotate|outline|shadow`.
+- Images, per frame on a sheet: `image trim|pad|extrude|scale|flip|rotate|outline|shadow|normals`
+  (`normals` writes `<name>_n.png`, a normal map for 2D lighting: a data texture, so import it as
+  a normal map or linear, never sRGB; `--normal-format directx` for engines that flip green; on
+  painted or HD art the default comes out flat in the middle, so pass `--shape-radius` of about
+  the frame's longer side / 48 plus `--detail-scale 3`, e.g. `--shape-radius 16` at 768 px).
   `image palette` lists or saves colours; `image recolor --palette <file|hexes> | --swap A --to B`
   changes them. `image tiles <tileset> --size 16x16` cuts tiles or writes Tiled/Godot/Unity
   tileset files; `image repeat <tile>` checks a tile is seamless. `image convert --to webp`.
