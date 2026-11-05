@@ -200,19 +200,17 @@ test("a normal map lies on its art: an empty last row and a 3 px last frame are 
   assert.match(byStamp.stderr, /multiple of 3/);
 });
 
-test("normals writes no engine files, even with --engine", async () => {
-  const dir = tmp();
-  const art = { width: 32, height: 16, rgba: new Uint8Array(32 * 16 * 4) };
-  for (let y = 3; y < 13; y++) for (let x = 0; x < 32; x++) if (x % 16 > 3 && x % 16 < 12) art.rgba.set([180, 90 + x, 60, 255], (y * 32 + x) * 4);
-  fs.writeFileSync(path.join(dir, "walk.png"), encodePng(art, { chunks: [textChunk("ludo:grid", JSON.stringify({ cols: 2, rows: 1, frames: 2 }))] }));
-  for (const engine of ["unity", "godot", "texturepacker"]) {
-    const out = fs.mkdtempSync(path.join(dir, `${engine}-`));
-    const r = await normals(out, [path.join(dir, "walk.png"), "--engine", engine]);
-    assert.equal(r.code, 0, `${engine}: ${r.stderr}`);
-    assert.deepEqual(fs.readdirSync(out).filter(f => !f.startsWith(".")), ["walk_n.png"], engine);
-    assert.equal(r.out.engine_files, undefined, engine);
-    assert.match(r.out.notes.join("\n"), /No .* files for a normal map/, engine);
+// Engine files with the map: test/normal-engines.test.mjs.
+
+test("a normal map is told from a picture by its pixels", async () => {
+  const { looksLikeNormalMap } = await import("../dist/toolbox/normal-map.js");
+  for (const name of ["islands", "soft", "threshold", "strokes", "sheet", "speck"]) {
+    assert.ok(looksLikeNormalMap(readPng(fs.readFileSync(path.join(NORMALS, `${name}_n.png`))).image), `${name}_n.png`);
+    assert.ok(!looksLikeNormalMap(readPng(fs.readFileSync(path.join(NORMALS, `${name}.png`))).image), `${name}.png`);
   }
+  const flat = { width: 4, height: 4, rgba: new Uint8Array(64).map((_, i) => [128, 128, 255, 255][i % 4]) };
+  assert.ok(looksLikeNormalMap(flat), "a flat map is one");
+  assert.ok(!looksLikeNormalMap({ width: 4, height: 4, rgba: new Uint8Array(64) }), "a clear image is none");
 });
 
 test("--shape-radius: the original's flag and range, and big art gets a value to try", async () => {
@@ -253,7 +251,7 @@ test("normals never replaces its art: --in-place is refused and not offered", as
   const before = fs.readFileSync(file);
   const r = await normals(dir, [file, "--in-place"]);
   assert.equal(r.code, EXIT.USAGE);
-  assert.match(r.stderr, /A normal map does not replace its art: it is saved beside it, as <name>_n\.png/);
+  assert.match(r.stderr, /A normal map does not replace its art: it is saved as <name>_n\.png, in --out or, with --engine, beside the art/);
   assert.ok(fs.readFileSync(file).equals(before), "the art is untouched");
   const { stdout } = await exec(process.execPath, [CLI, "toolbox", "image", "normals", "--help"], { env: { ...process.env, LUDO_TELEMETRY: "0" } });
   assert.doesNotMatch(stdout, /--in-place/);

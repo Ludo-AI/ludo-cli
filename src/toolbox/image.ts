@@ -2,10 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { CliError, EXIT } from "../errors.js";
 import { printJson, type Ctx } from "../generate.js";
-import { MAX_TOOLBOX_PIXELS, type Image } from "../tty/png.js";
+import { MAX_TOOLBOX_PIXELS, textChunk, type Image } from "../tty/png.js";
 import { keepLoop, type Grid } from "../tty/preview.js";
-import { countFrames } from "./grid.js";
-import { baseOf, carriedChunks, engineFiles, freeName, loadImageFile, shown, writePng, type Loaded } from "./io.js";
+import { CONFIDENT, countFrames, guessGrid } from "./grid.js";
+import { baseOf, carriedChunks, engineFiles, freeName, loadImageFile, runLitPlan, shown, writePng, type Loaded } from "./io.js";
 import { blit, crop, joinFrames, sliceSheet } from "./sheet.js";
 import { gridFlag, hexColour, positiveInt, textFlag } from "./flags.js";
 import {
@@ -33,6 +33,8 @@ import { coloursOf, hexOf, loadPalette, PALETTE_EXTENSIONS, PaletteError, savePa
 import { dropShadow, margins, outline, type Shape } from "./effects.js";
 import { MAX_NORMAL_PIXELS, NORMAL_DEFAULTS, NORMAL_RANGES, normalMap, normalPadding, type NormalSettings } from "./normals.js";
 import { encodeWebp } from "../tty/webp-encode.js";
+import { checkMapPlace, directxNote, existsExactly, mapState, NORMAL_KEY, normalMapName, normalStamp, phaserNormalMapNote, UNITY_LIGHTS } from "./normal-map.js";
+import { assertWritable, ENGINE_NAME, existingSlicing, planLitFiles } from "../tty/engines.js";
 
 // Every image tool runs the same way: one image, or every frame of a sheet
 // whose grid is known (its Ludo stamp, or --grid) with the same numbers, then
@@ -584,10 +586,67 @@ const COLOUR_SPACE = new Set(["gAMA", "cHRM", "sRGB", "iCCP"]);
 async function runNormals(ctx: Ctx, call: ToolCall, settings: NormalSettings): Promise<number> {
   if (call.args.length !== 1) throw usageError("Usage: ludo toolbox image normals <image> [--normal-strength 1.5]");
   const src = loadImageFile(call.args[0]);
+  const engine = ctx.globals.engine;
+  // --engine is asked for on this run (the toolbox reads no project
+  // settings), so one it cannot honour stops it before anything is written:
+  // engine files point at the art as a PNG.
+  if (engine && !/\.png$/i.test(src.file)) {
+    throw new CliError(`Engine files point at a PNG, and ${shown(src.file)} is not one`, EXIT.USAGE, `Convert it first (ludo toolbox image convert ${shown(src.file)}), then make the normal map of the PNG.`);
+  }
+  if (engine && ctx.globals.name) throw new CliError(`With --engine the map is ${baseOf(src.file)}_n.png beside the art, where its engine files find it: drop --name`, EXIT.USAGE);
   if (src.extrude) {
     throw new CliError(`${src.file} is extruded (by ${src.extrude}), so this would map its repeated border too`, EXIT.BAD_INPUT, "Make the normal map from the file before the extrude, then extrude both alike.");
   }
-  const grid = gridOf(src, call);
+  const notes: string[] = [];
+  // The grid the map is made by, frame by frame: --grid, else the stamp;
+  // with --engine also the grid detection finds when it is sure, as
+  // `sprite export` (and so the engine files) see the sheet, so every frame
+  // they cut has its own map. Otherwise one image.
+  //  --grid, then the stamp, then how the engine files already there cut
+  // the art (they are the ones the map has to fit), then detection.
+  let grid = gridOf(src, call);
+  // Or, for a TileSet with margins or spacing, its tiles' rects.
+  let cells: { x: number; y: number; w: number; h: number }[] | undefined;
+  if (engine) {
+    grid = grid ? keepLoop(grid, src.grid) : undefined;
+    if (!grid && !src.grid) {
+      // A file's cut is the art's only when its rects hold all of the art
+      // (an atlas frame cut from a packed sheet is not the sheet's grid).
+      const clear = settings.alphaThreshold * 255;
+      const covers = (rects: { x: number; y: number; w: number; h: number }[]) => {
+        const inside = new Uint8Array(src.image.width * src.image.height);
+        for (const r of rects) for (let y = Math.max(0, r.y); y < Math.min(src.image.height, r.y + r.h); y++) inside.fill(1, y * src.image.width + Math.max(0, r.x), y * src.image.width + Math.min(src.image.width, r.x + r.w));
+        return inside.every((v, i) => v || src.image.rgba[i * 4 + 3] <= clear);
+      };
+      const cuts = existingSlicing(engine, src.file, src.image.width, src.image.height).map(c =>
+        c.rects && !covers(c.rects) ? { file: c.file, why: `there is art outside its ${c.tiles ? "tiles" : "frames"}, so they are not a grid of the whole art` } : c
+      );
+      const uniform = cuts.filter(c => c.grid);
+      const key = (g: { cols: number; rows: number }) => `${g.cols}x${g.rows}`;
+      // The grid most of them cut, the first one's on a tie.
+      const best = uniform.map(c => c.grid!).sort((a, b) => uniform.filter(c => key(c.grid!) === key(b)).length - uniform.filter(c => key(c.grid!) === key(a)).length)[0];
+      // A TileSet with margins or spacing is no grid, but its tiles are
+      // known: each is mapped on its own.
+      const tiled = !best ? cuts.find(c => c.tiles && c.rects) : undefined;
+      const odd = cuts.filter(c => c !== tiled && (!c.grid || key(c.grid) !== key(best ?? { cols: 0, rows: 0 })));
+      if (best) {
+        if (best.cols * best.rows > 1) grid = { ...best, fps: 10 };
+        if (odd.length) notes.push(`The map follows the ${key(best)} grid of ${uniform.filter(c => key(c.grid!) === key(best)).map(c => shown(c.file)).join(", ")}; ${odd.map(c => `${shown(c.file)} ${c.grid ? `cuts it ${key(c.grid)}` : `does not fit it (${c.why})`}`).join(", ")}.`);
+      } else if (tiled) {
+        cells = tiled.rects;
+        notes.push(`The map is made tile by tile, on the ${tiled.rects!.length} tiles of ${shown(tiled.file)} (${tiled.why})${odd.length ? `; ${odd.map(c => `${shown(c.file)}: ${c.why}`).join("; ")}` : ""}.`);
+      } else {
+        const guess = guessGrid(src.image);
+        const sure = guess.confidence >= CONFIDENT && guess.frames > 1;
+        if (sure) grid = { cols: guess.cols, rows: guess.rows, frames: guess.frames, fps: 10 };
+        if (cuts.length) {
+          notes.push(`${cuts.map(c => `${shown(c.file)}: ${c.why}`).join("; ")}. ${sure ? `The map follows the ${guess.cols}x${guess.rows} grid detection finds instead.` : "So the map is made as one image (pass --grid CxR for a sheet)."}`);
+        } else if (!sure && guess.cols * guess.rows > 1) {
+          notes.push(`Its grid is not sure (best guess ${guess.cols}x${guess.rows}), so it is mapped, and its engine files take it, as one image: pass --grid CxR for a sheet.`);
+        }
+      }
+    }
+  }
   const { width, height } = src.image;
   const cols = grid?.cols ?? 1;
   const rows = grid?.rows ?? 1;
@@ -598,23 +657,95 @@ async function runNormals(ctx: Ctx, call: ToolCall, settings: NormalSettings): P
       `Its width has to be a multiple of ${cols} and its height of ${rows}: pad or crop it first, or pass the right --grid.`
     );
   }
-  const [fw, fh] = [width / cols, height / rows];
+  // The size each map is made at: a frame, or the biggest tile.
+  const [fw, fh] = cells ? [Math.max(...cells.map(t => t.w)), Math.max(...cells.map(t => t.h))] : [width / cols, height / rows];
   const pad = normalPadding(settings);
   if ((fw + 2 * pad) * (fh + 2 * pad) > MAX_NORMAL_PIXELS) {
     throw new CliError(`A ${fw}x${fh} ${grid ? "frame" : "image"} is too large for a normal map (at most ${MAX_NORMAL_PIXELS / 1024 / 1024} megapixels a frame, with a ${pad} px border)`, EXIT.BAD_INPUT, "Split it into smaller images first.");
   }
-  const out: Image = { width, height, rgba: new Uint8Array(width * height * 4) };
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) blit(out, normalMap(crop(src.image, { x: c * fw, y: r * fh, w: fw, h: fh }), settings), c * fw, r * fh);
+  // With --engine the map goes beside the art as <name>_n.png, where the
+  // engine files and the project expect it, replacing one this tool made
+  // there before and has not been changed since (it derives from the art,
+  // as engine files do); any other file of that name stops it. Everything
+  // is checked, every engine file read and every file to write found
+  // writable, before anything is written.
+  const beside = normalMapName(src.file);
+  let replaced = false;
+  if (engine) {
+    if (fs.existsSync(beside) && !existsExactly(beside)) {
+      const other = fs.readdirSync(path.dirname(beside)).find(n => n.toLowerCase() === path.basename(beside).toLowerCase()) ?? path.basename(beside);
+      throw new CliError(`${shown(path.join(path.dirname(beside), other))} is beside the art, and this file system takes it for ${path.basename(beside)}`, EXIT.BAD_INPUT, "Rename it (a sprite facing north?), then run this again.");
+    }
+    if (existsExactly(beside)) {
+      const state = mapState(beside);
+      if (state !== "ours") {
+        throw new CliError(
+          state === "changed"
+            ? `${shown(beside)} is beside the art, made by ludo toolbox image normals but changed since (its pixels are not the ones it was made with), so it is not replaced`
+            : `${shown(beside)} is beside the art and has no stamp from ludo toolbox image normals (made before 0.2.5, or with another tool), so it is not replaced`,
+          EXIT.BAD_INPUT,
+          `If it is a map this tool made earlier, delete it and run this again; otherwise move or rename it first. Or leave --engine out to save the new map in --out (${shown(ctx.outDir)}).`
+        );
+      }
+      replaced = true;
+    }
+    if (ctx.globals.out) notes.push(`--out is not used with --engine: the map is saved beside the art, as ${shown(beside)}.`);
+  }
+  const file = engine ? beside : freeName(ctx.outDir, ctx.globals.name || `${baseOf(src.file)}_n`, ".png");
+  const map = { file, format: settings.format };
+  let lit: ReturnType<typeof planLitFiles> | undefined;
+  if (engine) {
+    checkMapPlace(engine, src.file, file);
+    try {
+      lit = planLitFiles(engine, src.file, width, height, grid, { trim: src.trim }, map);
+      assertWritable(file);
+    } catch (err) {
+      throw new CliError(`Could not light ${shown(src.file)} in ${ENGINE_NAME[engine]}: ${(err as Error).message}`, EXIT.BAD_INPUT);
+    }
   }
 
-  const file = freeName(ctx.outDir, ctx.globals.name || `${baseOf(src.file)}_n`, ".png");
-  const chunks = carriedChunks(src, grid, { trim: src.trim }).filter(c => !COLOUR_SPACE.has(c.type));
+  const out: Image = { width, height, rgba: new Uint8Array(width * height * 4) };
+  if (cells) {
+    // Outside the tiles all is clear (that is checked): the flat normal,
+    // as the map has under clear pixels.
+    for (let i = 0; i < width * height; i++) out.rgba.set([128, 128, 255, src.image.rgba[i * 4 + 3]], i * 4);
+    for (const t of cells) blit(out, normalMap(crop(src.image, t), settings), t.x, t.y);
+  } else {
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) blit(out, normalMap(crop(src.image, { x: c * fw, y: r * fh, w: fw, h: fh }), settings), c * fw, r * fh);
+    }
+  }
+  // The stamp says which way green points and checksums the pixels, for
+  // engine files made later (sprite export picks the map up), asset
+  // manifest, and the next run here (which replaces only a map it made and
+  // nobody changed since). It carries the grid the map was made by.
+  const chunks = [...carriedChunks(src, grid, { trim: src.trim }).filter(c => !COLOUR_SPACE.has(c.type)), textChunk(NORMAL_KEY, normalStamp(settings.format, out))];
+  // The engine files first, the map last: a failure on the way leaves an
+  // earlier map in place.
+  const touched = engine && lit ? runLitPlan(engine, src.file, lit) : [];
   // The flat normal under clear pixels is read by filtering: it is kept.
   writePng(file, out, chunks, { keepClearRgb: true });
-  const notes: string[] = [];
-  // Engine files would set the map up as sprite colour (sRGB): none yet.
-  if (ctx.globals.engine) notes.push(`No ${ctx.globals.engine} files for a normal map: import it in the engine as a normal map (linear, not sRGB).`);
+  const engineOut = touched.map(t => t.file);
+  const patched = touched.filter(t => t.patched).map(t => t.file);
+  if (engine && lit) {
+    for (const r of lit.rewired) notes.push(`${shown(r.file)} had ${r.was} as its normal map: it now has ${shown(file)}.`);
+    for (const f of lit.skipped) notes.push(`${shown(f.file)} could not be read (${f.why}), so it was not looked at.`);
+    // What to do instead depends on what the file is.
+    for (const f of lit.foreign) {
+      const advice =
+        f.type === "SpriteFrames"
+          ? `for SpriteFrames lit by the map, run ludo toolbox sprite export ${shown(src.file)} --engine godot (it finds ${shown(file)} beside the art)`
+          : f.type === "CanvasTexture"
+            ? `set its normal_texture to ${shown(file)} in Godot`
+            : `in Godot, where it uses ${shown(src.file)}, use a CanvasTexture with ${shown(src.file)} as its diffuse_texture and ${shown(file)} as its normal_texture`;
+      notes.push(`${shown(f.file)} uses the art but is left as it is (${f.why}): ${advice}.`);
+    }
+    if (lit.foreign.length && !touched.length) notes.push(`So no Godot file was written: the .tres ${lit.foreign.length === 1 ? "file above already uses" : "files above already use"} the art, and no new one is made beside ${lit.foreign.length === 1 ? "it" : "them"}.`);
+    if (lit.unlistable) notes.push(`${shown(lit.unlistable)} has no secondaryTextures list to add the map to: add ${shown(file)} as _NormalMap in the Sprite Editor (Secondary Textures).`);
+    if (engine === "texturepacker") notes.push(phaserNormalMapNote(src.file, file, grid ? (lit.atlas ?? engineOut[0]) : undefined));
+    if (engine === "unity") notes.push(UNITY_LIGHTS);
+    if (settings.format === "directx") notes.push(directxNote(engine, file)!);
+  }
   // The default radius rounds only the outer few pixels: right for pixel
   // art, flat in the middle on big art. There is no telling the right value
   // from the pixels, so this only suggests one (the longer side / 48).
@@ -635,6 +766,7 @@ async function runNormals(ctx: Ctx, call: ToolCall, settings: NormalSettings): P
         width,
         height,
         ...(grid ? { grid: { cols, rows, frames: grid.frames, frame_width: fw, frame_height: fh, fps: grid.fps } } : {}),
+        ...(cells ? { tiles: cells.length } : {}),
         normal_format: format,
         normal_strength: shortest(settings.normalStrength),
         detail_strength: shortest(settings.detailStrength),
@@ -642,14 +774,18 @@ async function runNormals(ctx: Ctx, call: ToolCall, settings: NormalSettings): P
         shape_strength: shortest(settings.shapeStrength),
         shape_radius: shortest(settings.shapeRadius),
         ...trimJson(src.trim),
+        ...(replaced ? { replaced: true } : {}),
+        ...(engineOut.length ? { engine_files: engineOut.map(shown) } : {}),
+        ...(patched.length ? { patched: patched.map(shown) } : {}),
         ...(notes.length ? { notes } : {}),
         ...(ctx.globals.quiet ? {} : { hint: next })
       },
       false
     );
   } else {
-    process.stdout.write(`${says}${grid ? ` (each of ${cols * rows} cells)` : ""}\n`);
-    process.stdout.write(`Saved ${shown(file)} (${width}x${height}${grid ? `, ${cols}x${rows} grid of ${fw}x${fh}` : ""})\n`);
+    process.stdout.write(`${says}${grid ? ` (each of ${cols * rows} cells)` : cells ? ` (each of ${cells.length} tiles)` : ""}\n`);
+    process.stdout.write(`${replaced ? "Replaced" : "Saved"} ${shown(file)} (${width}x${height}${grid ? `, ${cols}x${rows} grid of ${fw}x${fh}` : ""})${replaced ? ", the map an earlier run made" : ""}\n`);
+    for (const t of touched) process.stdout.write(t.patched ? `Updated ${shown(t.file)} (the map wired in, the rest as it was)\n` : `Saved ${shown(t.file)}\n`);
     for (const n of notes) process.stderr.write(`Note: ${n}\n`);
     if (!ctx.globals.quiet) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
   }
@@ -665,12 +801,39 @@ TOOLS.push({
     "Each pixel's colour says which way it faces. The art's silhouette rounds it (thicker parts rise",
     "more) and its painted shading adds the detail; every separate part (a sword apart from the hand)",
     "is shaped on its own, and pixels that are clear or nearly so get the flat normal (128,128,255).",
-    "The map is the art's size, pixel for pixel, with its alpha and grid, saved as <name>_n.png (the art",
-    "is never replaced). On a sheet every cell is mapped on its own; the sheet must divide into its grid.",
-    "It is a data texture, not colour: import it as a normal map, or as linear (never sRGB). No engine",
-    "files are written for it yet. Ported from Sprite Fusion Sprite Normals (MIT,",
-    "github.com/hugo-dz/spritefusion-sprite-normals): at the default settings it gives that tool's very",
-    "pixels; with other values a rare pixel may differ by 1.",
+    "The map is the art's size, pixel for pixel, with its alpha and grid, saved as <name>_n.png in --out",
+    "(the art is never replaced). On a sheet every cell is mapped on its own; the sheet must divide into",
+    "its grid.",
+    "It is a data texture, not colour: import it as a normal map, or as linear (never sRGB). Ported from",
+    "Sprite Fusion Sprite Normals (MIT, github.com/hugo-dz/spritefusion-sprite-normals): at the default",
+    "settings it gives that tool's very pixels; with other values a rare pixel may differ by 1.",
+    "",
+    "With --engine the map is made on the grid the engine files use (--grid, the stamp, the frames or",
+    "tiles of the art's engine files already there, else a sure detection) and saved beside the art",
+    "instead, as <name>_n.png, where its engine files find it (one this tool made there and nobody",
+    "changed since is replaced; any other file of that name stops it), and the art's engine files get",
+    "it wired in. Files the art already has are updated, not made again, and if any file to write is",
+    "read-only, nothing is written:",
+    "  --engine godot          every SpriteFrames, TileSet or CanvasTexture .tres beside the art that",
+    "                          uses it, whoever wrote it (this CLI, or Godot saving it), gets the map",
+    "                          through a CanvasTexture, all else as it was. Only .tres files beside the",
+    "                          art are looked at, not others in the project; another art's is not",
+    "                          touched, one it cannot rewire is left with a note on what to do, and one",
+    "                          it cannot read is skipped with a note. With none, a sheet gets a new",
+    "                          SpriteFrames and a still image a CanvasTexture for a Sprite2D's texture.",
+    "                          A PointLight2D then shades it.",
+    "  --engine unity          the art's .png.meta gets the map as its _NormalMap secondary texture, every",
+    "                          other line as it was; with none, it is written as sprite export writes it",
+    "                          (and an .anim for a sheet). The map's .meta imports it as a Normal map, not",
+    "                          sRGB. Lit by URP's 2D lights: a Light 2D with Normal Maps quality Fast or",
+    "                          Accurate (Disabled by default), on the 2D Renderer with lit sprites.",
+    "  --engine texturepacker  a sheet's JSON atlas (unless one is there), which has no place for a map:",
+    "                          the output says how Phaser loads the two and turns lights on (PixiJS has",
+    "                          no normal-map lighting of its own).",
+    "When detection is not sure, the art is taken as one image. The art has to be a PNG. A file that had",
+    "another normal map wired in gets this one, and the output names the old one. For a pivot or",
+    "Unity's pixels per unit, run sprite export, which finds <name>_n.png beside the sheet. Godot, Unity",
+    "and Phaser read OpenGL maps, the default.",
     "",
     "--shape-radius is the one setting that depends on the art's size, and nothing in the pixels says",
     "its right value. It is how far in from the edge, in pixels, the silhouette keeps rising before it",
@@ -688,10 +851,10 @@ TOOLS.push({
     { flag: "--detail-scale", value: "px", description: "How far the shading is smoothed first, 0.6 to 8 (default 0.6; 3 for painted art)" },
     { flag: "--shape-strength", value: "n", description: "How high the silhouette rises, 0 to 8 (default 1.15)" },
     { flag: "--shape-radius", value: "px", description: "How far in from the edge it keeps rising, 0.5 to 512 (default 4, for pixel art; see above)" },
-    { flag: "--normal-format", value: "name", description: "opengl (default; Godot, Unity) or directx (green reversed; Unreal)" },
+    { flag: "--normal-format", value: "name", description: "opengl (default; Godot, Unity, Phaser) or directx (green reversed; Unreal)" },
     SHARED[0]
   ],
-  refuses: { "--in-place": "A normal map does not replace its art: it is saved beside it, as <name>_n.png (drop --in-place)" },
+  refuses: { "--in-place": "A normal map does not replace its art: it is saved as <name>_n.png, in --out or, with --engine, beside the art (drop --in-place)" },
   async run(ctx, call) {
     const format = (textFlag(call, "--normal-format") ?? (call.flags.has("--normal-format") ? "" : "opengl")).toLowerCase();
     if (format !== "opengl" && format !== "directx") throw usageError(`--normal-format takes opengl or directx (got "${format}")`);

@@ -8,13 +8,14 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { unityAnimationClip, unityFloat, unityTextureMeta, readUnityMeta, writeUnityFiles, spriteFileIds } from "../dist/tty/unity.js";
+import { asNormalMapMeta, normalMapEntryGuid, withNormalMapEntry, writeUnityNormalMapMeta, unityAnimationClip, unityFloat, unityNormalMapMeta, unityTextureMeta, readUnityMeta, writeUnityFiles, spriteFileIds } from "../dist/tty/unity.js";
 import { encodePng } from "../dist/tty/png.js";
 
 const exec = promisify(execFile);
 const corpus = path.join(import.meta.dirname, "corpus", "unity");
 const unityMeta = fs.readFileSync(path.join(corpus, "explosion.png.meta"), "utf8");
 const unityClip = fs.readFileSync(path.join(corpus, "explosion.anim"), "utf8");
+const unityNormalMeta = fs.readFileSync(path.join(corpus, "normalmap.png.meta"), "utf8");
 const GUID = "195d2ebbbf668124ab3fa9932a849bcb";
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "ludo-unity-test-"));
 const field = (text, name) => [...text.matchAll(new RegExp(`^ *${name}: (.*)$`, "gm"))].map(m => m[1]);
@@ -52,6 +53,95 @@ test("the .meta for Unity's explosion sheet is Unity's, but for the settings we 
   assert.equal(new Set(ids).size, 7);
   assert.ok(ids.every(id => /^[0-9a-f]{32}$/.test(id)));
   assert.equal(unityTextureMeta("explosion", GUID, 112, 16, { cols: 7, rows: 1, frames: 7, fps: 12 }), ours);
+});
+
+test("a normal map's .meta is Unity's own for one, but for the settings we choose; the sheet lists it as _NormalMap", () => {
+  const ours = unityNormalMapMeta("b012569a94369804db3e912822cb96cd", 64, 16);
+  // What we set on purpose, as the sheet's own .meta: no mipmaps, smooth
+  // filtering, 100 pixels per unit, only the default platform's settings
+  // (and its forceMaximumCompressionQuality). And a normal map is no sprite:
+  // no sprite mode, no sprites. Its Normal map type, sRGB off and alpha not
+  // as transparency are Unity's.
+  const known = unityNormalMeta
+    .replace(/ {2}internalIDToNameTable:\n(?: {2}[- ] .*\n)*/, "  internalIDToNameTable: []\n")
+    .replace("    enableMipMap: 1", "    enableMipMap: 0")
+    .replace("    filterMode: 0", "    filterMode: 1")
+    .replace("  spriteMode: 2", "  spriteMode: 0")
+    .replace("  spritePixelsToUnits: 16", "  spritePixelsToUnits: 100")
+    .replace("    forceMaximumCompressionQuality_BC6H_BC7: 0\n  - serializedVersion: 4", "    forceMaximumCompressionQuality_BC6H_BC7: 1\n  - serializedVersion: 4")
+    .replace(/ {2}- serializedVersion: 4\n {4}buildTarget: Standalone\n(?: {4}.*\n)*?(?= {2}spriteSheet:)/, "")
+    .replace(/ {4}sprites:\n(?: {4}- .*\n| {6,}.*\n)*/, "    sprites: []\n")
+    .replace(/ {4}nameFileIdTable:\n(?: {6}.*\n)*/, "    nameFileIdTable: {}\n");
+  assert.equal(ours, known);
+  assert.deepEqual(field(ours, "    flipGreenChannel"), ["0"]);
+  assert.deepEqual(field(unityNormalMapMeta(GUID, 64, 16, true), "    flipGreenChannel"), ["1"], "a DirectX map is flipped on import");
+  assert.deepEqual(readUnityMeta(ours), { guid: "b012569a94369804db3e912822cb96cd", fileIds: {} });
+
+  // The sheet's .meta lists the map's guid as its _NormalMap secondary
+  // texture, as Unity's 2D samples do; nothing else changes.
+  const plain = unityTextureMeta("hero", GUID, 64, 16, { cols: 4, rows: 1, frames: 4, fps: 8 });
+  const lit = unityTextureMeta("hero", GUID, 64, 16, { cols: 4, rows: 1, frames: 4, fps: 8 }, {}, undefined, undefined, {}, "b012569a94369804db3e912822cb96cd");
+  assert.equal(lit, plain.replace("    secondaryTextures: []\n", "    secondaryTextures:\n    - texture: {fileID: 2800000, guid: b012569a94369804db3e912822cb96cd, type: 3}\n      name: _NormalMap\n"));
+});
+
+test("an existing .meta gets the map in its secondaryTextures and nothing else; a map's .meta only its import type", () => {
+  const G = "aaaabbbbccccddddeeeeffff00001111";
+  // Unity's own sheet .meta: one line becomes three.
+  const listed = withNormalMapEntry(unityMeta, G);
+  assert.equal(listed, unityMeta.replace("    secondaryTextures: []\n", `    secondaryTextures:\n    - texture: {fileID: 2800000, guid: ${G}, type: 3}\n      name: _NormalMap\n`));
+  // Again with another guid: replaced where it was, a mask kept, CRLF kept.
+  const masked = listed.replace("      name: _NormalMap\n", "      name: _NormalMap\n    - texture: {fileID: 2800000, guid: 99999999999999999999999999999999, type: 3}\n      name: _MaskTex\n").replace(/\n/g, "\r\n");
+  const again = withNormalMapEntry(masked, "12121212121212121212121212121212");
+  assert.equal(again, masked.replace(G, "12121212121212121212121212121212"));
+  // A list written name first, as some versions do, is read too.
+  const nameFirst = unityMeta.replace("    secondaryTextures: []\n", `    secondaryTextures:\n    - name: _NormalMap\n      texture: {fileID: 2800000, guid: ${G}, type: 3}\n`);
+  assert.equal(withNormalMapEntry(nameFirst, G), listed);
+  assert.equal(withNormalMapEntry(unityMeta.replace("    secondaryTextures: []\n", ""), G), undefined, "no list: nothing to patch");
+  assert.deepEqual([normalMapEntryGuid(unityMeta), normalMapEntryGuid(listed), normalMapEntryGuid(again), normalMapEntryGuid(nameFirst)], [undefined, G, "12121212121212121212121212121212", G]);
+
+  // A map's .meta Unity wrote, set to Default and sRGB: only those lines change.
+  const def = unityNormalMeta.replace("  textureType: 1", "  textureType: 0").replace("    sRGBTexture: 0", "    sRGBTexture: 1");
+  assert.equal(asNormalMapMeta(def, false), unityNormalMeta);
+  assert.equal(asNormalMapMeta(def, true), unityNormalMeta.replace("    flipGreenChannel: 0", "    flipGreenChannel: 1"));
+  // An older .meta without flipGreenChannel gets no such field (the output
+  // says the map is not flipped).
+  const old = unityNormalMeta.replace("    flipGreenChannel: 0\n", "");
+  assert.equal(asNormalMapMeta(old, false), old);
+  assert.equal(asNormalMapMeta(old, true), old);
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, "hero_n.png.meta"), def);
+  const w = writeUnityNormalMapMeta({ file: path.join(dir, "hero_n.png"), format: "opengl" }, 64, 16, G);
+  assert.deepEqual([w.guid, w.patched], ["b012569a94369804db3e912822cb96cd", true], "its own guid, not the one offered");
+  assert.equal(fs.readFileSync(path.join(dir, "hero_n.png.meta"), "utf8"), unityNormalMeta);
+});
+
+test("a sheet's normal map gets its own .meta, both kept on a re-export; a still gets no clip", () => {
+  const dir = tmp();
+  const sheet = path.join(dir, "hero.png");
+  const map = path.join(dir, "hero_n.png");
+  const grid = { cols: 2, rows: 1, frames: 2, fps: 8 };
+  const files = writeUnityFiles(sheet, 64, 32, grid, undefined, {}, { normalMap: { file: map, format: "opengl" } });
+  assert.deepEqual(files.map(f => path.basename(f)), ["hero.png.meta", "hero_n.png.meta", "hero.anim"]);
+  const sheetMeta = fs.readFileSync(sheet + ".meta", "utf8");
+  const mapGuid = readUnityMeta(fs.readFileSync(map + ".meta", "utf8")).guid;
+  assert.match(sheetMeta, new RegExp(`- texture: \\{fileID: 2800000, guid: ${mapGuid}, type: 3\\}\n {6}name: _NormalMap\n`));
+  assert.deepEqual(field(fs.readFileSync(map + ".meta", "utf8"), "  textureType"), ["1"]);
+  // Again, as a DirectX map: both guids, the sprites' IDs and spriteIDs stay.
+  writeUnityFiles(sheet, 64, 32, grid, undefined, {}, { normalMap: { file: map, format: "directx" } });
+  assert.equal(readUnityMeta(fs.readFileSync(map + ".meta", "utf8")).guid, mapGuid);
+  assert.equal(fs.readFileSync(sheet + ".meta", "utf8"), sheetMeta);
+  assert.deepEqual(field(fs.readFileSync(map + ".meta", "utf8"), "    flipGreenChannel"), ["1"]);
+  // Without the map the sheet's .meta lists none again.
+  writeUnityFiles(sheet, 64, 32, grid);
+  assert.match(fs.readFileSync(sheet + ".meta", "utf8"), /^ {4}secondaryTextures: \[\]$/m);
+
+  const still = path.join(dir, "boss.png");
+  const out = writeUnityFiles(still, 40, 50, { cols: 1, rows: 1, frames: 1, fps: 1 }, undefined, {}, { normalMap: { file: path.join(dir, "boss_n.png"), format: "opengl" } }, false);
+  assert.deepEqual(out.map(f => path.basename(f)), ["boss.png.meta", "boss_n.png.meta"]);
+  assert.ok(!fs.existsSync(path.join(dir, "boss.anim")));
+  // One sprite with the ID a Single-mode import gives it, so a scene that
+  // used the image as one sprite still finds it.
+  assert.deepEqual(readUnityMeta(fs.readFileSync(still + ".meta", "utf8")).fileIds, { boss_0: "21300000" });
 });
 
 test("the clip for Unity's explosion is Unity's, without its closing empty key", () => {

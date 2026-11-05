@@ -12,7 +12,8 @@ import http from "node:http";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { encodePng, withText } from "../dist/tty/png.js";
+import { encodePng, readPng, withText } from "../dist/tty/png.js";
+import { encodeWebp } from "../dist/tty/webp-encode.js";
 import { encodeWav } from "../dist/toolbox/wav.js";
 import { EXIT } from "../dist/errors.js";
 import { assetKeys, characterOf, dHash, soundKind } from "../dist/toolbox/asset.js";
@@ -516,6 +517,187 @@ test("pixi8 loads the emitted manifest's bundles", async t => {
   );
   assert.deepEqual(got, { frames: 7, lava: [64, 64] });
 });
+
+// ---- normal maps ----
+
+// A sheet and a picture, each with its normal map beside it (made by
+// `image normals`), a <name>_n.png that is a picture (a sprite facing
+// north) and a normal map with no image of its name.
+async function litFolder(dir = tmp()) {
+  fs.rmSync(dir, { recursive: true, force: true });
+  writeSheet(path.join(dir, "sprites/hero_walk.png"), figureSheet({ cols: 4, rows: 2 }), { cols: 4, rows: 2, frames: 7, fps: 12 });
+  writeSheet(path.join(dir, "props/rock.png"), disc(40, 40));
+  for (const art of ["sprites/hero_walk.png", "props/rock.png"]) {
+    const r = await run(["toolbox", "image", "normals", path.join(dir, art), "--out", path.dirname(path.join(dir, art)), "--json"]);
+    assert.equal(r.code, EXIT.OK, r.stderr);
+  }
+  writeSheet(path.join(dir, "sprites/knight_n.png"), figureSheet({ cols: 2, rows: 1, hue: 20 }));
+  fs.copyFileSync(path.join(dir, "props/rock_n.png"), path.join(dir, "props/ghost_n.png"));
+  return dir;
+}
+
+test("manifest: <name>_n.png beside its image is that image's normal map, not an asset of its own", async () => {
+  const dir = await litFolder();
+  const r = await run(["toolbox", "asset", "manifest", dir, "--json"]);
+  assert.equal(r.code, EXIT.OK, r.stderr);
+  const by = Object.fromEntries(r.json.assets.map(a => [a.path, a]));
+  assert.deepEqual([by["sprites/hero_walk_n.png"].kind, by["sprites/hero_walk_n.png"].normal_map_of, by["sprites/hero_walk_n.png"].normal_format], ["normalmap", "sprites/hero_walk.png", "opengl"]);
+  assert.equal(by["sprites/hero_walk_n.png"].grid, undefined, "a map is no sheet of its own");
+  assert.equal(by["sprites/hero_walk.png"].normal_map, "sprites/hero_walk_n.png");
+  assert.equal(by["sprites/hero_walk.png"].kind, "spritesheet");
+  assert.equal(by["props/rock.png"].normal_map, "props/rock_n.png");
+  assert.equal(by["props/rock_n.png"].kind, "normalmap");
+  // Named like one, but a picture: an asset like any other.
+  assert.notEqual(by["sprites/knight_n.png"].kind, "normalmap");
+  // A map of nothing here: a normal map still, and the reason says so.
+  assert.equal(by["props/ghost_n.png"].kind, "normalmap");
+  assert.match(by["props/ghost_n.png"].reason, /no image of its name beside it/);
+  assert.equal(r.json.kinds.normalmap, 3);
+  assert.deepEqual(r.json.groups.flatMap(g => g.animations.map(a => a.sheet ?? a.path)).filter(p => /_n\.png$/.test(p ?? "")), []);
+  // ghost_n.png is rock_n.png's very bytes, but maps are never duplicates.
+  assert.deepEqual(r.json.duplicates, []);
+});
+
+test("manifest --emit phaser loads each normal map with its image; pixi leaves them out", async () => {
+  const dir = await litFolder();
+  const out = path.join(tmp(), "gen");
+  const r = await run(["toolbox", "asset", "manifest", dir, "--emit", "phaser", "--emit", "pixi", "--base", "assets", "--out", out, "--json"]);
+  assert.equal(r.code, EXIT.OK, r.stderr);
+  const pack = JSON.parse(fs.readFileSync(path.join(out, "assets-pack.json"), "utf8"));
+  const files = Object.fromEntries(pack.assets.files.map(f => [f.key, f]));
+  assert.deepEqual(files.sprites_hero_walk, { type: "spritesheet", key: "sprites_hero_walk", url: "sprites/hero_walk.png", normalMap: "sprites/hero_walk_n.png", frameConfig: { frameWidth: 32, frameHeight: 48, endFrame: 6 } });
+  assert.deepEqual(files.props_rock, { type: "image", key: "props_rock", url: "props/rock.png", normalMap: "props/rock_n.png" });
+  assert.ok(!pack.assets.files.some(f => /_n\.png$/.test(f.url) && f.key !== "sprites_knight_n"), "no map loads on its own");
+  assert.match(pack.meta.lights, /this\.lights\.enable\(\)/);
+  const phaser = fs.readFileSync(path.join(out, "assets.ts"), "utf8");
+  assert.match(phaser, /scene\.load\.spritesheet\(\{ key: AssetKey\.SpritesHeroWalk, url: "sprites\/hero_walk\.png", normalMap: "sprites\/hero_walk_n\.png", frameConfig: \{ frameWidth: 32, frameHeight: 48, endFrame: 6 \} \}\);/);
+  assert.match(phaser, /scene\.load\.image\(\{ key: AssetKey\.PropsRock, url: "props\/rock\.png", normalMap: "props\/rock_n\.png" \}\);/);
+  assert.match(phaser, /\/\/ sprites\/hero_walk_n\.png: the normal map of sprites\/hero_walk\.png, loaded with it/);
+  assert.match(phaser, /^\/\/ Pictures with a normal map are lit by 2D lights once the scene turns them on: this\.lights\.enable\(\)[^\n]*setPipeline\("Light2D"\) in Phaser 3 or setLighting\(true\) in Phaser 4/m);
+  assert.doesNotMatch(phaser, /HeroWalkN|PropsRockN|PropsGhostN/, "a map has no key of its own");
+  assert.match(phaser, /SpritesKnightN = "sprites_knight_n"/, "a picture named _n keeps its own");
+  assert.ok(r.json.notes.some(n => /props\/ghost_n\.png: a normal map paired with no picture \(no image of its name beside it\), so it is left out/.test(n)), r.json.notes.join("\n"));
+  assert.ok(r.json.notes.some(n => /2 pictures \(props\/rock\.png, sprites\/hero_walk\.png\) load with their normal map/.test(n)), r.json.notes.join("\n"));
+  const manifest = JSON.parse(fs.readFileSync(path.join(out, "assets-manifest.json"), "utf8"));
+  assert.ok(!JSON.stringify(manifest).includes("rock_n"), "PixiJS gets no maps");
+  assert.ok(r.json.notes.some(n => /props\/rock_n\.png: a normal map, left out: PixiJS has no normal-map lighting of its own/.test(n)));
+  // And the TypeScript checks against both Phasers' own types.
+  for (const pkg of ["phaser", "phaser3"]) {
+    const program = ts.createProgram([path.join(out, "assets.ts")], {
+      strict: true, noEmit: true, target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler,
+      skipLibCheck: true, types: [], baseUrl: root, paths: { phaser: [`node_modules/${pkg}/types/phaser.d.ts`] }
+    });
+    assert.deepEqual(ts.getPreEmitDiagnostics(program).map(d => ts.flattenDiagnosticMessageText(d.messageText, "\n")), [], pkg);
+  }
+});
+
+test("manifest: a map lights the copy loaded in its picture's place; a DirectX map is left out; of two maps, neither", async () => {
+  const dir = await litFolder();
+  // hero.png and a smaller lossless WebP of it, the map made from the PNG.
+  const hero = disc(48, 48);
+  writeSheet(path.join(dir, "props/hero.png"), hero);
+  assert.equal((await run(["toolbox", "image", "normals", path.join(dir, "props/hero.png"), "--engine", "texturepacker", "--json"])).code, EXIT.OK);
+  // A comment makes the PNG the bigger file, so the WebP is the copy kept.
+  fs.writeFileSync(path.join(dir, "props/hero.png"), withText(encodePng(hero), "Comment", "x".repeat(20000)));
+  fs.writeFileSync(path.join(dir, "props/hero.webp"), encodeWebp(hero));
+  assert.ok(fs.statSync(path.join(dir, "props/hero.webp")).size < fs.statSync(path.join(dir, "props/hero.png")).size);
+  // A DirectX map of the sheet; and two maps of one picture.
+  assert.equal((await run(["toolbox", "image", "normals", path.join(dir, "sprites/hero_walk.png"), "--engine", "texturepacker", "--normal-format", "directx", "--json"])).code, EXIT.OK);
+  writeSheet(path.join(dir, "props/gem.png"), disc(30, 30));
+  for (let k = 0; k < 2; k++) assert.equal((await run(["toolbox", "image", "normals", path.join(dir, "props/gem.png"), "--out", path.join(dir, "props"), "--json"])).code, EXIT.OK);
+  // A <name>_n-2.png alone is that picture's map.
+  writeSheet(path.join(dir, "props/coin.png"), disc(20, 20));
+  await run(["toolbox", "image", "normals", path.join(dir, "props/coin.png"), "--out", path.join(dir, "props"), "--name", "coin_n-2", "--json"]);
+
+  const out = path.join(tmp(), "gen");
+  const r = await run(["toolbox", "asset", "manifest", dir, "--emit", "phaser", "--out", out, "--json"]);
+  assert.equal(r.code, EXIT.OK, r.stderr);
+  const by = Object.fromEntries(r.json.assets.map(a => [a.path, a]));
+  const phaser = fs.readFileSync(path.join(out, "assets.ts"), "utf8");
+  const pack = JSON.parse(fs.readFileSync(path.join(out, "assets-pack.json"), "utf8")).assets.files;
+  // The WebP is the copy loaded, and it carries the PNG's map.
+  assert.equal(by["props/hero.png"].normal_map, "props/hero_n.png");
+  assert.match(phaser, /scene\.load\.image\(\{ key: AssetKey\.PropsHero, url: "props\/hero\.webp", normalMap: "props\/hero_n\.png" \}\);/);
+  assert.match(phaser, /\/\/ props\/hero_n\.png: the normal map of props\/hero\.png, loaded with props\/hero\.webp/);
+  assert.deepEqual(pack.find(f => f.url === "props/hero.webp"), { type: "image", key: "props_hero", url: "props/hero.webp", normalMap: "props/hero_n.png" });
+  // The DirectX map: paired in the manifest, not in the loader.
+  assert.deepEqual([by["sprites/hero_walk_n.png"].normal_format, by["sprites/hero_walk.png"].normal_map], ["directx", "sprites/hero_walk_n.png"]);
+  assert.match(phaser, /scene\.load\.spritesheet\(AssetKey\.SpritesHeroWalk, "sprites\/hero_walk\.png", \{/);
+  assert.ok(!pack.find(f => f.key === "sprites_hero_walk").normalMap);
+  assert.ok(r.json.notes.some(n => /sprites\/hero_walk_n\.png: a DirectX normal map .* upside down: it is left out\. Make it again without --normal-format directx/.test(n)), r.json.notes.join("\n"));
+  // Two maps of gem.png: neither is paired, neither loads.
+  assert.deepEqual([by["props/gem_n.png"].kind, by["props/gem_n-2.png"].kind, by["props/gem.png"].normal_map], ["normalmap", "normalmap", undefined]);
+  assert.match(by["props/gem_n-2.png"].reason, /one of 2 normal maps of props\/gem\.png \(props\/gem_n-2\.png, props\/gem_n\.png\), so none is paired/);
+  assert.match(phaser, /scene\.load\.image\(AssetKey\.PropsGem, "props\/gem\.png"\);/);
+  // coin_n-2.png, the only one: coin.png's.
+  assert.equal(by["props/coin.png"].normal_map, "props/coin_n-2.png");
+});
+
+// Where to look in each texture: inside the first frame's figure, the rock's
+// middle (the knight is a picture named _n: it has no map).
+const AT = { sprites_hero_walk: [16, 30], props_rock: [20, 20], sprites_knight_n: [0, 0] };
+
+for (const lib of ["phaser4", "phaser3"]) {
+  test(`${lib} loads each picture's normal map with it, from the pack and from preload()`, async t => {
+    if (!browser) return t.skip("no Chromium for playwright-core (npx playwright-core install chromium)");
+    const dir = await litFolder(path.join(served, "lit"));
+    const out = path.join(served, "gen-lit");
+    const r = await run(["toolbox", "asset", "manifest", dir, "--emit", "phaser", "--base", "/lit", "--out", out]);
+    assert.equal(r.code, EXIT.OK, r.stderr);
+    fs.writeFileSync(path.join(out, "assets.js"), ts.transpileModule(fs.readFileSync(path.join(out, "assets.ts"), "utf8"), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 } }).outputText);
+    const got = await inPage(
+      lib,
+      async at => {
+        const mod = await import("/gen-lit/assets.js");
+        return new Promise((resolve, reject) => {
+          setTimeout(() => reject(new Error("Phaser did not finish loading")), 15000);
+          // eslint-disable-next-line no-undef
+          new Phaser.Game({
+            // eslint-disable-next-line no-undef
+            type: Phaser.CANVAS,
+            width: 16,
+            height: 16,
+            banner: false,
+            audio: { noAudio: true },
+            scene: {
+              preload() {
+                mod.preload(this);
+              },
+              create() {
+                // The map is the texture's data source: what Light2D samples.
+                // A pixel inside the figure tells it from the picture.
+                const canvas = document.createElement("canvas");
+                const ctx = canvas.getContext("2d", { willReadFrequently: true });
+                const pixel = (img, [x, y]) => {
+                  canvas.width = img.width;
+                  canvas.height = img.height;
+                  ctx.drawImage(img, 0, 0);
+                  return [...ctx.getImageData(x, y, 1, 1).data];
+                };
+                const maps = () => Object.fromEntries(Object.entries(at).map(([k, p]) => { const src = this.textures.get(k).dataSource[0]; return [k, src ? [src.width, src.height, pixel(src.source, p)] : null]; }));
+                const preloaded = maps();
+                for (const k of Object.values(mod.AssetKey)) this.textures.remove(k);
+                this.load.pack("ludo", "/gen-lit/assets-pack.json");
+                this.load.once("complete", () => resolve({ preloaded, packed: maps() }));
+                this.load.start();
+              }
+            }
+          });
+        });
+      },
+      AT
+    );
+    const pixel = (file, [x, y]) => {
+      const { image } = readPng(fs.readFileSync(path.join(dir, file)));
+      return [...image.rgba.subarray((y * image.width + x) * 4, (y * image.width + x) * 4 + 4)];
+    };
+    const want = { sprites_hero_walk: [128, 96, pixel("sprites/hero_walk_n.png", AT.sprites_hero_walk)], props_rock: [40, 40, pixel("props/rock_n.png", AT.props_rock)], sprites_knight_n: null };
+    assert.notDeepEqual(pixel("props/rock_n.png", AT.props_rock), pixel("props/rock.png", AT.props_rock));
+    assert.equal(want.sprites_hero_walk[2][3], 255, "an opaque pixel of the figure");
+    assert.deepEqual(got.preloaded, want);
+    assert.deepEqual(got.packed, want);
+  });
+}
 
 // ---- gaps ----
 

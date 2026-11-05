@@ -14,6 +14,7 @@ import { makeGif, MAX_GIF_FPS } from "./gif.js";
 import { scaleUp } from "./pixels.js";
 import { MAX_TOOLBOX_PIXELS } from "../tty/png.js";
 import { hint, playHint, TOOLS, type ToolCall } from "./registry.js";
+import { directxNote, phaserNormalMapNote, sheetNormalMap, UNITY_LIGHTS } from "./normal-map.js";
 // Used when a tool runs, never as the modules load: the two import each other.
 import { metricsOrFail, pivotChoice, sheetFrames } from "./sprite-analysis.js";
 
@@ -416,6 +417,16 @@ TOOLS.push({
     "exports each frame's original size and offset, and keeps the repeated border out of the frames.",
     "Any toolbox tool that writes a sheet also takes --engine.",
     "",
+    "A normal map (`ludo toolbox image normals`) is wired in, for 2D lights: --normal-map, else",
+    "<name>_n.png beside the sheet (that very name) when its pixels are a normal map's; the output says",
+    "it was used, and --no-normal-map leaves it out. It must be the sheet's size, and in the sheet's Godot",
+    "project, or under its Unity project's Assets. Godot's frames are cut from a CanvasTexture of the",
+    "sheet and the map, which a PointLight2D shades. Unity's .meta lists the map as the sheet's _NormalMap",
+    "and the map's .meta imports it as a Normal map (an existing one keeps its other settings); URP's",
+    "Light 2D uses it once its Normal Maps quality is Fast or Accurate (Disabled by default), on the 2D",
+    "Renderer with lit sprites. A TexturePacker atlas has no place for a map: one beside the sheet is only",
+    "mentioned, with how Phaser loads the two (PixiJS has no normal-map lighting of its own).",
+    "",
     "Without --pivot every frame pivots on its centre. --pivot feet puts it on the ground line between",
     "the feet, as `ludo toolbox sprite metrics` measures it (a sheet that does not stand on a ground line",
     "gets its centre of mass, and the output says so); mass or X,Y (frame pixels) also work. Unity gets",
@@ -430,6 +441,8 @@ TOOLS.push({
     { flag: "--fps", value: "n", description: "Frame rate (default: the sheet's, else 10)" },
     { flag: "--pivot", value: "feet|mass|X,Y", description: "Godot and Unity: pivot on the ground line between the feet, the centre of mass, or X,Y in frame pixels (default: the frame's centre)" },
     { flag: "--ppu", value: "n", description: "Unity's pixels per unit (default 100)" },
+    { flag: "--normal-map", value: "file", description: "The sheet's normal map, for 2D lights (default: <name>_n.png beside it, if any)" },
+    { flag: "--no-normal-map", description: "Leave out the <name>_n.png beside the sheet" },
     { flag: "--grid", value: "CxR", description: "The sheet's grid, when it has no Ludo stamp and detection is unsure" }
   ],
   async run(ctx: Ctx, call: ToolCall) {
@@ -461,7 +474,18 @@ TOOLS.push({
       const { masks, fw, fh } = sheetFrames(src, grid, 128);
       pivot = metricsOrFail(masks, fw, fh, choice, src.file, 128).pivot;
     }
-    const files = engineFiles(ctx, src.file, src.image, out, layoutOf(src), typeof raw === "string" ? raw.trim() : undefined, { ...(pivot ? { pivot } : {}), ...(ppu ? { ppu } : {}) });
+    const given = call.flags.get("--normal-map");
+    if (given === true || (typeof given === "string" && !given.trim())) throw new CliError("--normal-map needs a file", EXIT.USAGE);
+    // Checked before anything is written, like the pivot.
+    const lit = sheetNormalMap(src.file, src.image, given, call.flags.has("--no-normal-map"), engine);
+    const normalMap = lit.map ? { file: lit.map.file, format: lit.map.format } : undefined;
+    // An atlas has no place for the map: it is only mentioned.
+    const wired = engine === "texturepacker" ? undefined : normalMap;
+    const files = engineFiles(ctx, src.file, src.image, out, layoutOf(src), typeof raw === "string" ? raw.trim() : undefined, { ...(pivot ? { pivot } : {}), ...(ppu ? { ppu } : {}), ...(wired ? { normalMap: wired } : {}) });
+    const notes = [...lit.notes];
+    if (normalMap && engine === "texturepacker") notes.push(phaserNormalMapNote(src.file, normalMap.file, files[0]));
+    if (normalMap && engine === "unity") notes.push(UNITY_LIGHTS);
+    if (normalMap?.format === "directx") notes.push(directxNote(engine, normalMap.file)!);
 
     const next = hint("Animate another move for the same character with Ludo", `ludo sprite animate --initial-image <a frame> --motion-prompt "<what it does>" --engine ${ctx.globals.engine}`);
     if (ctx.jsonOut) {
@@ -475,7 +499,9 @@ TOOLS.push({
           ...(pivot ? { pivot } : {}),
           ...(engine === "unity" ? { pixels_per_unit: ppu ?? 100 } : {}),
           ...(pivot && engine === "godot" ? { godot_scene: GODOT_ONE_SHEET } : {}),
+          ...(normalMap ? { normal_map: shown(normalMap.file), normal_map_from: lit.from } : {}),
           engine_files: files.map(shown),
+          ...(notes.length ? { notes } : {}),
           ...(ctx.globals.quiet ? {} : { hint: next })
         },
         false
@@ -483,8 +509,10 @@ TOOLS.push({
     } else {
       process.stdout.write(`${grid.frames} frames (${grid.cols}x${grid.rows} grid) at ${fps} fps\n`);
       if (pivot) process.stdout.write(`Pivot ${pivot.x}, ${pivot.y} (${pivot.kind}): ${pivot.why}\n`);
+      if (normalMap) process.stdout.write(`Normal map ${shown(normalMap.file)}${lit.from === "beside" ? " (found beside the sheet)" : ""}${wired ? ", wired in for 2D lights" : ": the atlas has no place for it, so Phaser loads it with the art (see the note)"}\n`);
       process.stdout.write(savedLines(files));
       if (pivot && engine === "godot") process.stdout.write(`${GODOT_ONE_SHEET}\n`);
+      for (const n of notes) process.stderr.write(`Note: ${n}\n`);
       if (!ctx.globals.quiet) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
     }
     return EXIT.OK;

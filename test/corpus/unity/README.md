@@ -5,6 +5,10 @@ sliced 7-frame sheet and its clip, from
 [Unity-Technologies/2d-techdemos](https://github.com/Unity-Technologies/2d-techdemos)
 (`Assets/Tilemap/Destructible/Sprites/explosion.png.meta`,
 `Assets/Tilemap/Destructible/Explosion/explosion.anim`, January 2026).
+`normalmap.png.meta` is what it wrote for a normal map (Texture Type Normal
+map), from the same repository
+(`Assets/Tilemap/Normal Mapping (Built-in)/Sprites/normalmap.png.meta`,
+November 2026).
 `test/unity.test.mjs` checks our writer against them line by line.
 
 They are used under the MIT License:

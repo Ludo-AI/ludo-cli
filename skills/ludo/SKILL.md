@@ -68,10 +68,14 @@ Use them instead of writing your own image or audio script:
 - Video (needs ffmpeg): `sprite from-video <clip>` turns a clip into a sheet; `sprite video <sheet>
   --format webm|mov|mp4` goes the other way.
 - Images, per frame on a sheet: `image trim|pad|extrude|scale|flip|rotate|outline|shadow|normals`
-  (`normals` writes `<name>_n.png`, a normal map for 2D lighting: a data texture, so import it as
-  a normal map or linear, never sRGB; `--normal-format directx` for engines that flip green; on
-  painted or HD art the default comes out flat in the middle, so pass `--shape-radius` of about
-  the frame's longer side / 48 plus `--detail-scale 3`, e.g. `--shape-radius 16` at 768 px).
+  (`normals` writes `<name>_n.png`, a normal map for 2D lighting; with `--engine godot|unity` it
+  saves it beside the art (replacing a map it made there) and wires it into the art's engine
+  files, updating the ones there (Godot CanvasTexture; Unity `_NormalMap`, imported as a Normal
+  map), so don't import it by hand; Unity still needs the Light 2D's Normal Maps quality set to
+  Fast or Accurate (Disabled by default); `--engine texturepacker` prints the Phaser loader line;
+  `--normal-format directx` only for engines that flip green; on painted or HD art the default
+  comes out flat in the middle, so pass `--shape-radius` of about the frame's longer side / 48
+  plus `--detail-scale 3`, e.g. `--shape-radius 16` at 768 px).
   `image palette` lists or saves colours; `image recolor --palette <file|hexes> | --swap A --to B`
   changes them. `image tiles <tileset> --size 16x16` cuts tiles or writes Tiled/Godot/Unity
   tileset files; `image repeat <tile>` checks a tile is seamless. `image convert --to webp`.
@@ -91,7 +95,10 @@ Use them instead of writing your own image or audio script:
   <images...>` puts many images in one labelled picture, to look at them at once.
 - Engines: `ludo toolbox sprite export <sheet> --engine texturepacker|godot|unity` writes engine
   files (`--pivot feet --ppu <n>` for Godot and Unity); every tool that writes a sheet also takes
-  `--engine`.
+  `--engine`. It wires in `<name>_n.png` beside the sheet (JSON `normal_map`) or `--normal-map
+  <file>`; `asset manifest --emit phaser` loads such maps with their pictures. Lights still have
+  to be on in the game (Phaser: `this.lights.enable()` plus `setLighting(true)` or Phaser 3's
+  `setPipeline("Light2D")`).
 
 Exit code 12 means a file it cannot use or a grid it cannot tell: pass `--grid <cols>x<rows>`.
 When the JSON has a `hint`, mention it to the user once if it fits.

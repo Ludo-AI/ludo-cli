@@ -20,6 +20,7 @@ import { textFlag } from "./flags.js";
 import { hint, shellArg, TOOLS, type Hint, type ToolCall } from "./registry.js";
 import { LOG_NAME, readAssets, type AssetEntry } from "../assets.js";
 import { readInput } from "./read-file.js";
+import { isNormalMapName, looksLikeNormalMap, NORMAL_KEY, NORMAL_SUFFIX, parseStamp, PHASER_LIGHTS } from "./normal-map.js";
 
 // `ludo toolbox asset ...`: a folder of assets at once. The manifest only
 // looks: it says what each file is, what the folder visibly lacks next to
@@ -34,7 +35,7 @@ const MODEL_EXT = new Set([".glb", ".gltf", ".fbx", ".obj", ".dae", ".blend"]);
 const VIDEO_EXT = new Set([".mp4", ".webm", ".mov", ".m4v", ".ogv", ".mkv", ".avi"]);
 
 type AssetType = "image" | "audio" | "model" | "video";
-export type Kind = "spritesheet" | "image" | "texture" | "sfx" | "music" | "voice" | "ambience" | "model" | "video";
+export type Kind = "spritesheet" | "image" | "texture" | "normalmap" | "sfx" | "music" | "voice" | "ambience" | "model" | "video";
 
 const typeOf = (file: string): AssetType | undefined => {
   const ext = path.extname(file).toLowerCase();
@@ -70,6 +71,9 @@ export interface Asset {
   depth?: number; // bits per channel of a PNG
   alpha?: boolean; // any pixel not fully opaque
   animated?: "gif" | "webp";
+  normal_map?: string; // an image's normal map (<name>_n.png beside it), relative
+  normal_map_of?: string; // a normal map's image, relative
+  normal_format?: "opengl" | "directx"; // a normal map's, when its Ludo stamp says
   seams?: { across: number; down: number }; // a texture's wrap, as `image repeat` measures it
   audio?: { rate: number; channels: number; codec: string; bits?: number; float?: boolean; loudness_lufs: number | null; peak_db: number | null; loop_clicks: boolean; repeats: number; wav_loop: boolean };
   model?: {
@@ -272,6 +276,19 @@ function readImage(a: Asset, src: Loaded) {
   a.alpha = hasAlpha(img);
   if (a.format === "png") a.depth = src.info.sourceDepth;
   if (src.animation) a.animated = src.animation;
+  // <name>_n.png is a normal map when its stamp or its pixels say so (a
+  // sprite facing north may be named so too). It is no sprite: it has no
+  // grid, groups or duplicates of its own, and loaders take it with its
+  // image (pairNormalMaps).
+  if (a.format === "png" && isNormalMapName(a.path)) {
+    const stamp = parseStamp(textOf(src, NORMAL_KEY));
+    if (stamp || looksLikeNormalMap(img)) {
+      a.kind = "normalmap";
+      a.reason = stamp ? "its Ludo stamp says it is a normal map" : "named <name>_n.png, and its pixels are unit normals";
+      if (stamp) a.normal_format = stamp.format;
+      return;
+    }
+  }
   const named = words(a.path).find(w => TILE_WORDS.has(w));
   // An opaque picture whose edges meet when it repeats is a texture; checked
   // before the grid, since a repeating pattern can pass for one.
@@ -314,6 +331,40 @@ function readImage(a: Asset, src: Loaded) {
 }
 
 const HASHED_FRAMES = 8;
+
+// A tEXt chunk of the file.
+function textOf(src: Loaded, key: string): string | undefined {
+  const head = Buffer.from(`${key}\0`, "latin1");
+  const c = src.info.chunks.find(c => c.type === "tEXt" && c.data.subarray(0, head.length).equals(head));
+  return c?.data.toString("latin1", head.length);
+}
+
+// Each normal map to its image: <name>_n.png (or the <name>_n-2.png a
+// second `image normals` run writes) to the <name>.png (or other picture)
+// beside it, of its very size. A picture with two or more such maps gets
+// none of them: which one is meant is not for this to guess. A map whose
+// image is missing, or of another size, stays unpaired too, and its reason
+// says why.
+function pairNormalMaps(assets: Asset[]) {
+  const byStem = new Map<string, Asset[]>();
+  for (const a of assets) if (a.type === "image" && a.kind !== "normalmap" && !a.error) byStem.set(stem(a), [...(byStem.get(stem(a)) ?? []), a]);
+  const claims = new Map<Asset, Asset[]>();
+  for (const m of assets) {
+    if (m.kind !== "normalmap") continue;
+    const candidates = byStem.get(stem(m).replace(NORMAL_SUFFIX, "")) ?? [];
+    const art = candidates.find(a => a.format === "png" && a.width === m.width && a.height === m.height) ?? candidates.find(a => a.width === m.width && a.height === m.height);
+    if (art) claims.set(art, [...(claims.get(art) ?? []), m]);
+    else if (candidates.length) m.reason += `; not ${candidates[0].path}'s, which is ${candidates[0].width}x${candidates[0].height}`;
+    else m.reason += "; no image of its name beside it";
+  }
+  for (const [art, maps] of claims) {
+    if (maps.length === 1) {
+      art.normal_map = maps[0].path;
+      maps[0].normal_map_of = art.path;
+      maps[0].reason += `; the normal map of ${art.path}`;
+    } else for (const m of maps) m.reason += `; one of ${maps.length} normal maps of ${art.path} (${maps.map(x => x.path).join(", ")}), so none is paired`;
+  }
+}
 
 // ---- Sounds ----
 
@@ -725,7 +776,9 @@ export interface Duplicate {
 export function duplicatesOf(assets: Asset[]): Duplicate[] {
   const out: Duplicate[] = [];
   const bySha = new Map<string, Asset[]>();
-  for (const a of assets) bySha.set(a.sha256, [...(bySha.get(a.sha256) ?? []), a]);
+  // A normal map goes with its image, never loaded on its own: two images
+  // may share one map's bytes (a flat one) and each keeps its own.
+  for (const a of assets) if (a.kind !== "normalmap") bySha.set(a.sha256, [...(bySha.get(a.sha256) ?? []), a]);
   for (const list of bySha.values()) if (list.length > 1) out.push({ match: "identical", files: list.map(a => a.path) });
   const pics = [...bySha.values()].map(l => l[0]).filter(a => a.phash);
   const parent = pics.map((_, i) => i);
@@ -892,15 +945,25 @@ const leftNote = (a: Asset, kept: Asset) => `${a.path}: left out, the same ${a.s
 // TypeScript module, whose AssetKey enum turns a mistyped key into a compile
 // error and whose SHEETS carry the frame rates anims.create needs (a pack
 // has no place for them, so its `meta`, which Phaser skips, holds them too).
+// A picture with a normal map loads it with itself (`normalMap`, which
+// Phaser 3 and 4 take in a pack entry and in load.image / load.spritesheet's
+// config): the map has no key of its own, it lights the picture's texture.
 function emitPhaser(assets: Asset[], keys: string[], base: string, plan: LoadPlan): { texts: string[]; notes: string[] } {
   const notes: string[] = [];
   const taken = new Set<string>();
-  const queued = assets.filter(a => !plan.left.has(a));
+  const queued = assets.filter(a => !plan.left.has(a) && a.kind !== "normalmap");
   const names = new Map(queued.map(a => [a, pascal(keys[assets.indexOf(a)], taken)]));
   const loads: string[] = [];
   const sheets: string[] = [];
   const pack: Record<string, unknown>[] = [];
   const rates: Record<string, { frames: number; frameRate: number | null }> = {};
+  const lit: string[] = [];
+  // A map lights the picture that loads: its own, or the copy kept in its
+  // place (a smaller WebP of the same picture).
+  const byPath = new Map(assets.map(a => [a.path, a]));
+  const loadsAs = (a: Asset) => plan.left.get(a) ?? a;
+  const mapOf = new Map<Asset, Asset>();
+  for (const m of assets) if (m.kind === "normalmap" && m.normal_map_of) mapOf.set(loadsAs(byPath.get(m.normal_map_of)!), m);
   assets.forEach((a, i) => {
     const key = `AssetKey.${names.get(a)}`;
     const url = quote(a.path);
@@ -910,6 +973,20 @@ function emitPhaser(assets: Asset[], keys: string[], base: string, plan: LoadPla
       notes.push(leftNote(a, kept));
       return loads.push(`  // ${a.path}: left out, the same picture as ${kept.path}`);
     }
+    if (a.kind === "normalmap") {
+      const art = a.normal_map_of ? loadsAs(byPath.get(a.normal_map_of)!) : undefined;
+      if (art && a.normal_format === "directx") {
+        notes.push(`${a.path}: a DirectX normal map (green down), and Phaser reads OpenGL ones, so it would light ${art.path} upside down: it is left out. Make it again without --normal-format directx`);
+        return loads.push(`  // ${a.path}: a DirectX normal map, left out (Phaser reads OpenGL ones)`);
+      }
+      if (art && !art.animated) return loads.push(`  // ${a.path}: the normal map of ${a.normal_map_of}, loaded with ${art.path === a.normal_map_of ? "it" : art.path}`);
+      notes.push(`${a.path}: a normal map ${art ? `of an animated ${art.path}, which Phaser loads as its first frame only` : `paired with no picture (${a.reason.split("; ").pop()})`}, so it is left out`);
+      return loads.push(`  // ${a.path}: a normal map, left out`);
+    }
+    // The normal map's URL, for a picture Phaser can light with it.
+    const own = mapOf.get(a);
+    const normalMap = own && !a.animated && own.normal_format !== "directx" ? own.path : undefined;
+    if (normalMap) lit.push(a.path);
     if (a.type === "image") {
       const g = plan.grid.get(a) ?? a.grid;
       if (a.animated) {
@@ -919,13 +996,19 @@ function emitPhaser(assets: Asset[], keys: string[], base: string, plan: LoadPla
       } else if (g && a.kind === "spritesheet") {
         const uneven = a.width! % g.cols || a.height! % g.rows;
         if (uneven) notes.push(`${a.path}: ${a.width}x${a.height} does not divide into ${g.cols}x${g.rows} equal frames, and Phaser cuts at whole frame sizes`);
-        loads.push(`  scene.load.spritesheet(${key}, ${url}, { frameWidth: ${g.frame_width}, frameHeight: ${g.frame_height}, endFrame: ${g.frames - 1} });${g.from === "detected" ? ` // grid detected, ${Math.round(g.confidence! * 100)}% sure` : ""}`);
+        const frameConfig = `{ frameWidth: ${g.frame_width}, frameHeight: ${g.frame_height}, endFrame: ${g.frames - 1} }`;
+        const detected = g.from === "detected" ? ` // grid detected, ${Math.round(g.confidence! * 100)}% sure` : "";
+        loads.push(
+          normalMap
+            ? `  scene.load.spritesheet({ key: ${key}, url: ${url}, normalMap: ${quote(normalMap)}, frameConfig: ${frameConfig} });${detected}`
+            : `  scene.load.spritesheet(${key}, ${url}, ${frameConfig});${detected}`
+        );
         sheets.push(`  [${key}]: { frames: ${g.frames}, frameRate: ${g.fps ? num(g.fps) : "undefined"} },`);
-        pack.push({ type: "spritesheet", key: keys[i], url: a.path, frameConfig: { frameWidth: g.frame_width, frameHeight: g.frame_height, endFrame: g.frames - 1 } });
+        pack.push({ type: "spritesheet", key: keys[i], url: a.path, ...(normalMap ? { normalMap } : {}), frameConfig: { frameWidth: g.frame_width, frameHeight: g.frame_height, endFrame: g.frames - 1 } });
         rates[keys[i]] = { frames: g.frames, frameRate: g.fps ? round(g.fps, 3) : null };
       } else {
-        loads.push(`  scene.load.image(${key}, ${url});`);
-        pack.push({ type: "image", key: keys[i], url: a.path });
+        loads.push(normalMap ? `  scene.load.image({ key: ${key}, url: ${url}, normalMap: ${quote(normalMap)} });` : `  scene.load.image(${key}, ${url});`);
+        pack.push({ type: "image", key: keys[i], url: a.path, ...(normalMap ? { normalMap } : {}) });
       }
     } else if (a.type === "audio") {
       loads.push(`  scene.load.audio(${key}, ${url});`);
@@ -935,9 +1018,13 @@ function emitPhaser(assets: Asset[], keys: string[], base: string, plan: LoadPla
       pack.push({ type: "video", key: keys[i], url: a.path });
     } else loads.push(`  // ${a.path}: a 3D model; Phaser has no glTF loader`);
   });
+  // Lights are off until the scene turns them on.
+  const lights = lit.length ? `Pictures with a normal map are lit by 2D lights once the scene turns them on: ${PHASER_LIGHTS}` : undefined;
+  if (lights) notes.push(`${lit.length === 1 ? lit[0] : `${lit.length} pictures (${lit.slice(0, 3).join(", ")}${lit.length > 3 ? ", ..." : ""})`} load${lit.length === 1 ? "s" : ""} with ${lit.length === 1 ? "its" : "their"} normal map. ${lights}.`);
   const ts = [
     `// ${HEADER}`,
     `// Every asset in ${base || "the folder"}, queued on a scene's loader: call preload(this) from your scene's preload().`,
+    ...(lights ? [`// ${lights}.`] : []),
     `import type { Scene } from "phaser";`,
     "",
     "export enum AssetKey {",
@@ -959,7 +1046,7 @@ function emitPhaser(assets: Asset[], keys: string[], base: string, plan: LoadPla
     ""
   ].join("\n");
   const packJson = {
-    meta: { generated: HEADER, usage: 'this.load.pack("<any key>", "<url of this file>")', sheets: rates },
+    meta: { generated: HEADER, usage: 'this.load.pack("<any key>", "<url of this file>")', ...(lights ? { lights: `${lights}.` } : {}), sheets: rates },
     assets: { ...(base ? { path: joinUrl(base, "") } : {}), files: pack }
   };
   return { texts: [JSON.stringify(packJson, null, 2) + "\n", ts], notes };
@@ -977,6 +1064,7 @@ function emitPixi(assets: Asset[], keys: string[], base: string, plan: LoadPlan)
     if (a.error) return;
     const kept = plan.left.get(a);
     if (kept) return notes.push(leftNote(a, kept));
+    if (a.kind === "normalmap") return notes.push(`${a.path}: a normal map, left out: PixiJS has no normal-map lighting of its own`);
     if (a.type === "image") {
       if (a.kind === "spritesheet" && !a.animated) {
         const atlas = a.path.replace(/\.[^./]+$/, ".json");
@@ -1271,6 +1359,7 @@ const describeAsset = (a: Asset) => {
   if (a.audio) bits.push(`${a.duration} s, ${a.audio.channels === 1 ? "mono" : a.audio.channels === 2 ? "stereo" : `${a.audio.channels} ch`} ${round(a.audio.rate / 1000, 1)} kHz`);
   if (a.model) bits.push(`${a.model.triangles} triangles`);
   if (a.type === "video" && a.duration) bits.push(`${a.duration} s`);
+  if (a.normal_map) bits.push(`normal map ${a.normal_map}`);
   if (a.mismatch) bits.push(a.mismatch);
   return bits.join(", ");
 };
@@ -1278,7 +1367,9 @@ const describeAsset = (a: Asset) => {
 const kb = (bytes: number) => (bytes >= 1024 * 1024 ? `${round(bytes / 1024 / 1024, 1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
 
 export function readAll(found: Found): Asset[] {
-  return found.files.map(f => readAsset(f.file, f.rel));
+  const assets = found.files.map(f => readAsset(f.file, f.rel));
+  pairNormalMaps(assets);
+  return assets;
 }
 
 TOOLS.push({
@@ -1289,6 +1380,9 @@ TOOLS.push({
   details: [
     "Each file gets a kind, with the reason: spritesheet (its grid from the Ludo stamp, a GIF's or WebP's",
     "frames, or detection when it is sure), image, texture (opaque, and its edges meet when it repeats),",
+    "normalmap (a <name>_n.png, or <name>_n-2.png and so on, whose Ludo stamp or pixels say it is one;",
+    "the picture of its name and size beside it gets it as its normal_map, unless it has two or more such",
+    "maps, when it gets none; a map is no asset of its own: no groups, duplicates or loads),",
     "sfx, music, voice or ambience (the Ludo job that made it when the folder records it; else words in",
     "the path; else by length, whether it wraps without a click, and how speech-like it is), model or",
     "video. With its size, frames, fps, length, bytes and sha256, and a note when its bytes are another",
@@ -1313,8 +1407,11 @@ TOOLS.push({
     "one file of each set of byte-identical files, or of one picture's PNG and WebP under one name (the",
     "smallest); pictures that only look alike are all loaded. They leave out what the engine cannot load:",
     "  phaser  assets-pack.json for this.load.pack(key, url), and assets.ts: typed AssetKey keys,",
-    "          preload(scene), and SHEETS with each sheet's frames and fps for anims.create",
-    "  pixi    assets-manifest.json: a PixiJS 8 manifest for Assets.init({ manifest })",
+    "          preload(scene), and SHEETS with each sheet's frames and fps for anims.create. A",
+    "          picture's normal map loads with it (normalMap; with the copy loaded in its place, if",
+    "          one is), for 2D lights the scene turns on; a DirectX map is left out (Phaser reads OpenGL)",
+    "  pixi    assets-manifest.json: a PixiJS 8 manifest for Assets.init({ manifest }) (no normal maps:",
+    "          PixiJS has no normal-map lighting of its own)",
     "  json    assets.json: this manifest",
     "For Godot and Unity, write each sheet's engine files: ludo toolbox sprite export <sheet> --engine godot|unity"
   ],

@@ -26,6 +26,12 @@ func _initialize() -> void:
 		scenes = []
 	for s in scenes:
 		check_scene(s)
+	var stills = JSON.parse_string(FileAccess.get_file_as_string("res://out/stills.json"))
+	if typeof(stills) != TYPE_ARRAY or stills.is_empty():
+		fail("stills", "could not read res://out/stills.json")
+		stills = []
+	for s in stills:
+		check_still(s)
 	var tilesets = JSON.parse_string(FileAccess.get_file_as_string("res://out/tilesets.json"))
 	if typeof(tilesets) != TYPE_ARRAY or tilesets.is_empty():
 		fail("tilesets", "could not read res://out/tilesets.json")
@@ -39,7 +45,7 @@ func _initialize() -> void:
 	for s in sounds:
 		check_sound(s)
 	if failures == 0:
-		print("ALL %d CASES PASSED" % (cases.size() + scenes.size() + tilesets.size() + sounds.size()))
+		print("ALL %d CASES PASSED" % (cases.size() + scenes.size() + stills.size() + tilesets.size() + sounds.size()))
 	quit(1 if failures > 0 else 0)
 
 
@@ -70,6 +76,7 @@ func check_case(c: Dictionary) -> void:
 		fail(name, "loop %s != %s" % [sf.get_animation_loop(anim), c.loop])
 
 	var sheet_image: Image = null
+	var normal_image: Image = null
 	for i in expected_frames.size():
 		var f: Dictionary = expected_frames[i]
 		var tex = sf.get_frame_texture(anim, i)
@@ -92,10 +99,33 @@ func check_case(c: Dictionary) -> void:
 		if at.atlas == null:
 			fail(name, "frame %d atlas is null" % i)
 			continue
-		if at.atlas.resource_path != c.sheet:
-			fail(name, "frame %d atlas path %s != %s" % [i, at.atlas.resource_path, c.sheet])
+		# With a normal map the frames are cut from a CanvasTexture of the
+		# sheet (diffuse) and the map, which 2D lights read normals from.
+		var sheet_tex: Texture2D = at.atlas
+		if c.has("normal_map"):
+			if not (at.atlas is CanvasTexture):
+				fail(name, "frame %d atlas is %s, not a CanvasTexture" % [i, at.atlas.get_class()])
+				continue
+			var canvas: CanvasTexture = at.atlas
+			sheet_tex = canvas.diffuse_texture
+			if canvas.normal_texture == null or canvas.normal_texture.resource_path != c.normal_map:
+				fail(name, "frame %d normal texture %s != %s" % [i, canvas.normal_texture, c.normal_map])
+				continue
+			if canvas.get_size() != sheet_tex.get_size():
+				fail(name, "CanvasTexture size %s != the sheet's %s" % [canvas.get_size(), sheet_tex.get_size()])
+			if normal_image == null:
+				normal_image = canvas.normal_texture.get_image()
+				if normal_image.is_compressed():
+					normal_image.decompress()
+			var want_normal := Color(f.normal[0], f.normal[1], f.normal[2], f.normal[3])
+			var got_normal := normal_image.get_pixelv(Vector2i(at.region.position + at.region.size / 2))
+			if _far(got_normal, want_normal):
+				fail(name, "frame %d normal %s != %s" % [i, got_normal, want_normal])
+		if sheet_tex == null or sheet_tex.resource_path != c.sheet:
+			fail(name, "frame %d sheet path %s != %s" % [i, sheet_tex.resource_path if sheet_tex else null, c.sheet])
+			continue
 		if sheet_image == null:
-			sheet_image = at.atlas.get_image()
+			sheet_image = sheet_tex.get_image()
 			if sheet_image.is_compressed():
 				sheet_image.decompress()
 		# Sample the center and the corners of the region: each frame is a
@@ -136,13 +166,52 @@ func check_scene(s: Dictionary) -> void:
 	elif sprite.animation != anim or sprite.autoplay != String(anim) or not sprite.centered:
 		fail(name, "animation %s, autoplay %s, centered %s" % [sprite.animation, sprite.autoplay, sprite.centered])
 	else:
-		var size := sprite.sprite_frames.get_frame_texture(anim, 0).get_size()
+		var tex := sprite.sprite_frames.get_frame_texture(anim, 0)
+		var size := tex.get_size()
 		var corner := sprite.offset - size / 2
 		if corner != -Vector2(s.pivot[0], s.pivot[1]):
 			fail(name, "frame drawn from %s, not minus the pivot %s" % [corner, s.pivot])
+		elif s.has("normal_map") and not (tex is AtlasTexture and tex.atlas is CanvasTexture and tex.atlas.normal_texture != null and tex.atlas.normal_texture.resource_path == s.normal_map):
+			fail(name, "the scene's frames are not on a CanvasTexture with %s" % s.normal_map)
 		else:
-			print("ok [%s] pivot %s at the node's origin" % [name, s.pivot])
+			print("ok [%s] pivot %s at the node's origin%s" % [name, s.pivot, ", lit" if s.has("normal_map") else ""])
 	sprite.free()
+
+
+# A still image's CanvasTexture: the art and its map, both at their paths,
+# imported as they are (the map lossless, no mipmaps, green as it is).
+func check_still(s: Dictionary) -> void:
+	var name: String = s.name
+	var res = ResourceLoader.load(s.tres, "", ResourceLoader.CACHE_MODE_IGNORE)
+	if not (res is CanvasTexture):
+		fail(name, "%s did not load as a CanvasTexture" % s.tres)
+		return
+	var canvas: CanvasTexture = res
+	if canvas.diffuse_texture == null or canvas.diffuse_texture.resource_path != s.diffuse:
+		fail(name, "diffuse %s != %s" % [canvas.diffuse_texture, s.diffuse])
+		return
+	if canvas.normal_texture == null or canvas.normal_texture.resource_path != s.normal_map:
+		fail(name, "normal %s != %s" % [canvas.normal_texture, s.normal_map])
+		return
+	if canvas.get_size() != Vector2(s.size[0], s.size[1]):
+		fail(name, "size %s != %s" % [canvas.get_size(), s.size])
+	var art := canvas.diffuse_texture.get_image()
+	var map := canvas.normal_texture.get_image()
+	if map.is_compressed() or map.has_mipmaps():
+		fail(name, "the normal map imported compressed or with mipmaps")
+		return
+	var centre := Vector2i(s.size[0] / 2, s.size[1] / 2)
+	if _far(art.get_pixelv(centre), Color(s.color[0], s.color[1], s.color[2], s.color[3])):
+		fail(name, "art colour %s" % art.get_pixelv(centre))
+	elif _far(map.get_pixelv(centre), Color(s.normal[0], s.normal[1], s.normal[2], s.normal[3])):
+		fail(name, "normal %s" % map.get_pixelv(centre))
+	else:
+		var import := ConfigFile.new()
+		import.load(s.normal_map + ".import")
+		if import.get_value("params", "process/normal_map_invert_y", true) != false or import.get_value("params", "compress/mode", -1) != 0:
+			fail(name, "the map's import settings changed it: %s" % import.encode_to_text())
+		else:
+			print("ok [%s] %s with %s" % [name, s.diffuse, s.normal_map])
 
 
 func _far(a: Color, b: Color) -> bool:
@@ -179,7 +248,16 @@ func check_tileset(t: Dictionary) -> void:
 	var want: Array = t.tiles
 	if atlas.get_tiles_count() != want.size():
 		fail(name, "%d tiles, want %d" % [atlas.get_tiles_count(), want.size()])
-	var image := atlas.texture.get_image()
+	# A lit TileSet's atlas texture is a CanvasTexture of the tiles and their map.
+	var tex: Texture2D = atlas.texture
+	var normal_image: Image = null
+	if t.has("normal_map"):
+		if not (tex is CanvasTexture) or tex.normal_texture == null or tex.normal_texture.resource_path != t.normal_map:
+			fail(name, "atlas texture %s is not a CanvasTexture with %s" % [tex, t.normal_map])
+			return
+		normal_image = tex.normal_texture.get_image()
+		tex = tex.diffuse_texture
+	var image := tex.get_image()
 	if image.is_compressed():
 		image.decompress()
 	for w in want:
@@ -194,8 +272,10 @@ func check_tileset(t: Dictionary) -> void:
 		var got := image.get_pixelv(region.position + region.size / 2)
 		if _far(got, Color(w.color[0], w.color[1], w.color[2], w.color[3])):
 			fail(name, "tile %s colour %s" % [coords, got])
+		elif normal_image != null and _far(normal_image.get_pixelv(region.position + region.size / 2), Color(w.normal[0], w.normal[1], w.normal[2], w.normal[3])):
+			fail(name, "tile %s normal %s" % [coords, normal_image.get_pixelv(region.position + region.size / 2)])
 	if failures == failures_before:
-		print("ok [%s] %d tiles" % [name, want.size()])
+		print("ok [%s] %d tiles%s" % [name, want.size(), ", lit" if t.has("normal_map") else ""])
 
 
 # A WAV from src/toolbox/wav.ts: its rate, channels and length, and the smpl

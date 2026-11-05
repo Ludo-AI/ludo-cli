@@ -170,10 +170,17 @@ ludo toolbox image flip knight-walk.png             # face the other way; --vert
 ludo toolbox image rotate hero.png --by 90
 ludo toolbox image outline hero.png --color "#1a1c2c" # 1 px, no corners; --shape square, --width 2
 ludo toolbox image shadow hero.png --offset 2,2 --opacity 40
-# A normal map so 2D lights shade the art: hero_n.png, its size and grid, every cell on its own.
+# A normal map so 2D lights shade the art: hero_n.png (in ludo-output), its size and grid, every
+# cell on its own.
 # Sprite Fusion Sprite Normals' algorithm: its very pixels at the default settings, and within 1 of
 # them otherwise. A data texture: import it as a normal map or linear, never as sRGB colour.
 ludo toolbox image normals hero.png                 # --normal-format directx flips green
+# With --engine the map goes beside the art (knight-walk_n.png, replacing one made before) and the
+# art's engine files get it wired in, updated if they are there: Godot frames on a CanvasTexture
+# (a still: a CanvasTexture for a Sprite2D), lit by a PointLight2D as they are; Unity's _NormalMap
+# secondary texture and an import as a Normal map, for a Light 2D whose Normal Maps quality is Fast
+# or Accurate (Disabled by default) on URP's 2D Renderer. Phaser: the output says how to load it.
+ludo toolbox image normals knight-walk.png --engine godot
 # Painted or HD art: the default --shape-radius 4 rounds only the rim. Raise it to about the
 # frame's longer side / 48, and smooth brush texture so it doesn't turn into bumps.
 ludo toolbox image normals boss.png --shape-radius 16 --detail-scale 3   # a 768 px character
@@ -231,17 +238,24 @@ ludo toolbox sprite compare knight_*.png --reference knight_walk.png=1.8m
 ludo toolbox image contact icons/*.png                  # one labelled picture of many images
 
 # A folder at a glance: what each asset is, what the game still lacks (with the Ludo command that
-# makes it) and loaders for Phaser or Pixi.
+# makes it) and loaders for Phaser or Pixi. A <name>_n.png normal map loads with its picture
+# (Phaser's normalMap); turn on lights in the scene to see it.
 ludo toolbox asset manifest assets/ --emit phaser
 
 # Engine files for a sheet you already have. Any toolbox tool that writes a sheet takes --engine
-# too, and a trimmed or extruded sheet exports each frame's original size and offset.
+# too, and a trimmed or extruded sheet exports each frame's original size and offset. A normal map
+# beside it (knight-walk_n.png) is wired in, and the output says so (--no-normal-map leaves it out).
 ludo toolbox sprite export knight-walk.png --engine texturepacker
 ludo toolbox sprite export knight-walk.png --engine godot
 ludo toolbox sprite export knight-walk.png --engine unity --pivot feet --ppu 280
+ludo toolbox sprite export knight-walk.png --engine godot --normal-map maps/knight-walk-lit.png
 ```
 
-Files are saved under `./ludo-output` (or `--out <dir>`) and never overwrite anything.
+Files are saved under `./ludo-output` (or `--out <dir>`), and a name already taken gets `-2`, `-3`...
+rather than being overwritten. The exceptions are the ones asked for: `--in-place` replaces its
+input; engine files go beside the sheet, and a Unity `.meta` there is rewritten (its guid kept); and
+`image normals --engine` saves the map beside the art, replacing one it made there (if its pixels
+are unchanged), and updates the art's engine files in place.
 
 ## Projects
 

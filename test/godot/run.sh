@@ -30,6 +30,21 @@ status=0
 tee -a "$all" <"$log"
 if [ "$status" -ne 0 ]; then echo "godot --import exited $status" >&2; exit 1; fi
 
+# Godot saves some fixtures back itself (uids, its own ids), as the editor
+# would, and generate.mjs --rewire lights them in place; then they are
+# imported and checked like the rest. The editor run that saves them warns
+# about leaks on exit, so its output is not checked, only its result.
+status=0
+"$godot" --headless --editor --path "$here" --script res://resave.gd >"$log" 2>&1 || status=$?
+grep RESAVED "$log" || true
+if [ "$status" -ne 0 ]; then cat "$log"; echo "resave.gd exited $status" >&2; exit 1; fi
+node "$here/generate.mjs" --rewire
+
+status=0
+"$godot" --headless --path "$here" --import >"$log" 2>&1 || status=$?
+tee -a "$all" <"$log"
+if [ "$status" -ne 0 ]; then echo "godot --import exited $status" >&2; exit 1; fi
+
 status=0
 "$godot" --headless --path "$here" --script res://validate.gd >"$log" 2>&1 || status=$?
 tee -a "$all" <"$log"

@@ -7,8 +7,9 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { animatedSpriteScene, spriteFramesTres, writeGodotScene, writeGodotSpriteFrames, findGodotProject, godotTexturePath } from "../dist/tty/godot.js";
+import { animatedSpriteScene, canvasTextureTres, rewireTres, tresSlicing, spriteFramesTres, writeGodotCanvasTexture, writeGodotScene, writeGodotSpriteFrames, findGodotProject, godotNeighbourPath, godotTexturePath } from "../dist/tty/godot.js";
 import { encodePng } from "../dist/tty/png.js";
+import { godotTileSet, tileLayout, tileRects } from "../dist/toolbox/tiles.js";
 
 function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ludo-godot-test-"));
@@ -52,6 +53,158 @@ animations = [{
 }]
 `,
   );
+});
+
+test("snapshot: a normal map puts the frames on a CanvasTexture of the sheet and the map", () => {
+  const grid = { cols: 2, rows: 1, frames: 2, fps: 8 };
+  const tres = spriteFramesTres("hero.png", 64, 32, grid, "walk", {}, "hero_n.png");
+  assert.equal(
+    tres,
+    `[gd_resource type="SpriteFrames" format=3]
+
+[ext_resource type="Texture2D" path="hero.png" id="1_sheet"]
+[ext_resource type="Texture2D" path="hero_n.png" id="2_normal"]
+
+[sub_resource type="CanvasTexture" id="CanvasTexture_lit"]
+diffuse_texture = ExtResource("1_sheet")
+normal_texture = ExtResource("2_normal")
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_0"]
+atlas = SubResource("CanvasTexture_lit")
+region = Rect2(0, 0, 32, 32)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_1"]
+atlas = SubResource("CanvasTexture_lit")
+region = Rect2(32, 0, 32, 32)
+
+[resource]
+animations = [{
+"frames": [{
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_0")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_1")
+}],
+"loop": true,
+"name": &"walk",
+"speed": 8.0
+}]
+`
+  );
+  // Without a map it is the plain SpriteFrames, byte for byte.
+  assert.equal(
+    spriteFramesTres("hero.png", 64, 32, grid, "walk"),
+    tres.replace(/\[ext_resource[^\n]*2_normal[^\n]*\n/, "").replace(/\[sub_resource type="CanvasTexture"[^]*?\n\n/, "").replaceAll('SubResource("CanvasTexture_lit")', 'ExtResource("1_sheet")')
+  );
+  assert.equal(
+    canvasTextureTres("boss.png", "boss_n.png"),
+    `[gd_resource type="CanvasTexture" format=3]
+
+[ext_resource type="Texture2D" path="boss.png" id="1_sheet"]
+[ext_resource type="Texture2D" path="boss_n.png" id="2_normal"]
+
+[resource]
+diffuse_texture = ExtResource("1_sheet")
+normal_texture = ExtResource("2_normal")
+`
+  );
+});
+
+test("rewireTres lights a .tres that uses the art, whoever wrote it, and leaves every other byte", () => {
+  const dir = tmpdir();
+  fs.writeFileSync(path.join(dir, "project.godot"), "config_version=5\n");
+  const art = path.join(dir, "art", "hero.png");
+  const map = path.join(dir, "art", "hero_n.png");
+  fs.mkdirSync(path.dirname(art));
+  const tres = path.join(dir, "art", "hero.tres");
+  const grid = { cols: 3, rows: 2, frames: 5, fps: 7.5, loop: false };
+  const layout = { trim: { x: 3, y: 2, w: 12, h: 10, source_w: 20, source_h: 16 }, extrude: 2 };
+  // Ours, plain: the very file spriteFramesTres writes with the map; again: the same.
+  const plain = spriteFramesTres("res://art/hero.png", 48, 28, grid, 'say "hi"', layout);
+  const lit = spriteFramesTres("res://art/hero.png", 48, 28, grid, 'say "hi"', layout, "res://art/hero_n.png");
+  assert.deepEqual(rewireTres(plain, tres, art, map), { text: lit });
+  assert.deepEqual(rewireTres(lit, tres, art, map), { text: lit });
+  // Lit with another map (sprite export --normal-map): replaced, and said.
+  const other = spriteFramesTres("res://art/hero.png", 48, 28, grid, "x", {}, "res://maps/lit.png");
+  assert.deepEqual(rewireTres(other, tres, art, map), { text: other.replace("res://maps/lit.png", "res://art/hero_n.png"), oldNormal: "res://maps/lit.png" });
+  // Another art's file: not this run's.
+  assert.equal(rewireTres(plain, tres, path.join(dir, "art", "hero-2.png"), map), undefined);
+
+  // As Godot saves it back (4.7 with uids; load_steps as before 4.5; no
+  // last newline; "loop": 1; its own ids; a frame on the bare texture).
+  const saved = [
+    '[gd_resource type="SpriteFrames" load_steps=4 format=3 uid="uid://b1n8m3a5cayqf"]',
+    "",
+    '[ext_resource type="Texture2D" uid="uid://c5tm5u5xdsovp" path="res://art/hero.png" id="1_p3elh"]',
+    '[ext_resource type="Texture2D" uid="uid://dother" path="res://art/other.png" id="2_q1"]',
+    "",
+    '[sub_resource type="AtlasTexture" id="AtlasTexture_0"]',
+    'atlas = ExtResource("1_p3elh")',
+    "region = Rect2(0, 0, 16, 14)",
+    "",
+    '[sub_resource type="AtlasTexture" id="AtlasTexture_1"]',
+    'atlas = ExtResource("2_q1")',
+    "region = Rect2(0, 0, 8, 8)",
+    "",
+    "[resource]",
+    'animations = [{\n"frames": [{\n"duration": 1.0,\n"texture": SubResource("AtlasTexture_0")\n}, {\n"duration": 1.0,\n"texture": ExtResource("1_p3elh")\n}, {\n"duration": 1.0,\n"texture": SubResource("AtlasTexture_1")\n}],\n"loop": 1,\n"name": &"default",\n"speed": 5.0\n}]'
+  ].join("\n");
+  const r = rewireTres(saved, tres, art, map, "uid://cmap");
+  assert.equal(
+    r.text,
+    saved
+      .replace("load_steps=4", "load_steps=6")
+      .replace('id="1_p3elh"]\n', 'id="1_p3elh"]\n[ext_resource type="Texture2D" uid="uid://cmap" path="res://art/hero_n.png" id="2_normal"]\n')
+      .replace('[sub_resource type="AtlasTexture" id="AtlasTexture_0"]', '[sub_resource type="CanvasTexture" id="CanvasTexture_lit"]\ndiffuse_texture = ExtResource("1_p3elh")\nnormal_texture = ExtResource("2_normal")\n\n[sub_resource type="AtlasTexture" id="AtlasTexture_0"]')
+      .replace('"texture": ExtResource("1_p3elh")', '"texture": SubResource("CanvasTexture_lit")')
+      .replace('atlas = ExtResource("1_p3elh")', 'atlas = SubResource("CanvasTexture_lit")')
+  );
+  assert.equal(r.oldNormal, undefined);
+  // Without a uid for the map, its ext_resource has none.
+  assert.match(rewireTres(saved, tres, art, map).text, /\[ext_resource type="Texture2D" path="res:\/\/art\/hero_n\.png" id="2_normal"\]/);
+  // Again on the rewired file: the same.
+  assert.equal(rewireTres(r.text, tres, art, map, "uid://cmap").text, r.text);
+
+  // CanvasTextures: ours, and one Godot wrote.
+  assert.deepEqual(rewireTres(canvasTextureTres("res://art/hero.png", "res://art/old_n.png"), tres, art, map), { text: canvasTextureTres("res://art/hero.png", "res://art/hero_n.png"), oldNormal: "res://art/old_n.png" });
+  const godotCanvas = '[gd_resource type="CanvasTexture" format=3 uid="uid://x"]\n\n[ext_resource type="Texture2D" uid="uid://c5" path="res://art/hero.png" id="1_ab"]\n\n[resource]\ndiffuse_texture = ExtResource("1_ab")\ntexture_filter = 1\n';
+  assert.equal(
+    rewireTres(godotCanvas, tres, art, map).text,
+    godotCanvas.replace('id="1_ab"]\n', 'id="1_ab"]\n[ext_resource type="Texture2D" path="res://art/hero_n.png" id="2_normal"]\n').replace('diffuse_texture = ExtResource("1_ab")\n', 'diffuse_texture = ExtResource("1_ab")\nnormal_texture = ExtResource("2_normal")\n')
+  );
+  // What it cannot rewire: refused, with why.
+  assert.deepEqual(rewireTres('[gd_resource type="StyleBoxTexture" format=3]\n\n[ext_resource type="Texture2D" path="res://art/hero.png" id="1"]\n\n[resource]\ntexture = ExtResource("1")\n', tres, art, map), { refused: "a StyleBoxTexture, not a SpriteFrames, TileSet, AtlasTexture or CanvasTexture", type: "StyleBoxTexture" });
+  // A TileSet (image tiles --engine godot): its atlas source's texture.
+  const tiles = tileLayout(64, 32, 16, 16, 0, 0);
+  const tileset = godotTileSet("res://art/hero.png", tiles, tileRects(tiles));
+  assert.equal(
+    rewireTres(tileset, tres, art, map).text,
+    tileset
+      .replace(/^texture = ExtResource\("1_tiles"\)$/m, 'texture = SubResource("CanvasTexture_lit")')
+      .replace('id="1_tiles"]\n', 'id="1_tiles"]\n[ext_resource type="Texture2D" path="res://art/hero_n.png" id="2_normal"]\n')
+      .replace('[sub_resource type="TileSetAtlasSource"', '[sub_resource type="CanvasTexture" id="CanvasTexture_lit"]\ndiffuse_texture = ExtResource("1_tiles")\nnormal_texture = ExtResource("2_normal")\n\n[sub_resource type="TileSetAtlasSource"')
+  );
+  assert.deepEqual(tresSlicing(tileset, tres, art), { tiles: { w: 16, h: 16, margin: 0, separation: 0, coords: [[0, 0], [1, 0], [2, 0], [3, 0], [0, 1], [1, 1], [2, 1], [3, 1]] } });
+  assert.deepEqual(tresSlicing(saved, tres, art), { rects: [{ x: 0, y: 0, w: 16, h: 14 }] });
+  // Outside a project, a relative path.
+  const loose = tmpdir();
+  const looseArt = path.join(loose, "boss.png");
+  assert.equal(rewireTres(canvasTextureTres("boss.png", "old.png"), path.join(loose, "boss.tres"), looseArt, path.join(loose, "boss_n.png")).text, canvasTextureTres("boss.png", "boss_n.png"));
+});
+
+test("the normal map's path: beside the sheet its name, elsewhere relative, in a project res://", () => {
+  const dir = tmpdir();
+  const sheet = path.join(dir, "art", "hero.png");
+  assert.equal(godotNeighbourPath(sheet, path.join(dir, "art", "hero_n.png")), "hero_n.png");
+  assert.equal(godotNeighbourPath(sheet, path.join(dir, "maps", "hero_n.png")), "../maps/hero_n.png");
+  fs.writeFileSync(path.join(dir, "project.godot"), "config_version=5\n");
+  assert.equal(godotNeighbourPath(sheet, path.join(dir, "maps", "hero_n.png")), "res://maps/hero_n.png");
+  fs.mkdirSync(path.join(dir, "art"));
+  const still = writeGodotCanvasTexture(sheet, path.join(dir, "art", "hero_n.png"));
+  assert.equal(path.basename(still), "hero.tres");
+  assert.match(fs.readFileSync(still, "utf8"), /path="res:\/\/art\/hero_n.png" id="2_normal"/);
+  assert.equal(path.basename(writeGodotCanvasTexture(sheet, path.join(dir, "art", "hero_n.png"))), "hero-2.tres", "never overwrites");
 });
 
 test("animation name, loop=false and fractional fps", () => {
