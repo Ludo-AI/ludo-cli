@@ -390,7 +390,7 @@ async function main(argv: string[]): Promise<number> {
   if (first === "jobs" && second === "wait") {
     commandLabel = "jobs wait";
     if (globals.help || !words[2]) {
-      process.stdout.write("Usage: ludo jobs wait <id> [--out <dir>] [--timeout <s>] [--no-download]\n\nWaits for a job to finish, then saves its result files like a generation command does.\n");
+      process.stdout.write("Usage: ludo jobs wait <id> [--out <dir>] [--name <base>] [--timeout <s>] [--no-download]\n\nWaits for a job to finish, then saves its result files like a generation command does\n(named after --name, if given) and records them in ludo-assets.json.\n");
       return globals.help ? EXIT.OK : EXIT.USAGE;
     }
     return runJobWait(pctx, words[2], `job ${words[2]}`);

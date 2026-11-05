@@ -2,15 +2,15 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
-import { Api, uploadFile } from "./api.js";
-import { appendAssets, logFile, relativizeBody, updateAssets, type AssetEntry } from "./assets.js";
+import { Api, isQueueFull, uploadFile } from "./api.js";
+import { appendAssets, logFile, readAssets, relativizeBody, updateAssets, type AssetEntry } from "./assets.js";
 import { checkBudget, recordEstimate, recordFinal, totalOf } from "./budget.js";
 import type { Globals, Parsed } from "./args.js";
 import { resolveFlags } from "./args.js";
 import type { Command } from "./commands.js";
 import { resolveApiKey, resolveApiUrl } from "./config.js";
 import { CliError, EXIT } from "./errors.js";
-import { collectUrls, downloadAll, extractInlineFiles, waitForJob, type SavedFile } from "./jobs.js";
+import { collectUrls, downloadAll, extractInlineFiles, JobWatcher, sleep, TERMINAL, waitForJob, type Earlier, type SavedFile } from "./jobs.js";
 import { accountSummary, isAgent } from "./login.js";
 import { estimatePrice, formatCredits, type Price } from "./pricing.js";
 import { defaultsFor, projectPath, type Project } from "./project.js";
@@ -221,7 +221,9 @@ export interface SavedResult {
   urls: { url: string; variation?: number }[];
 }
 
-export async function saveResult(ctx: Ctx, job: any, label: string, naming: Naming = {}): Promise<SavedResult> {
+// `before`: files an earlier run saved for this job (absolute, in log order).
+// The ones still on disk are kept as they are rather than downloaded again.
+export async function saveResult(ctx: Ctx, job: any, label: string, naming: Naming = {}, before: string[] = []): Promise<SavedResult> {
   const { globals } = ctx;
   const record: any = {
     job_id: job.id,
@@ -237,14 +239,15 @@ export async function saveResult(ctx: Ctx, job: any, label: string, naming: Nami
   if (job.status === "succeeded") {
     const dir = ctx.outDir;
     const prefix = naming.prefix || `${job.task_type || label}-${String(job.id).slice(0, 8)}`;
-    const inline = extractInlineFiles(job.result, globals.download ? { dir, prefix } : null, ctx.log);
+    const earlier = before.length ? earlierFiles(before, dir) : undefined;
+    const inline = extractInlineFiles(job.result, globals.download ? { dir, prefix, earlier } : null, ctx.log);
     record.result = inline.result;
     const urls = collectUrls(record.result);
     // Files of a per-direction result are named after their direction
     // (-SW, -N); variations keep their own -v1, -v2.
     const directions = directionsOf(record.result);
     const suffix = naming.suffix || (directions.size ? (i: number) => (directions.has(urls[i]) ? `-${directions.get(urls[i])}` : "") : undefined);
-    const downloaded: SavedResult["files"] = globals.download && urls.length ? await downloadAll(urls, dir, prefix, ctx.log, suffix) : [];
+    const downloaded: SavedResult["files"] = globals.download && urls.length ? await downloadAll(urls, dir, prefix, ctx.log, suffix, earlier) : [];
     downloaded.forEach((f, i) => (f.variation = naming.variationOf?.(i)));
     if (!globals.download) resultUrls = urls.map((url, i) => ({ url, variation: naming.variationOf?.(i) }));
     // WebP results also get a PNG copy side by side: engines and tools take
@@ -253,7 +256,10 @@ export async function saveResult(ctx: Ctx, job: any, label: string, naming: Nami
     for (const f of [...downloaded]) {
       if (!/\.webp$/i.test(f.path)) continue;
       const png = f.path.replace(/\.webp$/i, ".png");
-      if (!fs.existsSync(png) && convertToPng(f.path, png)) {
+      if (before.includes(png) && fs.existsSync(png)) {
+        pngOf.set(f.path, png);
+        downloaded.push({ url: f.url, path: png, variation: f.variation, reused: true });
+      } else if (!fs.existsSync(png) && convertToPng(f.path, png)) {
         pngOf.set(f.path, png);
         downloaded.push({ url: f.url, path: png, variation: f.variation });
       }
@@ -286,7 +292,7 @@ export async function saveResult(ctx: Ctx, job: any, label: string, naming: Nami
     files = [
       ...downloaded,
       ...inline.files.map(f => ({ ...f, variation: constant })),
-      ...engineFiles.map(f => ({ ...f, variation: sheetFile?.variation ?? constant }))
+      ...engineFiles.map(f => ({ ...f, variation: sheetFile?.variation ?? constant, ...(before.includes(path.resolve(f.path)) ? { reused: true } : {}) }))
     ].map(f => ({ ...f, path: rel(f.path) }));
     // path is relative to the working directory; absolute_path saves a wrapper
     // running ludo elsewhere from resolving it against the wrong folder.
@@ -296,6 +302,37 @@ export async function saveResult(ctx: Ctx, job: any, label: string, naming: Nami
     if (sheet) sheet = rel(sheet);
   }
   return { record, sheet, files, urls: resultUrls };
+}
+
+// The earlier file standing for <base><ext>: one an earlier run saved under
+// that name, or under <base>-2<ext>... when the name was taken then (older
+// CLIs saved a re-run's copy that way too). One still on disk first, so a
+// copy that is gone does not hide one that is there. Each is used once.
+function earlierFiles(before: string[], dir: string): Earlier {
+  const used = new Set<string>();
+  const escape = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return (base, ext) => {
+    const name = new RegExp(`^${escape(base)}(-\\d+)?${escape(ext)}$`);
+    const mine = before.filter(p => !used.has(p) && path.dirname(p) === dir && name.test(path.basename(p)));
+    const pick = mine.find(p => fs.existsSync(p)) || mine[0];
+    if (!pick) return undefined;
+    used.add(pick);
+    return { path: pick, exists: fs.existsSync(pick) };
+  };
+}
+
+// The files the asset log holds for a job (absolute paths, in log order).
+function savedBefore(ctx: Ctx, jobId: unknown): string[] {
+  if (typeof jobId !== "string") return [];
+  try {
+    const log = logFile(ctx.project, ctx.outDir);
+    const logDir = path.dirname(log);
+    return readAssets(log)
+      .filter(e => e.job_id === jobId && !e.discarded && typeof e.file === "string")
+      .map(e => path.resolve(logDir, e.file));
+  } catch {
+    return [];
+  }
 }
 
 // Directional Sprites results hold one item per direction (`sheets`,
@@ -341,14 +378,16 @@ function bookkeep(ctx: Ctx, job: any, saved: SavedResult, prep?: Prepared, varia
   } catch (err) {
     ctx.log(`Could not update the spend ledger: ${(err as Error).message}`);
   }
-  if (!saved.files.length) return;
+  // Files an earlier run saved and logged keep their entries as they are.
+  const fresh = saved.files.filter(f => !f.reused);
+  if (!fresh.length) return;
   try {
     const log = logFile(ctx.project, ctx.outDir);
     const logDir = path.dirname(log);
     const fileFields = prep ? prep.command.fields.filter(f => f.isFile && f.in === "body").map(f => f.name) : [];
     const created = new Date().toISOString();
     const urls = resultUrls(job.result);
-    const entries: AssetEntry[] = saved.files.map(f => ({
+    const entries: AssetEntry[] = fresh.map(f => ({
       file: path.relative(logDir, path.resolve(f.path)),
       command: prep?.label || job.task_type || "job",
       operation_id: prep?.command.operationId || job.task_type || "",
@@ -601,6 +640,76 @@ export interface UnitOutcome {
   urls: SavedResult["urls"];
   sheet?: string;
   error?: { message: string; exit_code: number };
+  // Every file was saved by an earlier run of the same job, and kept.
+  already_saved?: boolean;
+}
+
+// LUDO_QUEUE_RETRY_MS exists for the tests.
+const QUEUE_RETRY_MS = process.env.LUDO_QUEUE_RETRY_MS ? Number(process.env.LUDO_QUEUE_RETRY_MS) : 5_000;
+const QUEUE_RETRY_MAX_MS = QUEUE_RETRY_MS * 12;
+
+function duration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  return s < 120 ? `${s}s` : `${Math.round(s / 60)} min`;
+}
+
+// Submissions of one run while the account's queue is full (429
+// PENDING_JOBS_LIMIT: 50 generations queued or running, counting other
+// sessions'): wait and try again, on the server's Retry-After or a backoff
+// from 5s to 60s, rather than give up on the jobs not submitted yet. The
+// workers share one schedule, since they wait on the same queue. Once nothing
+// got through for `timeoutS`, it gives up: that submission and every later
+// one fail with that error (not retried), and the run reports them.
+class QueueGate {
+  private until = 0;
+  private delay = 0;
+  private since?: number;
+  private gaveUp?: CliError;
+
+  constructor(private timeoutS: number, private note: (msg: string) => void) {}
+
+  get waiting(): boolean {
+    return !this.gaveUp && Date.now() < this.until;
+  }
+
+  async submit<T>(send: () => Promise<T>, toSubmit: () => number): Promise<T> {
+    for (;;) {
+      while (this.waiting) await sleep(this.until - Date.now());
+      try {
+        const res = await send();
+        this.since = undefined;
+        this.delay = 0;
+        return res;
+      } catch (err) {
+        if (!isQueueFull(err)) throw err;
+        if (this.gaveUp) throw this.gaveUp;
+        const e = err as CliError;
+        const now = Date.now();
+        if (this.since === undefined) this.since = now;
+        const waited = now - this.since;
+        const limit = this.timeoutS * 1000;
+        if (waited >= limit) {
+          this.gaveUp = new CliError(
+            `The account's queue stayed full for ${duration(waited)}: ${e.message}`,
+            EXIT.RATE_LIMITED,
+            "Jobs from another session (or batch) hold all 50 places. Run the batch again once they finish (`ludo jobs list`); give each job a request_id and a re-run picks up the jobs that already ran instead of paying for them again.",
+            e.details
+          );
+          throw this.gaveUp;
+        }
+        // The first worker to hit the full queue sets the next try for all.
+        if (now >= this.until) {
+          const step = e.retryAfterS !== undefined ? Math.max(e.retryAfterS * 1000, QUEUE_RETRY_MS) : Math.min(QUEUE_RETRY_MAX_MS, this.delay ? this.delay * 2 : QUEUE_RETRY_MS);
+          this.delay = step;
+          this.until = now + Math.min(step, Math.max(0, limit - waited));
+          const n = toSubmit();
+          this.note(
+            `Queue full (50 generations queued or running on this account): ${n} job${n === 1 ? "" : "s"} still to submit; trying again in ${duration(this.until - now)} (waited ${duration(waited)}, gives up after ${duration(limit)}).`
+          );
+        }
+      }
+    }
+  }
 }
 
 async function pool<T, R>(items: T[], limit: number, fn: (item: T, i: number) => Promise<R>, stopped = () => false): Promise<R[]> {
@@ -618,36 +727,51 @@ async function pool<T, R>(items: T[], limit: number, fn: (item: T, i: number) =>
 
 // Submits every unit (at most `limit` in flight), waits for each, saves its
 // files and books it. A failure is recorded, never thrown: the others go on.
-async function runUnits(ctx: Ctx, units: Unit[], label: string, limit: number, variationSet?: string): Promise<UnitOutcome[]> {
+// One watcher polls for all the run's jobs (see JobWatcher). With `reuse`, a
+// job an earlier run saved (the same request_id brings the same job back)
+// keeps the files still on disk instead of downloading them again.
+async function runUnits(ctx: Ctx, units: Unit[], label: string, limit: number, variationSet?: string, opts: { reuse?: boolean } = {}): Promise<UnitOutcome[]> {
   ctx.api.requireKey();
   const quietCtx: Ctx = { ...ctx, log: () => {} };
   let done = 0;
   let failed = 0;
+  let tried = 0; // submissions answered, either way
   const started = Date.now();
+  const timeoutS = ctx.globals.timeout || DEFAULT_TIMEOUT_S;
   const s = ctx.vis.enabled ? spinner(label, ctx.vis) : undefined;
-  const status = () => `${done}/${units.length} done${failed ? `, ${failed} failed` : ""}`;
-  s?.update(status(), 0);
-  const ticker = s ? setInterval(() => s.update(status(), (Date.now() - started) / 1000), 1000) : undefined;
-  ticker?.unref();
+  // A line above the spinner, or a plain line for logs and agents.
+  const note = (msg: string) => {
+    if (!ctx.globals.quiet) process.stderr.write(`${s ? "\r\x1b[K" : ""}${msg}\n`);
+  };
+  const gate = new QueueGate(timeoutS, note);
   // An error every other unit would hit too (bad key, no credits, an outdated
   // CLI, rate limits) stops the pool and is raised as itself.
   let fatal: CliError | undefined;
+  const watcher = new JobWatcher(ctx.api, { timeoutS, note, moreComing: () => tried < units.length && !fatal });
+  const status = () => `${done}/${units.length} done${failed ? `, ${failed} failed` : ""}${gate.waiting ? ", queue full: waiting to submit" : ""}`;
+  s?.update(status(), 0);
+  const ticker = s ? setInterval(() => s.update(status(), (Date.now() - started) / 1000), 1000) : undefined;
+  ticker?.unref();
   try {
     const outcomes = await pool(units, limit, async (unit, index) => {
       const outcome: UnitOutcome = { index, label: unit.prep.label, status: "error", files: [], urls: [] };
       try {
         const { command } = unit.prep;
-        const { body: response } = await ctx.api.call(command.method, expandPath(command.path, unit.prep.path), {
-          query: unit.prep.query,
-          body: { ...unit.body, async: true }
-        });
+        let response: any;
+        try {
+          ({ body: response } = await gate.submit(
+            () => ctx.api.call(command.method, expandPath(command.path, unit.prep.path), { query: unit.prep.query, body: { ...unit.body, async: true } }),
+            () => units.length - tried
+          ));
+        } finally {
+          tried++;
+        }
         outcome.job_id = response?.id;
         recordEstimate(ctx.project, response?.id, unit.prep.price.credits);
         noteJob(response?.id);
-        const job = ["succeeded", "failed", "canceled"].includes(response?.status)
-          ? response
-          : await waitForJob(ctx.api, response.id, { timeoutS: ctx.globals.timeout || DEFAULT_TIMEOUT_S });
-        const saved = await saveResult(quietCtx, job, unit.prep.label, unit.naming);
+        const job = TERMINAL.includes(response?.status) ? response : await watcher.wait(String(response?.id));
+        const before = opts.reuse && job.status === "succeeded" && ctx.globals.download ? savedBefore(ctx, job.id) : [];
+        const saved = await saveResult(quietCtx, job, unit.prep.label, unit.naming, before);
         bookkeep(ctx, job, saved, unit.prep, variationSet);
         Object.assign(outcome, {
           status: job.status,
@@ -656,18 +780,22 @@ async function runUnits(ctx: Ctx, units: Unit[], label: string, limit: number, v
           files: saved.files,
           urls: saved.urls,
           sheet: saved.sheet,
+          ...(saved.files.length && saved.files.every(f => f.reused) ? { already_saved: true } : {}),
           error: job.status === "succeeded" ? undefined : { message: job.error?.message || job.status, exit_code: job.status === "canceled" ? EXIT.JOB_CANCELED : EXIT.JOB_FAILED }
         });
       } catch (err) {
         const e = err instanceof CliError ? err : new CliError(String((err as Error)?.message || err));
         outcome.error = { message: e.message, exit_code: e.exitCode };
-        if (FATAL.includes(e.exitCode)) fatal = fatal || e;
+        // A full queue that would not clear fails the rest one by one (the
+        // gate gives up on them at once), so the run still reports each.
+        if (FATAL.includes(e.exitCode) && !isQueueFull(e)) fatal = fatal || e;
       }
       done++;
       if (outcome.status !== "succeeded") failed++;
       if (!s && !ctx.globals.quiet) {
         const mark = outcome.status === "succeeded" ? "✓" : "✗";
-        process.stderr.write(`[${done}/${units.length}] ${mark} ${outcome.label}${outcome.job_id ? ` (${outcome.job_id})` : ""}${outcome.error ? `: ${outcome.error.message}` : ""}\n`);
+        const tail = outcome.error ? `: ${outcome.error.message}` : outcome.already_saved ? ": already saved" : "";
+        process.stderr.write(`[${done}/${units.length}] ${mark} ${outcome.label}${outcome.job_id ? ` (${outcome.job_id})` : ""}${tail}\n`);
       }
       return outcome;
     }, () => !!fatal);
@@ -853,7 +981,7 @@ export async function runBatch(ctx: Ctx, preps: Prepared[], limit: number): Prom
   const units: Unit[] = [];
   for (const p of preps) units.push({ prep: p, body: await uploadLocalFiles(ctx, p.command, p.body), ...(p.name ? { naming: { prefix: p.name } } : {}) });
   ctx.log(`Submitting ${label} (${limit} at a time)`);
-  const outcomes = await runUnits(ctx, units, label, limit);
+  const outcomes = await runUnits(ctx, units, label, limit, undefined, { reuse: true });
   const ok = outcomes.filter(o => o.status === "succeeded").length;
   const summary = { total: outcomes.length, succeeded: ok, failed: outcomes.length - ok, credits_charged: sumCharged(outcomes) };
   if (ctx.jsonOut) {
@@ -867,6 +995,7 @@ export async function runBatch(ctx: Ctx, preps: Prepared[], limit: number): Prom
           credits_charged: o.credits_charged,
           files: o.files.map(f => f.path),
           ...(o.urls.length ? { urls: o.urls.map(u => u.url) } : {}),
+          ...(o.already_saved ? { already_saved: true } : {}),
           error: o.error
         })),
         summary
@@ -875,7 +1004,7 @@ export async function runBatch(ctx: Ctx, preps: Prepared[], limit: number): Prom
     );
   } else {
     for (const o of outcomes) {
-      process.stdout.write(`${o.status === "succeeded" ? "✓" : "✗"} [${o.index + 1}] ${o.label}${o.error ? `: ${o.error.message}` : ""}\n`);
+      process.stdout.write(`${o.status === "succeeded" ? "✓" : "✗"} [${o.index + 1}] ${o.label}${o.error ? `: ${o.error.message}` : o.already_saved ? " (already saved)" : ""}\n`);
       for (const f of o.files) process.stdout.write(`    ${f.path}\n`);
       for (const u of o.urls) process.stdout.write(`    ${u.url}\n`);
     }

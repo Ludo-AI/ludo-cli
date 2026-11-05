@@ -29,6 +29,8 @@ export class CliError extends Error {
   specMismatch?: boolean;
   // Set when the API could not be reached at all (safe requests retry once).
   network?: boolean;
+  // A 429's Retry-After, in seconds, when the server sent one (header or body).
+  retryAfterS?: number;
 
   constructor(message: string, exitCode: number = EXIT.ERROR, hint?: string, details?: unknown) {
     super(message);

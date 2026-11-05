@@ -229,6 +229,13 @@ export const BATCH_HELP = [
   "An optional \"name\" names that job's saved files, like --name (sfx_sword.mp3).",
   "The spending guard checks the total before anything runs; a failed item does not stop the",
   "others. --concurrency sets how many run at once (default 4, at most 50).",
+  "",
+  "When the account's queue is full (50 generations queued or running, other sessions' included),",
+  "the batch waits and submits the rest as places free up; it gives up after --timeout seconds",
+  "(default 1800) with nothing getting through. One poll covers all of a batch's jobs.",
+  "",
+  "Give a job a \"request_id\" and running the file again brings back the same job rather than a",
+  "new one (and no new charge): files it already saved are kept, not downloaded again.",
   ""
 ].join("\n");
 

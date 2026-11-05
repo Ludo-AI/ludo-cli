@@ -72,6 +72,10 @@ before(async () => {
       jobs.set(id, { id, status: "succeeded", task_type: "generateWithStyle", credits_charged: 0.5 * n, result: Array.from({ length: n }, (_, i) => ({ url: `${base}/files/${id}-${i}.png` })) });
       return json(res, 202, { id, status: "queued", task_type: "generateWithStyle", poll_after_ms: 5 });
     }
+    if (req.method === "GET" && url.pathname === "/api/assets/jobs") {
+      // The listing a batch polls: newest first.
+      return json(res, 200, [...jobs.values()].reverse());
+    }
     if (req.method === "GET" && url.pathname.startsWith("/api/assets/jobs/")) {
       const job = jobs.get(decodeURIComponent(url.pathname.split("/").pop()));
       return job ? json(res, 200, job) : json(res, 404, { message: "no such job" });

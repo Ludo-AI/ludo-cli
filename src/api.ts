@@ -8,6 +8,8 @@ import { reuseOrUpload, uploadKey } from "./upload-cache.js";
 export interface ApiResponse {
   status: number;
   body: any;
+  // Seconds from a Retry-After header (429s), when there was one.
+  retryAfterS?: number;
 }
 
 export class Api {
@@ -96,7 +98,8 @@ export class Api {
     }
     // Below the API's minimum CLI version every request answers 426.
     if (res.status === 426) throw upgradeRequired(body);
-    return { status: res.status, body };
+    const retryAfterS = parseRetryAfter(res.headers.get("retry-after"));
+    return { status: res.status, body, ...(retryAfterS === undefined ? {} : { retryAfterS }) };
   }
 
   // A request that must succeed: any non-2xx becomes a CliError with the
@@ -132,7 +135,25 @@ export function apiError(res: ApiResponse): CliError {
       hint = `Rate limited until ${new Date(b.reset_at).toLocaleString()}; retrying earlier fails again.`;
     } else hint = "Rate limited; slow down and retry shortly.";
   }
-  return new CliError(String(message).replace(/^Error:\s*/, ""), exitCodeForStatus(res.status), hint, b);
+  const err = new CliError(String(message).replace(/^Error:\s*/, ""), exitCodeForStatus(res.status), hint, b);
+  const retryAfterS = res.retryAfterS ?? (typeof b?.retry_after === "number" && b.retry_after >= 0 ? b.retry_after : undefined);
+  if (res.status === 429 && retryAfterS !== undefined) err.retryAfterS = retryAfterS;
+  return err;
+}
+
+// Retry-After is delta-seconds or an HTTP date.
+export function parseRetryAfter(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const s = value.trim();
+  if (/^\d+(\.\d+)?$/.test(s)) return Number(s);
+  const at = Date.parse(s);
+  return Number.isNaN(at) ? undefined : Math.max(0, (at - Date.now()) / 1000);
+}
+
+// The account already has as many generations queued or running as the API
+// allows (50): a 429 that clears as jobs finish, unlike a rate limit.
+export function isQueueFull(err: unknown): boolean {
+  return err instanceof CliError && err.exitCode === EXIT.RATE_LIMITED && (err.details as any)?.code === "PENDING_JOBS_LIMIT";
 }
 
 const MIME_BY_EXT: Record<string, string> = {

@@ -245,7 +245,8 @@ ${TOOLS.map(t => `- \`ludo toolbox ${t.group} ${t.name} ${t.args}\`: ${t.summary
   around it; tell the user what was spent (\`ludo spend\`) and ask.
 - \`--n 4\` makes four variations (files \`-v1\`..\`-v4\`, JSON lists each; with \`--name\`, \`<name>-v1\`..). Look at them, keep the best, delete the rest.
 - Several different assets: write a jobs file and run \`ludo batch jobs.json\` (see \`ludo batch --help\`); a job's
-  \`"name"\` names its files.
+  \`"name"\` names its files. A full queue (50 jobs, other sessions' included) makes the batch wait, not fail. Give
+  each job a \`"request_id"\`: running the file again then brings back the same jobs and keeps the files already saved.
 
 ## Exit codes
 0 ok, 1 error, 2 bad usage, 3 auth, 4 rejected by the API, 5 not enough credits, 6 job failed (credits refunded;

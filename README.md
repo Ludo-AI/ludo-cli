@@ -296,7 +296,10 @@ the log points to them.
   (images) one job makes them; elsewhere the jobs run side by side.
 - `ludo batch jobs.json` runs a list of different generations side by side (`ludo batch --help`
   shows the format; a job's `"name"` names its files). The price of the whole list is checked first.
-  A failed item does not stop the others.
+  A failed item does not stop the others. When the account's queue is full (50 generations queued
+  or running, other sessions' included), the batch waits for places to free up instead of
+  stopping, and one poll covers all its jobs. Give each job a `"request_id"` and running the file
+  again brings back the same jobs: files already saved are kept, not downloaded again.
 - Anything over 50 credits at once asks for confirmation at a terminal (`--yes` skips it).
 
 ## Staying up to date
