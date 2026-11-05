@@ -23,7 +23,6 @@ export interface Tool {
   summary: string;
   details?: string[];
   flags: ToolFlag[];
-  refuses?: Record<string, string>; // flags other tools take that this one turns down, and why
   run(ctx: Ctx, call: ToolCall): Promise<number>;
 }
 

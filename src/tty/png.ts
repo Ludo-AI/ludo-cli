@@ -371,15 +371,12 @@ export interface EncodeOptions {
   // Ancillary chunks to write, usually PngInfo.chunks from the source file.
   // A tEXt chunk here replaces any other one with the same keyword.
   chunks?: RawChunk[];
-  // Keep the RGB under fully transparent pixels instead of writing it as 0:
-  // in a data texture (a normal map's flat normal) it is read.
-  keepClearRgb?: boolean;
 }
 
 // Chooses the smallest lossless layout: a palette (1, 2, 4 or 8 bits a pixel)
 // when the image has at most 256 colours, else RGB when it is fully opaque,
 // else RGBA. Fully transparent pixels count as one colour (their RGB is
-// written as 0), which no viewer can tell apart, unless keepClearRgb.
+// written as 0), which no viewer can tell apart.
 export function encodePng(img: Image, opts: EncodeOptions = {}): Buffer {
   const { width, height } = img;
   const src = img.rgba;
@@ -399,8 +396,7 @@ export function encodePng(img: Image, opts: EncodeOptions = {}): Buffer {
   }
 
   const view = new DataView(src.buffer, src.byteOffset, src.byteLength);
-  const keep = !!opts.keepClearRgb;
-  const keyAt = (i: number) => (src[i * 4 + 3] === 0 && !keep ? 0 : view.getUint32(i * 4));
+  const keyAt = (i: number) => (src[i * 4 + 3] === 0 ? 0 : view.getUint32(i * 4));
   let opaque = true;
   const colours = new Map<number, number>();
   for (let i = 0; i < n; i++) {
@@ -447,7 +443,7 @@ export function encodePng(img: Image, opts: EncodeOptions = {}): Buffer {
     bpp = channels;
     rows = Buffer.alloc(height * stride);
     for (let i = 0; i < n; i++) {
-      if (!opaque && !keep && src[i * 4 + 3] === 0) continue; // stays 0,0,0,0
+      if (!opaque && src[i * 4 + 3] === 0) continue; // stays 0,0,0,0
       for (let c = 0; c < channels; c++) rows[i * channels + c] = src[i * 4 + c];
     }
   }

@@ -216,14 +216,6 @@ test("encoder round-trips every layout it chooses", () => {
   assert.deepEqual([...layouts].sort(), ["2/8", "3/1", "3/2", "3/4", "3/8", "6/8"]);
 });
 
-test("keepClearRgb keeps the RGB under clear pixels, in a palette and in RGBA", () => {
-  for (const { name, img } of encoderCases()) {
-    const rgba = img.rgba.slice();
-    for (let i = 0; i < rgba.length; i += 4) if (!rgba[i + 3]) rgba.set([128, 128, 255], i);
-    assert.deepEqual(readPng(encodePng({ ...img, rgba }, { keepClearRgb: true })).image.rgba, rgba, name);
-  }
-});
-
 test("encoder writes pixel art as a small palette PNG", () => {
   const r = rng(3);
   const img = randomImage(r, 256, 256, 12, "binary");

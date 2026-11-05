@@ -6,7 +6,7 @@ import { MAX_TOOLBOX_PIXELS, type Image } from "../tty/png.js";
 import { keepLoop, type Grid } from "../tty/preview.js";
 import { countFrames } from "./grid.js";
 import { baseOf, carriedChunks, engineFiles, freeName, loadImageFile, shown, writePng, type Loaded } from "./io.js";
-import { blit, crop, joinFrames, sliceSheet } from "./sheet.js";
+import { crop, joinFrames, sliceSheet } from "./sheet.js";
 import { gridFlag, hexColour, positiveInt, textFlag } from "./flags.js";
 import {
   contentBox,
@@ -31,7 +31,6 @@ import { resizeNearest, resizePillow } from "./resample.js";
 import { PaletteMap } from "./quantize.js";
 import { coloursOf, hexOf, loadPalette, PALETTE_EXTENSIONS, PaletteError, savePalette } from "./palette.js";
 import { dropShadow, margins, outline, type Shape } from "./effects.js";
-import { MAX_NORMAL_PIXELS, NORMAL_DEFAULTS, NORMAL_RANGES, normalMap, normalPadding, type NormalSettings } from "./normals.js";
 import { encodeWebp } from "../tty/webp-encode.js";
 
 // Every image tool runs the same way: one image, or every frame of a sheet
@@ -549,161 +548,6 @@ TOOLS.push({
         facts: { offset: [dx, dy], color: hex(base), opacity, ...(anyRoom(room) ? { grown: room } : {}), ...trimJson(trim) },
         says: `Shadow at ${dx},${dy} in ${hex(base)} at ${opacity}%${anyRoom(room) ? `, the canvas grown to ${grown[0].width}x${grown[0].height} to fit it` : ""}`
       };
-    });
-  }
-});
-
-// --normal-strength and the like: a number in the original's range, read as
-// f32 as it reads them.
-function normalFlag(call: ToolCall, flag: string, fallback: number, min: number, max: number): number {
-  const raw = call.flags.get(flag);
-  if (raw === undefined) return fallback;
-  const n = typeof raw === "string" && /^\s*[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?\s*$/i.test(raw) ? Math.fround(Number(raw)) : NaN;
-  if (!(n >= Math.fround(min) && n <= Math.fround(max))) throw usageError(`${flag} takes a number from ${min} to ${max} (got "${raw === true ? "" : raw}")`);
-  return n;
-}
-
-// An f32 as its shortest decimal (0.6, not 0.6000000238418579).
-const shortest = (v: number) => {
-  for (let digits = 1; digits < 9; digits++) if (Math.fround(Number(v.toPrecision(digits))) === v) return Number(v.toPrecision(digits));
-  return v;
-};
-
-const rangeOf = (key: keyof NormalSettings) => NORMAL_RANGES.find(r => r.key === key)!;
-
-// Frames this big (longer side, px) get a --shape-radius suggestion.
-const BIG_ART = 256;
-
-// The chunks that say how to show colours; a normal map is data and has none.
-const COLOUR_SPACE = new Set(["gAMA", "cHRM", "sRGB", "iCCP"]);
-
-// A normal map has to lie on its art pixel for pixel, so this does not go
-// through runEdit: the sheet is never cut and joined again. Every cell of
-// the whole cols x rows grid is mapped where it is (an empty or nearly
-// empty cell too), and the map has the art's very size, alpha and grid.
-async function runNormals(ctx: Ctx, call: ToolCall, settings: NormalSettings): Promise<number> {
-  if (call.args.length !== 1) throw usageError("Usage: ludo toolbox image normals <image> [--normal-strength 1.5]");
-  const src = loadImageFile(call.args[0]);
-  if (src.extrude) {
-    throw new CliError(`${src.file} is extruded (by ${src.extrude}), so this would map its repeated border too`, EXIT.BAD_INPUT, "Make the normal map from the file before the extrude, then extrude both alike.");
-  }
-  const grid = gridOf(src, call);
-  const { width, height } = src.image;
-  const cols = grid?.cols ?? 1;
-  const rows = grid?.rows ?? 1;
-  if (width % cols || height % rows) {
-    throw new CliError(
-      `A ${width}x${height} image does not split into ${cols}x${rows} frames of one whole size, so its normal map would not line up with it`,
-      call.flags.has("--grid") ? EXIT.USAGE : EXIT.BAD_INPUT,
-      `Its width has to be a multiple of ${cols} and its height of ${rows}: pad or crop it first, or pass the right --grid.`
-    );
-  }
-  const [fw, fh] = [width / cols, height / rows];
-  const pad = normalPadding(settings);
-  if ((fw + 2 * pad) * (fh + 2 * pad) > MAX_NORMAL_PIXELS) {
-    throw new CliError(`A ${fw}x${fh} ${grid ? "frame" : "image"} is too large for a normal map (at most ${MAX_NORMAL_PIXELS / 1024 / 1024} megapixels a frame, with a ${pad} px border)`, EXIT.BAD_INPUT, "Split it into smaller images first.");
-  }
-  const out: Image = { width, height, rgba: new Uint8Array(width * height * 4) };
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) blit(out, normalMap(crop(src.image, { x: c * fw, y: r * fh, w: fw, h: fh }), settings), c * fw, r * fh);
-  }
-
-  const file = freeName(ctx.outDir, ctx.globals.name || `${baseOf(src.file)}_n`, ".png");
-  const chunks = carriedChunks(src, grid, { trim: src.trim }).filter(c => !COLOUR_SPACE.has(c.type));
-  // The flat normal under clear pixels is read by filtering: it is kept.
-  writePng(file, out, chunks, { keepClearRgb: true });
-  const notes: string[] = [];
-  // Engine files would set the map up as sprite colour (sRGB): none yet.
-  if (ctx.globals.engine) notes.push(`No ${ctx.globals.engine} files for a normal map: import it in the engine as a normal map (linear, not sRGB).`);
-  // The default radius rounds only the outer few pixels: right for pixel
-  // art, flat in the middle on big art. There is no telling the right value
-  // from the pixels, so this only suggests one (the longer side / 48).
-  const side = Math.max(fw, fh);
-  if (side >= BIG_ART && !call.flags.has("--shape-radius")) {
-    const tryRadius = Math.max(8, Math.round(side / 48));
-    const smooth = call.flags.has("--detail-scale") ? "" : " --detail-scale 3";
-    notes.push(`${grid ? "Each frame" : "This art"} is ${fw}x${fh}: at the default --shape-radius 4 only its outer few pixels are rounded and the middle stays flat. Try --shape-radius ${tryRadius}${smooth} (see --help).`);
-  }
-
-  const format = settings.format;
-  const next = hint("Look at it beside the art", `ludo toolbox image contact ${shown(src.file)} ${shown(file)}`);
-  const says = `Made ${format === "opengl" ? "an OpenGL" : "a DirectX"} normal map, a data texture to import as linear, not sRGB`;
-  if (ctx.jsonOut) {
-    printJson(
-      {
-        image: shown(file),
-        width,
-        height,
-        ...(grid ? { grid: { cols, rows, frames: grid.frames, frame_width: fw, frame_height: fh, fps: grid.fps } } : {}),
-        normal_format: format,
-        normal_strength: shortest(settings.normalStrength),
-        detail_strength: shortest(settings.detailStrength),
-        detail_scale: shortest(settings.detailScale),
-        shape_strength: shortest(settings.shapeStrength),
-        shape_radius: shortest(settings.shapeRadius),
-        ...trimJson(src.trim),
-        ...(notes.length ? { notes } : {}),
-        ...(ctx.globals.quiet ? {} : { hint: next })
-      },
-      false
-    );
-  } else {
-    process.stdout.write(`${says}${grid ? ` (each of ${cols * rows} cells)` : ""}\n`);
-    process.stdout.write(`Saved ${shown(file)} (${width}x${height}${grid ? `, ${cols}x${rows} grid of ${fw}x${fh}` : ""})\n`);
-    for (const n of notes) process.stderr.write(`Note: ${n}\n`);
-    if (!ctx.globals.quiet) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);
-  }
-  return EXIT.OK;
-}
-
-TOOLS.push({
-  group: "image",
-  name: "normals",
-  args: "<image>",
-  summary: "Make a normal map, so lights in the engine shade the art",
-  details: [
-    "Each pixel's colour says which way it faces. The art's silhouette rounds it (thicker parts rise",
-    "more) and its painted shading adds the detail; every separate part (a sword apart from the hand)",
-    "is shaped on its own, and pixels that are clear or nearly so get the flat normal (128,128,255).",
-    "The map is the art's size, pixel for pixel, with its alpha and grid, saved as <name>_n.png (the art",
-    "is never replaced). On a sheet every cell is mapped on its own; the sheet must divide into its grid.",
-    "It is a data texture, not colour: import it as a normal map, or as linear (never sRGB). No engine",
-    "files are written for it yet. Ported from Sprite Fusion Sprite Normals (MIT,",
-    "github.com/hugo-dz/spritefusion-sprite-normals): at the default settings it gives that tool's very",
-    "pixels; with other values a rare pixel may differ by 1.",
-    "",
-    "--shape-radius is the one setting that depends on the art's size, and nothing in the pixels says",
-    "its right value. It is how far in from the edge, in pixels, the silhouette keeps rising before it",
-    "levels off (--shape-strength is how high it rises). The default 4 suits pixel art: a 32 or 64 px",
-    "sprite is rounded right through. On bigger art only the rim is rounded and the middle stays flat,",
-    "so the painted shading does all the work and brush strokes come out as embossed bumps. Raise it to",
-    "about the frame's longer side / 48 (16 for a 768 px character): each part gets its volume and",
-    "limbs and props stay apart; add --detail-scale 3 so brush texture is smoothed before it turns into",
-    "bumps. Much more, toward half the art's thickness, swells the whole sprite into one tent with",
-    "creases down the middle of each shape. Frames of 256 px and up get a note with a value to try."
-  ],
-  flags: [
-    { flag: "--normal-strength", value: "n", description: "How steep the whole relief is, 0 to 8 (default 1.5)" },
-    { flag: "--detail-strength", value: "n", description: "How much the painted shading adds, 0 to 8 (default 6)" },
-    { flag: "--detail-scale", value: "px", description: "How far the shading is smoothed first, 0.6 to 8 (default 0.6; 3 for painted art)" },
-    { flag: "--shape-strength", value: "n", description: "How high the silhouette rises, 0 to 8 (default 1.15)" },
-    { flag: "--shape-radius", value: "px", description: "How far in from the edge it keeps rising, 0.5 to 512 (default 4, for pixel art; see above)" },
-    { flag: "--normal-format", value: "name", description: "opengl (default; Godot, Unity) or directx (green reversed; Unreal)" },
-    SHARED[0]
-  ],
-  refuses: { "--in-place": "A normal map does not replace its art: it is saved beside it, as <name>_n.png (drop --in-place)" },
-  async run(ctx, call) {
-    const format = (textFlag(call, "--normal-format") ?? (call.flags.has("--normal-format") ? "" : "opengl")).toLowerCase();
-    if (format !== "opengl" && format !== "directx") throw usageError(`--normal-format takes opengl or directx (got "${format}")`);
-    const value = (flag: string, key: keyof NormalSettings) => normalFlag(call, flag, NORMAL_DEFAULTS[key] as number, rangeOf(key).min, rangeOf(key).max);
-    return runNormals(ctx, call, {
-      ...NORMAL_DEFAULTS,
-      normalStrength: value("--normal-strength", "normalStrength"),
-      detailStrength: value("--detail-strength", "detailStrength"),
-      detailScale: value("--detail-scale", "detailScale"),
-      shapeStrength: value("--shape-strength", "shapeStrength"),
-      shapeRadius: value("--shape-radius", "shapeRadius"),
-      format
     });
   }
 });

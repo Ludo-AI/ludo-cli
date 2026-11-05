@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CliError, EXIT } from "../errors.js";
-import { encodePng, MAX_TOOLBOX_PIXELS, readPng, readText, textChunk, PngError, type EncodeOptions, type Image, type PngInfo, type RawChunk } from "../tty/png.js";
+import { encodePng, MAX_TOOLBOX_PIXELS, readPng, readText, textChunk, PngError, type Image, type PngInfo, type RawChunk } from "../tty/png.js";
 import { decodeGif, GifError, isGif } from "../tty/gif.js";
 import { joinFrames } from "./sheet.js";
 import { gifFps } from "./gif.js";
@@ -160,9 +160,9 @@ export function engineFiles(ctx: Ctx, sheet: string, image: { width: number; hei
   }
 }
 
-export function writePng(file: string, image: Image, chunks: RawChunk[] = [], opts: Omit<EncodeOptions, "chunks"> = {}) {
+export function writePng(file: string, image: Image, chunks: RawChunk[] = []) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, encodePng(image, { ...opts, chunks }));
+  fs.writeFileSync(file, encodePng(image, { chunks }));
 }
 
 // <dir>/<base>, or <base>-2, -3... when taken: never overwrite.
