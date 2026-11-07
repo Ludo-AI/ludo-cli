@@ -294,6 +294,9 @@ the log points to them.
   `<name>-v1` to `<name>-v4`). At a terminal
   you then pick which to keep; the rest move to `<out>/.discarded/`. Where the API takes `n`
   (images) one job makes them; elsewhere the jobs run side by side.
+- `--save-normals` saves each normal map beside the image or sheet it belongs to, as `<file>_n`
+  (`crate-v1.png` and `crate-v1_n.png`). It is not a variation of its own: the JSON lists it under
+  the variation's `normal_maps`, and in `files` with `"normal_map": true`.
 - `ludo batch jobs.json` runs a list of different generations side by side (`ludo batch --help`
   shows the format; a job's `"name"` names its files). The price of the whole list is checked first.
   A failed item does not stop the others. When the account's queue is full (50 generations queued

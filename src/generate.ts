@@ -213,12 +213,31 @@ export interface Naming {
   variationOf?: (i: number) => number | undefined;
 }
 
+// normal_map: the file (or URL) is the normal map of another one in the same
+// result, saved beside it as <its name>_n, not a result of its own.
+type ResultFile = SavedFile & { variation?: number; normal_map?: boolean };
+
 export interface SavedResult {
   record: any;
   sheet?: string;
-  files: (SavedFile & { variation?: number })[]; // paths relative to cwd
+  files: ResultFile[]; // paths relative to cwd
   // The result URLs, when --no-download left them unsaved.
-  urls: { url: string; variation?: number }[];
+  urls: { url: string; variation?: number; normal_map?: boolean }[];
+}
+
+// save_normals answers a normal_map_url beside the URL it was made from (an
+// image's url, a sheet's spritesheet_url), in the same result item. Each map
+// URL, mapped to that URL. A map with no such sibling stays an ordinary result.
+export function normalMapsOf(result: unknown, found = new Map<string, string>()): Map<string, string> {
+  if (Array.isArray(result)) result.forEach(v => normalMapsOf(v, found));
+  else if (result && typeof result === "object") {
+    const item = result as Record<string, unknown>;
+    const map = item.normal_map_url;
+    const owner = [item.spritesheet_url, item.url, item.image_url].find(u => typeof u === "string" && u && u !== map);
+    if (typeof map === "string" && map && typeof owner === "string") found.set(map, owner);
+    Object.values(item).forEach(v => normalMapsOf(v, found));
+  }
+  return found;
 }
 
 // `before`: files an earlier run saved for this job (absolute, in log order).
@@ -242,26 +261,46 @@ export async function saveResult(ctx: Ctx, job: any, label: string, naming: Nami
     const earlier = before.length ? earlierFiles(before, dir) : undefined;
     const inline = extractInlineFiles(job.result, globals.download ? { dir, prefix, earlier } : null, ctx.log);
     record.result = inline.result;
-    const urls = collectUrls(record.result);
+    // Normal maps are not results of their own: they stay out of the
+    // numbering (an image's map is not the next variation) and are saved
+    // beside the file they belong to, as <its name>_n.
+    const all = collectUrls(record.result);
+    const mapsOf = normalMapsOf(record.result);
+    const maps = all.filter(u => mapsOf.has(u) && all.includes(mapsOf.get(u)!));
+    const urls = all.filter(u => !maps.includes(u));
     // Files of a per-direction result are named after their direction
     // (-SW, -N); variations keep their own -v1, -v2.
     const directions = directionsOf(record.result);
     const suffix = naming.suffix || (directions.size ? (i: number) => (directions.has(urls[i]) ? `-${directions.get(urls[i])}` : "") : undefined);
     const downloaded: SavedResult["files"] = globals.download && urls.length ? await downloadAll(urls, dir, prefix, ctx.log, suffix, earlier) : [];
     downloaded.forEach((f, i) => (f.variation = naming.variationOf?.(i)));
-    if (!globals.download) resultUrls = urls.map((url, i) => ({ url, variation: naming.variationOf?.(i) }));
+    for (const map of globals.download ? maps : []) {
+      const owner = downloaded.find(f => f.url === mapsOf.get(map));
+      if (!owner) continue;
+      const base = path.basename(owner.path, path.extname(owner.path));
+      const [saved] = await downloadAll([map], path.dirname(owner.path), base, ctx.log, () => "_n", earlier);
+      downloaded.push({ ...saved, variation: owner.variation, normal_map: true });
+    }
+    if (!globals.download) {
+      const variationOf = (url: string) => naming.variationOf?.(urls.indexOf(url));
+      resultUrls = [
+        ...urls.map(url => ({ url, variation: variationOf(url) })),
+        ...maps.map(url => ({ url, variation: variationOf(mapsOf.get(url)!), normal_map: true }))
+      ];
+    }
     // WebP results also get a PNG copy side by side: engines and tools take
     // PNG everywhere, and the PNG is what carries a spritesheet's grid.
     const pngOf = new Map<string, string>();
     for (const f of [...downloaded]) {
       if (!/\.webp$/i.test(f.path)) continue;
       const png = f.path.replace(/\.webp$/i, ".png");
+      const twin = { url: f.url, path: png, variation: f.variation, ...(f.normal_map ? { normal_map: true } : {}) };
       if (before.includes(png) && fs.existsSync(png)) {
         pngOf.set(f.path, png);
-        downloaded.push({ url: f.url, path: png, variation: f.variation, reused: true });
+        downloaded.push({ ...twin, reused: true });
       } else if (!fs.existsSync(png) && convertToPng(f.path, png)) {
         pngOf.set(f.path, png);
-        downloaded.push({ url: f.url, path: png, variation: f.variation });
+        downloaded.push(twin);
       }
     }
     // A spritesheet remembers its grid inside the PNG, for `ludo preview`
@@ -275,6 +314,10 @@ export async function saveResult(ctx: Ctx, job: any, label: string, naming: Nami
       if (grid && sheetFile && sheetPng) {
         stampGrid(sheetPng, grid);
         stamped.push({ file: sheetFile, png: sheetPng, grid });
+        // The sheet's normal map has the sheet's layout, so it gets the grid too.
+        const mapFile = downloaded.find(f => f.normal_map && f.url === result?.normal_map_url && !/\.png$/i.test(f.path));
+        const mapPng = mapFile && pngOf.get(mapFile.path);
+        if (mapPng) stampGrid(mapPng, grid);
       }
     }
     sheet = stamped[0]?.png;
@@ -296,7 +339,13 @@ export async function saveResult(ctx: Ctx, job: any, label: string, naming: Nami
     ].map(f => ({ ...f, path: rel(f.path) }));
     // path is relative to the working directory; absolute_path saves a wrapper
     // running ludo elsewhere from resolving it against the wrong folder.
-    record.files = files.map(f => ({ url: f.url, path: f.path, absolute_path: path.resolve(f.path), ...(f.variation === undefined ? {} : { variation: f.variation }) }));
+    record.files = files.map(f => ({
+      url: f.url,
+      path: f.path,
+      absolute_path: path.resolve(f.path),
+      ...(f.variation === undefined ? {} : { variation: f.variation }),
+      ...(f.normal_map ? { normal_map: true } : {})
+    }));
     // Inline files were replaced by their absolute path; show it relative too.
     for (const f of inline.files) record.result = replaceString(record.result, f.path, rel(f.path));
     if (sheet) sheet = rel(sheet);
@@ -874,14 +923,19 @@ export async function runVariations(ctx: Ctx, prep: Prepared, n: number): Promis
   // when that job returned it, saved as a file or (--no-download) as a URL.
   const variations = Array.from({ length: n }, (_, i) => i + 1).map(v => {
     const o = outcomes[chunks.findIndex(c => v > c.offset && v <= c.offset + c.count)];
-    const vUrls = urls.filter(u => u.variation === v).map(u => u.url);
-    const made = o?.status === "succeeded" && (files.some(f => f.variation === v) || vUrls.length > 0);
+    const vUrls = urls.filter(u => u.variation === v && !u.normal_map).map(u => u.url);
+    const mapUrls = urls.filter(u => u.variation === v && u.normal_map).map(u => u.url);
+    const vFiles = files.filter(f => f.variation === v && !f.normal_map).map(f => f.path);
+    const maps = files.filter(f => f.variation === v && f.normal_map).map(f => f.path);
+    const made = o?.status === "succeeded" && (vFiles.length > 0 || vUrls.length > 0);
     return {
       variation: v,
       job_id: o?.job_id,
       status: made ? "succeeded" : o?.status === "succeeded" ? "failed" : o?.status || "failed",
-      files: files.filter(f => f.variation === v).map(f => f.path),
+      files: vFiles,
+      ...(maps.length ? { normal_maps: maps } : {}),
       ...(vUrls.length ? { urls: vUrls } : {}),
+      ...(mapUrls.length ? { normal_map_urls: mapUrls } : {}),
       error: made ? undefined : o?.error
     };
   });
@@ -891,7 +945,7 @@ export async function runVariations(ctx: Ctx, prep: Prepared, n: number): Promis
     const made = variations.filter(v => v.status === "succeeded").length;
     process.stdout.write(`${ok.length ? "✓" : "✗"} ${label}: ${made} of ${n} variations ${ctx.globals.download ? "saved" : "made"} (${formatCredits(sumCharged(outcomes))})\n`);
     for (const v of variations) {
-      const got = v.files.length ? v.files : v.urls || [];
+      const got = v.files.length ? [...v.files, ...(v.normal_maps || [])] : [...(v.urls || []), ...(v.normal_map_urls || [])];
       process.stdout.write(`  v${v.variation}: ${got.length ? got.join(", ") : `failed${v.error ? `: ${v.error.message}` : ""}`}\n`);
     }
     if (ctx.vis.enabled && !canShowImages()) {
@@ -915,7 +969,7 @@ export async function runVariations(ctx: Ctx, prep: Prepared, n: number): Promis
         n,
         credits_charged: sumCharged(outcomes),
         variations,
-        files: files.map(f => ({ path: f.path, absolute_path: path.resolve(f.path), variation: f.variation })),
+        files: files.map(f => ({ path: f.path, absolute_path: path.resolve(f.path), variation: f.variation, ...(f.normal_map ? { normal_map: true } : {}) })),
         ...(urls.length ? { urls } : {})
       },
       prettyJson(ctx)

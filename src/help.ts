@@ -244,6 +244,7 @@ ${TOOLS.map(t => `- \`ludo toolbox ${t.group} ${t.name} ${t.args}\`: ${t.summary
 - A spending budget (\`LUDO_MAX_CREDITS\` or \`max_credits\`) stops the CLI once reached: exit code 11. Do not work
   around it; tell the user what was spent (\`ludo spend\`) and ask.
 - \`--n 4\` makes four variations (files \`-v1\`..\`-v4\`, JSON lists each; with \`--name\`, \`<name>-v1\`..). Look at them, keep the best, delete the rest.
+- \`--save-normals\` saves each normal map beside its file as \`<file>_n\` (\`crate-v1_n.png\`); the JSON lists it under the variation's \`normal_maps\`, not as a variation.
 - Several different assets: write a jobs file and run \`ludo batch jobs.json\` (see \`ludo batch --help\`); a job's
   \`"name"\` names its files. A full queue (50 jobs, other sessions' included) makes the batch wait, not fail. Give
   each job a \`"request_id"\`: running the file again then brings back the same jobs and keeps the files already saved.

@@ -41,7 +41,8 @@ with API access if needed) and approve the CLI.
 7. Before generating, check `ludo assets`: the asset may already exist. `ludo assets redo <file>
    --prompt "..."` remakes one with changes.
 8. To choose between options, `--n 3` makes three variations (`-v1`..`-v3`). Look at them, keep the
-   best and delete the others. For several different assets, write a jobs file and run
+   best and delete the others. With `--save-normals`, each map is saved beside its file as `<file>_n`
+   (`crate-v1_n.png`) and listed under that variation's `normal_maps`. For several different assets, write a jobs file and run
    `ludo batch jobs.json` (`ludo batch --help`; give each job a `"name"` for its files).
 9. If the project has no `.ludo.json` yet and the user wants a setup, `ludo init` creates one.
 10. When you hit a limitation you cannot work around, a bug, or something the user needed that Ludo

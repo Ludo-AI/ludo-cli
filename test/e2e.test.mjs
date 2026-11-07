@@ -81,14 +81,16 @@ before(async () => {
       // "brokenwebp": a WebP sheet no decoder can read.
       const body = JSON.parse(raw);
       const prompt = body.motion_prompt;
-      const file = prompt === "webp" ? "sheet.webp" : prompt === "brokenwebp" ? "broken.webp" : "sheet.png";
+      const file = prompt === "webp" || prompt === "normals" ? "sheet.webp" : prompt === "brokenwebp" ? "broken.webp" : "sheet.png";
+      // "normals": save_normals, so the sheet carries its normal map.
+      const map = prompt === "normals" ? { normal_map_url: `${base}/files/map.webp` } : {};
       return json(res, 200, {
         id: "job-sheet001",
         status: "succeeded",
         task_type: "animateSprite",
         credits_charged: 9,
         // The result carries loop, as the API's does (since Oct 29 2026).
-        result: { spritesheet_url: `${base}/files/${file}`, audio_url: `${base}/files/sfx.mp3`, num_frames: 4, num_cols: 2, num_rows: 2, duration: 0.5, loop: body.loop !== false }
+        result: { spritesheet_url: `${base}/files/${file}`, audio_url: `${base}/files/sfx.mp3`, num_frames: 4, num_cols: 2, num_rows: 2, duration: 0.5, loop: body.loop !== false, ...map }
       });
     }
     if (req.method === "GET" && url.pathname === "/files/sfx.mp3") {
@@ -207,6 +209,10 @@ before(async () => {
       res.writeHead(blob ? 200 : 404, blob ? { "content-length": blob.length } : {});
       return res.end();
     }
+    if (req.method === "GET" && url.pathname === "/files/map.webp") {
+      res.writeHead(200);
+      return res.end(fs.readFileSync(new URL("./corpus/webp/made-sheet-lossless.webp", import.meta.url)));
+    }
     if (req.method === "GET" && url.pathname.startsWith("/files/")) {
       res.writeHead(200);
       return res.end(url.pathname === "/files/out.png" ? PNG : blobs.get(url.pathname));
@@ -234,6 +240,12 @@ before(async () => {
       if (body.prompt === "variations") {
         const result = Array.from({ length: body.n || 1 }, (_, i) => ({ url: `${base}/files/out.png?i=${i}`, model: "klimt", prompt: `rewritten ${i}` }));
         return json(res, 200, { id: `job-imgs${body.n}000`, status: "succeeded", task_type: "createImage", credits_charged: body.n, result });
+      }
+      // "normals": save_normals, so each image carries its normal map (a
+      // lossless WebP, as the API's are).
+      if (body.prompt === "normals") {
+        const result = Array.from({ length: body.n || 1 }, (_, i) => ({ url: `${base}/files/out.png?i=${i}`, normal_map_url: `${base}/files/map.webp?i=${i}`, model: "klimt" }));
+        return json(res, 200, { id: `job-norm${body.n}000`, status: "succeeded", task_type: "createImage", credits_charged: body.n, result });
       }
       return json(res, 402, { message: "Error: Not enough credits" });
     }
@@ -494,6 +506,35 @@ test("--n saves one file per variation", async () => {
     ["succeeded", "job-imgs2000", 1, undefined]
   ]);
   assert.equal(out.urls, undefined);
+});
+
+test("--n with save_normals saves each map beside its image as <name>-vN_n, not as a variation", async () => {
+  const { code, stdout, stderr, cwd } = await run(["image", "create", "--prompt", "normals", "--image-type", "sprite", "--n", "2", "--name", "crate", "--json"]);
+  assert.equal(code, 0, stderr);
+  const out = JSON.parse(stdout);
+  const names = paths => paths.map(p => path.basename(p));
+  assert.deepEqual(
+    out.variations.map(v => [v.variation, v.status, names(v.files), names(v.normal_maps)]),
+    [
+      [1, "succeeded", ["crate-v1.png"], ["crate-v1_n.webp", "crate-v1_n.png"]],
+      [2, "succeeded", ["crate-v2.png"], ["crate-v2_n.webp", "crate-v2_n.png"]]
+    ]
+  );
+  const dir = path.join(cwd, path.dirname(out.variations[0].files[0]));
+  assert.deepEqual(fs.readdirSync(dir).filter(f => f.startsWith("crate")).sort(), ["crate-v1.png", "crate-v1_n.png", "crate-v1_n.webp", "crate-v2.png", "crate-v2_n.png", "crate-v2_n.webp"]);
+  assert.ok(out.files.filter(f => f.normal_map).every(f => /_n\.(webp|png)$/.test(f.path)));
+});
+
+test("--n with save_normals and --no-download keeps map URLs apart from the variation URLs", async () => {
+  const { code, stdout, stderr } = await run(["image", "create", "--prompt", "normals", "--image-type", "sprite", "--n", "2", "--no-download", "--json"]);
+  assert.equal(code, 0, stderr);
+  assert.deepEqual(
+    JSON.parse(stdout).variations.map(v => [v.urls, v.normal_map_urls]),
+    [
+      [[`${base}/files/out.png?i=0`], [`${base}/files/map.webp?i=0`]],
+      [[`${base}/files/out.png?i=1`], [`${base}/files/map.webp?i=1`]]
+    ]
+  );
 });
 
 test("the asset log keeps the model and prompt of the image each file came from", async () => {
@@ -791,6 +832,19 @@ test("login warns when LUDO_API_KEY will override it", async () => {
   const { code, stderr } = await run(["login", "--json"], { LUDO_API_KEY: "test-key" });
   assert.equal(code, 0);
   assert.match(stderr, /LUDO_API_KEY is set/);
+});
+
+test("a sheet's normal map is saved beside it as <sheet>_n, with the sheet's grid", async () => {
+  const { code, stdout, stderr, cwd } = await run(["sprite", "animate", "--initial-image", "https://example.com/k.png", "--motion-prompt", "normals", "--name", "walk", "--json"]);
+  assert.equal(code, 0, stderr);
+  const out = JSON.parse(stdout);
+  const sheet = out.files.find(f => !f.normal_map && f.path.endsWith(".webp"));
+  const base = sheet.path.replace(/\.webp$/, "");
+  assert.deepEqual(
+    out.files.filter(f => f.normal_map).map(f => f.path).sort(),
+    [`${base}_n.png`, `${base}_n.webp`]
+  );
+  assert.deepEqual(readGrid(fs.readFileSync(path.join(cwd, `${base}_n.png`))), { cols: 2, rows: 2, frames: 4, fps: 8 });
 });
 
 test("a spritesheet is saved with its grid inside, and machine output stays plain", async () => {
