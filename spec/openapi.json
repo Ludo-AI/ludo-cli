@@ -3,12 +3,12 @@
   "info": {
     "version": "0.9.10",
     "title": "Ludo.ai API",
-    "description": "The Ludo.ai API enables you to generate game assets programmatically, including images, videos, 3D models, spritesheets, and audio.\n\n# Getting Started\n\n## Base URL\nAll API requests should be made to: `https://api.ludo.ai/api`\n\n## Authentication\nInclude your API key in the `Authorization` header:\n```\nAuthorization: ApiKey YOUR_API_KEY\n```\n\n## Models\nPick from the current models for any new integration:\n\n- `hydra` (Hydra) - Most reliable all-around model, generates audio.\n- `griffin-hd` (Griffin) - Cinematic videos in any style, with audio, 768p.\n- `forge` (Forge) - Best for simple body shapes and short actions; may need a few tries.\n- `forge-pixel` (Forge Pixel) - Best for low-res pixel art animations\n\nWhich models each action accepts (in preference order):\n\n- sprite animation: `hydra`, `griffin-hd`, `forge`, `forge-pixel`\n- motion transfer: `hydra`, `forge`, `forge-pixel`\n- spritesheet editing: `hydra`, `griffin-hd`, `forge`, `forge-pixel`\n- new view: `hydra`\n- video generation: `griffin-hd`\n- references to video: `griffin-hd`\n- video editing: `griffin-hd`\n\n**Legacy models** are still accepted so existing integrations keep working, but they are scheduled for removal - do not use them for new work:\n\n- `hydra-plus` (Hydra+) - legacy since 2026-11-02\n- `blitz` (Blitz) - legacy since 2026-09-17\n- `eagle` (Eagle) - legacy since 2026-09-17\n- `eagle-audio` (Eagle with Audio) - legacy since 2026-09-17\n- `tango` (Tango) - legacy since 2026-09-17\n\nEach generation endpoint lists its own models, rates and durations in its `model` parameter description.\n\n## Timeout\nGeneration requests return `202` immediately (see below) and hold no connection open while the work runs. If you opt into a synchronous response with `async: false`, include a generous timeout (at least 20 minutes): the call is held for at most 15 minutes, and past that you receive `202` with the job instead of an error and resume with `GET /assets/jobs/{id}`.\n\n## Documentation\n`GET /docs/search?query=...` searches Ludo's feature guides with a plain-language\nquestion and returns the few sections that answer it (each names a `doc` and\n`section`). `GET /docs` lists every document and section, and `GET /docs?doc=...`\nreads one in full. Both are free (no credits) and rate-limited: 60 requests per 5 minutes\nand 1000 per day for search, 150 per 5 minutes for reading. Read the relevant guide before\nyour first call to a generator: it explains modes, models, margins and known limitations.\n\n## Async Usage\nGeneration endpoints are asynchronous: you submit the work, get a job id back, and\ncollect the result when it is ready. Nothing is held open while a GPU runs.\n\n1. **Submit** the generation. The API responds immediately with\n   `202 { id, status: \"queued\" }`.\n2. **Poll** `GET /assets/jobs/{id}` until `status` is `succeeded` or `failed`.\n   Non-terminal responses carry `poll_after_ms` - wait at least that long before the\n   next poll. Better still, long-poll: `GET /assets/jobs/{id}?wait=30` holds the\n   request up to 30 s (max 60) and returns the moment the job finishes.\n3. **Read** `result` - it is exactly the response documented for that operation. On a\n   failure, read `error` instead.\n\n`GET /assets/jobs` lists your recent jobs, and `DELETE /assets/jobs/{id}` cancels one\nthat has not finished yet (credits are refunded).\n\nJob-status endpoints are rate-limited to 150 requests per 5 minutes per API key; a\n`429` carries `Retry-After`. Each account may have up to 50 generations queued or\nrunning at once via the API; a request beyond that returns `429` (code\n`PENDING_JOBS_LIMIT`) - wait for jobs to finish, then submit again.\n\n### Synchronous responses (deprecated)\nPassing `async: false` in the payload opts into a synchronous response: the call blocks\nuntil the result is ready and returns it as the response body. This is deprecated, but\nthe opt-out is permanent and stays supported.\n\nSynchronous calls run on the same queue: the response carries an `X-Ludo-Job-Id`\nheader, and if the job is still running after 15 minutes you receive `202` with the job\ninstead of an error - resume with `GET /assets/jobs/{id}`.\n\nThe legacy `request_id` + `GET /assets/{type}/results` flow keeps working unchanged.\n\n### Legacy results endpoints\nEach asset type still has a results endpoint:\n- `GET /assets/images/results` - images\n- `GET /assets/sprites/results` - spritesheets\n- `GET /assets/videos/results` - videos\n- `GET /assets/audio/results` - audio\n- `GET /assets/3d-models/results` - 3D models\n\nResults are available for 7 days and return the 100 most recent API-generated assets. The `request_id` query parameter is optional - omit it to list all recent results.\n\n## Directional Sprites\nDirectional Sprites render one 3D model as sprites seen from up to 8 directions that line up. The calls go in this order:\n1. *(Optional)* `POST /assets/3d-model/image` (create3DModelImage): a character image from a `prompt`, or your own `image` redrawn as a 3D render (the prompt then says what to change). Call again for another try.\n2. `POST /assets/3d-model` (create3DModel) with that image and `rig: true`, for a rigged GLB. A model you already have can be rigged with `POST /assets/3d-model/rig` (rigModel).\n   *(Optional)* accessories - a sword, a gun, a shield, a helmet, a backpack: an item GLB (create3DModel, no rig) held by a bone of the model. `POST /assets/sprite/directional-accessory-fit` (fitDirectionalAccessory, free) fits one automatically for its `kind` and answers previews, numeric `checks` and a `placement`; call it again with `size`, `move` and `turn` (relative to the automatic fit) until it looks right. Then `POST /assets/sprite/directional-accessories` (attachDirectionalAccessories, free) with every item's placement: its `model_url` is the model holding them, to pass as `model` below.\n3. *(Optional)* an animation, at most one: a `preset_id` from `GET /assets/sprite/animation-presets` (listAnimationPresets), or an `animation_url` made for this model by animate3DModelPreset or animate3DModel. With none, the sprites are a still pose.\n4. `GET /assets/sprite/directional-styles` (listDirectionalSpriteStyles, free): pick a `style_id` and its `style_params`.\n5. `POST /assets/sprite/directional-preview` (previewDirectionalSprites, free and synchronous): check the look from the directions you want. One preview at a time; a newer one cancels yours.\n6. `POST /assets/sprite/directional` (createDirectionalSprites) for one spritesheet per direction, or `POST /assets/sprite/directional-stills` (createDirectionalStills) for one large image per direction. Pass the GLB as `model`, the animation, the style and up to 8 `directions`.\n\nRead the full guide with `GET /docs?doc=directional-sprites`.\n\n## Asset URL Expiration\nAll generated asset URLs (images, spritesheets, videos, audio, 3D models) are temporary and expire after **7 days**. If you need to keep an asset, download it before it expires.\n\n## Request Format\n- Use `Content-Type: application/json` for all requests\n- All responses are returned in JSON format\n\n## Credits\nEach API call consumes credits from your account. The credit cost varies by endpoint and is documented in each endpoint's description.\n\n> **Note:** All API requests consume credits, even if your subscription includes unlimited credits for the web application. Check your account dashboard for your current API credit balance.\n",
+    "description": "The Ludo.ai API enables you to generate game assets programmatically, including images, videos, 3D models, spritesheets, and audio.\n\n# Getting Started\n\n## Base URL\nAll API requests should be made to: `https://api.ludo.ai/api`\n\n## Authentication\nInclude your API key in the `Authorization` header:\n```\nAuthorization: ApiKey YOUR_API_KEY\n```\n\n## Models\nPick from the current models for any new integration:\n\n- `hydra` (Hydra) - Best motion and prompt adherence.\n- `griffin-hd` (Griffin) - Cinematic videos in any style, with audio, 768p.\n- `forge` (Forge) - Cheapest alternative, for simple body shapes and simple actions.\n- `forge-pixel` (Forge Pixel) - Best for low-res pixel art animations\n\nWhich models each action accepts (in preference order):\n\n- sprite animation: `hydra`, `griffin-hd`, `forge`, `forge-pixel`\n- motion transfer: `hydra`, `forge`, `forge-pixel`\n- spritesheet editing: `hydra`, `griffin-hd`, `forge`, `forge-pixel`\n- new view: `hydra`\n- video generation: `griffin-hd`\n- references to video: `griffin-hd`\n- video editing: `griffin-hd`\n\n**Legacy models** are still accepted so existing integrations keep working, but they are scheduled for removal - do not use them for new work:\n\n- `hydra-plus` (Hydra+) - legacy since 2026-11-02\n- `blitz` (Blitz) - legacy since 2026-09-17\n- `eagle` (Eagle) - legacy since 2026-09-17\n- `eagle-audio` (Eagle with Audio) - legacy since 2026-09-17\n- `tango` (Tango) - legacy since 2026-09-17\n\nEach generation endpoint lists its own models, rates and durations in its `model` parameter description.\n\n## Timeout\nGeneration requests return `202` immediately (see below) and hold no connection open while the work runs. If you opt into a synchronous response with `async: false`, include a generous timeout (at least 20 minutes): the call is held for at most 15 minutes, and past that you receive `202` with the job instead of an error and resume with `GET /assets/jobs/{id}`.\n\n## Documentation\n`GET /docs/search?query=...` searches Ludo's feature guides with a plain-language\nquestion and returns the few sections that answer it (each names a `doc` and\n`section`). `GET /docs` lists every document and section, and `GET /docs?doc=...`\nreads one in full. Both are free (no credits) and rate-limited: 60 requests per 5 minutes\nand 1000 per day for search, 150 per 5 minutes for reading. Read the relevant guide before\nyour first call to a generator: it explains modes, models, margins and known limitations.\n\n## Async Usage\nGeneration endpoints are asynchronous: you submit the work, get a job id back, and\ncollect the result when it is ready. Nothing is held open while a GPU runs.\n\n1. **Submit** the generation. The API responds immediately with\n   `202 { id, status: \"queued\" }`.\n2. **Poll** `GET /assets/jobs/{id}` until `status` is `succeeded` or `failed`.\n   Non-terminal responses carry `poll_after_ms` - wait at least that long before the\n   next poll. Better still, long-poll: `GET /assets/jobs/{id}?wait=30` holds the\n   request up to 30 s (max 60) and returns the moment the job finishes.\n3. **Read** `result` - it is exactly the response documented for that operation. On a\n   failure, read `error` instead.\n\n`GET /assets/jobs` lists your recent jobs, and `DELETE /assets/jobs/{id}` cancels one\nthat has not finished yet (credits are refunded).\n\nJob-status endpoints are rate-limited to 150 requests per 5 minutes per API key; a\n`429` carries `Retry-After`. Each account may have up to 50 generations queued or\nrunning at once via the API; a request beyond that returns `429` (code\n`PENDING_JOBS_LIMIT`) - wait for jobs to finish, then submit again.\n\n### Synchronous responses (deprecated)\nPassing `async: false` in the payload opts into a synchronous response: the call blocks\nuntil the result is ready and returns it as the response body. This is deprecated, but\nthe opt-out is permanent and stays supported.\n\nSynchronous calls run on the same queue: the response carries an `X-Ludo-Job-Id`\nheader, and if the job is still running after 15 minutes you receive `202` with the job\ninstead of an error - resume with `GET /assets/jobs/{id}`.\n\nThe legacy `request_id` + `GET /assets/{type}/results` flow keeps working unchanged.\n\n### Legacy results endpoints\nEach asset type still has a results endpoint:\n- `GET /assets/images/results` - images\n- `GET /assets/sprites/results` - spritesheets\n- `GET /assets/videos/results` - videos\n- `GET /assets/audio/results` - audio\n- `GET /assets/3d-models/results` - 3D models\n\nResults are available for 7 days and return the 100 most recent API-generated assets. The `request_id` query parameter is optional - omit it to list all recent results.\n\n## Directional Sprites\nDirectional Sprites render one 3D model as sprites seen from up to 8 directions that line up. The calls go in this order:\n1. *(Optional)* `POST /assets/3d-model/image` (create3DModelImage): a character image from a `prompt`, or your own `image` redrawn as a 3D render (the prompt then says what to change). Call again for another try.\n2. `POST /assets/3d-model` (create3DModel) with that image and `rig: true`, for a rigged GLB. A model you already have can be rigged with `POST /assets/3d-model/rig` (rigModel).\n   *(Optional)* accessories - a sword, a gun, a shield, a helmet, a backpack: an item GLB (create3DModel, no rig) held by a bone of the model. `POST /assets/sprite/directional-accessory-fit` (fitDirectionalAccessory, free) fits one automatically for its `kind` and answers previews, numeric `checks` and a `placement`; call it again with `size`, `move` and `turn` (relative to the automatic fit) until it looks right. Then `POST /assets/sprite/directional-accessories` (attachDirectionalAccessories, free) with every item's placement: its `model_url` is the model holding them, to pass as `model` below.\n3. *(Optional)* an animation, at most one: a `preset_id` from `GET /assets/sprite/animation-presets` (listAnimationPresets), or an `animation_url` made for this model by animate3DModelPreset or animate3DModel. With none, the sprites are a still pose.\n4. `GET /assets/sprite/directional-styles` (listDirectionalSpriteStyles, free): pick a `style_id` and its `style_params`.\n5. `POST /assets/sprite/directional-preview` (previewDirectionalSprites, free and synchronous): check the look from the directions you want. One preview at a time; a newer one cancels yours.\n6. `POST /assets/sprite/directional` (createDirectionalSprites) for one spritesheet per direction, or `POST /assets/sprite/directional-stills` (createDirectionalStills) for one large image per direction. Pass the GLB as `model`, the animation, the style and up to 8 `directions`.\n\nRead the full guide with `GET /docs?doc=directional-sprites`.\n\n## Asset URL Expiration\nAll generated asset URLs (images, spritesheets, videos, audio, 3D models) are temporary and expire after **7 days**. If you need to keep an asset, download it before it expires.\n\n## Request Format\n- Use `Content-Type: application/json` for all requests\n- All responses are returned in JSON format\n\n## Credits\nEach API call consumes credits from your account. The credit cost varies by endpoint and is documented in each endpoint's description.\n\n> **Note:** All API requests consume credits, even if your subscription includes unlimited credits for the web application. Check your account dashboard for your current API credit balance.\n",
     "x-logo": {
       "url": "/static/logo-small.png",
       "altText": "Logo"
     },
-    "x-model-lineup": "Current models: hydra (Hydra) - Most reliable all-around model, generates audio. griffin-hd (Griffin) - Cinematic videos in any style, with audio, 768p. forge (Forge) - Best for simple body shapes and short actions; may need a few tries. forge-pixel (Forge Pixel) - Best for low-res pixel art animations. Per action - sprite animation: hydra, griffin-hd, forge, forge-pixel; motion transfer: hydra, forge, forge-pixel; spritesheet editing: hydra, griffin-hd, forge, forge-pixel; new view: hydra; video generation: griffin-hd; references to video: griffin-hd; video editing: griffin-hd. LEGACY models, still accepted but scheduled for removal - do not use them for new work: hydra-plus, blitz, eagle, eagle-audio, tango."
+    "x-model-lineup": "Current models: hydra (Hydra) - Best motion and prompt adherence. griffin-hd (Griffin) - Cinematic videos in any style, with audio, 768p. forge (Forge) - Cheapest alternative, for simple body shapes and simple actions. forge-pixel (Forge Pixel) - Best for low-res pixel art animations. Per action - sprite animation: hydra, griffin-hd, forge, forge-pixel; motion transfer: hydra, forge, forge-pixel; spritesheet editing: hydra, griffin-hd, forge, forge-pixel; new view: hydra; video generation: griffin-hd; references to video: griffin-hd; video editing: griffin-hd. LEGACY models, still accepted but scheduled for removal - do not use them for new work: hydra-plus, blitz, eagle, eagle-audio, tango."
   },
   "paths": {
     "/auth/validate-api-key": {
@@ -372,10 +372,10 @@
             "source": "import requests\n\nresponse = requests.post(\n    \"https://api.ludo.ai/api/assets/sprite/animate\",\n    headers={\n        \"Authorization\": \"ApiKey YOUR_API_KEY\",\n        \"Content-Type\": \"application/json\"\n    },\n    json={\n      \"motion_prompt\": \"string\",\n      \"initial_image\": \"<url> OR data:image/png;base64,...\"\n    }\n)\n\nprint(response.json())"
           }
         ],
-        "x-credit-description": "This endpoint's credit cost varies by model and duration (credits/s × seconds, rounded to 0.1; a model's minimum charge applies when that product is lower; a flat-priced model costs the same whatever the duration). Available models: Hydra (3 credits/s, shortest duration 3s, so 9 credits minimum; 3s = 9, 3.5s = 10.5, 4s = 12, 4.5s = 13.5, 5s = 15) · Griffin (flat 12 credits per generation) · Forge (1.5 credits/s; 1s = 1.5, 1.5s = 2.3, 2s = 3, 2.5s = 3.8, 3s = 4.5, 3.5s = 5.3, 4s = 6, 4.5s = 6.8, 5s = 7.5) · Forge Pixel (1.5 credits/s; 1s = 1.5, 1.5s = 2.3, 2s = 3, 2.5s = 3.8, 3s = 4.5, 3.5s = 5.3, 4s = 6, 4.5s = 6.8, 5s = 7.5) · Hydra+ (4 credits/s, shortest duration 3s, so 12 credits minimum; 3s = 12, 3.5s = 14, 4s = 16, 4.5s = 18, 5s = 20) - LEGACY - scheduled for removal, do not use for new work · Blitz (1.9 credits/s, minimum charge 4 credits per generation; 1.2s = 4, 1.5s = 4, 2s = 4, 2.5s = 4.8, 3s = 5.7, 3.5s = 6.7, 4s = 7.6) - LEGACY - scheduled for removal, do not use for new work · Eagle (2.6 credits/s, minimum charge 4 credits per generation; 1s = 4, 2s = 5.2, 3s = 7.8, 4s = 10.4) - LEGACY - scheduled for removal, do not use for new work · Eagle with Audio (3.1 credits/s, minimum charge 4 credits per generation; 1s = 4, 2s = 6.2, 3s = 9.3, 4s = 12.4) - LEGACY - scheduled for removal, do not use for new work",
-        "x-credit-summary": "credits/s × seconds, per model: Hydra 3/s (shortest duration 3s, so 9 credits minimum), Griffin 12 flat, Forge 1.5/s, Forge Pixel 1.5/s, Hydra+ 4/s (shortest duration 3s, so 12 credits minimum) [LEGACY], Blitz 1.9/s (min charge 4 credits) [LEGACY], Eagle 2.6/s (min charge 4 credits) [LEGACY], Eagle with Audio 3.1/s (min charge 4 credits) [LEGACY]; flat = credits per generation; [LEGACY] models are scheduled for removal - do not use them for new work; see this endpoint's full pricing table in the API docs",
-        "description": "Animate a static sprite into a spritesheet driven by a motion text prompt (image-to-spritesheet): supply an initial_image (URL or base64) plus a motion_prompt like \"walking\" or \"attack slash\", and optionally a final_image to interpolate between a start and end frame. Describe the motion exactly and unambiguously, but do not over-describe it: an action the model already knows is one phrase, not a sequence of steps, and the character, art style, background and camera come from the image, not the prompt. For animations driven by up to three keyframes (including a middle frame), use animateSpriteKeyframes instead. The job result is a single sprite result: `spritesheet_url` (the sheet image), `video_url` (an mp4 of the animation - pass it as `video` to transferMotion or as `spritesheet_video_url` to createSpriteAudio; editSpritesheet takes `spritesheet_url`), `num_frames`/`num_cols`/`num_rows` (the grid layout), and, when requested, `gif_url`, `individual_frame_urls` and `spritesheet_with_background_url`. The hydra and hydra-plus models also return `audio_url`, a sound effect for the animation - there is no need to call createSpriteAudio afterwards; forge and forge-pixel produce no audio. The chosen model must support sprite animation and the duration must be valid for it; incompatible model/duration combinations return HTTP 400. Credits are held for the duration you requested when the job is accepted; the final charge is rate × seconds of video generated (legacy models keep their minimum charge), never more than for the duration you requested, and the difference (or everything, if the job fails or is cancelled) is refunded. The returned sheet is then trimmed to its best loop and can run slightly shorter than the video; that trim is not deducted. Choosing a tool: animateSprite (this one) when you can describe the motion in text; transferMotion when you want an exact motion copied from a reference video or one of the named presets from listAnimationPresets (e.g. a standard walk or attack cycle); generatePose first when the source image is not yet in the pose the animation should start from. Omit `model` to run on hydra (the default) - see the `model` field for the per-model rates. Pass an optional request_id to tag the result so you can locate it later via listGenerations (type spritesheet). Requires an API key (user scope). The call returns 202 with a job id - poll getApiJob (pass wait 30 to long-poll) honouring poll_after_ms, until status is succeeded; its result field is exactly the response documented for this operation. Synchronous responses are deprecated but still supported: pass `async: false` to block until the result is ready and receive it as the response body. Synchronous calls run on the same queue: the response carries an X-Ludo-Job-Id header, and a job still running after 15 minutes comes back as 202 with the job instead of an error. Each account may have up to 50 generations queued or running at once via the API; a request beyond that returns 429 (code PENDING_JOBS_LIMIT).\n\n> **Credits:** This endpoint's credit cost varies by model and duration (credits/s × seconds, rounded to 0.1; a model's minimum charge applies when that product is lower; a flat-priced model costs the same whatever the duration). Available models: Hydra (3 credits/s, shortest duration 3s, so 9 credits minimum; 3s = 9, 3.5s = 10.5, 4s = 12, 4.5s = 13.5, 5s = 15) · Griffin (flat 12 credits per generation) · Forge (1.5 credits/s; 1s = 1.5, 1.5s = 2.3, 2s = 3, 2.5s = 3.8, 3s = 4.5, 3.5s = 5.3, 4s = 6, 4.5s = 6.8, 5s = 7.5) · Forge Pixel (1.5 credits/s; 1s = 1.5, 1.5s = 2.3, 2s = 3, 2.5s = 3.8, 3s = 4.5, 3.5s = 5.3, 4s = 6, 4.5s = 6.8, 5s = 7.5) · Hydra+ (4 credits/s, shortest duration 3s, so 12 credits minimum; 3s = 12, 3.5s = 14, 4s = 16, 4.5s = 18, 5s = 20) - LEGACY - scheduled for removal, do not use for new work · Blitz (1.9 credits/s, minimum charge 4 credits per generation; 1.2s = 4, 1.5s = 4, 2s = 4, 2.5s = 4.8, 3s = 5.7, 3.5s = 6.7, 4s = 7.6) - LEGACY - scheduled for removal, do not use for new work · Eagle (2.6 credits/s, minimum charge 4 credits per generation; 1s = 4, 2s = 5.2, 3s = 7.8, 4s = 10.4) - LEGACY - scheduled for removal, do not use for new work · Eagle with Audio (3.1 credits/s, minimum charge 4 credits per generation; 1s = 4, 2s = 6.2, 3s = 9.3, 4s = 12.4) - LEGACY - scheduled for removal, do not use for new work.",
-        "x-mcp-description": "Animate a static sprite into a spritesheet driven by a motion text prompt (image-to-spritesheet): supply an initial_image (URL or base64) plus a motion_prompt like \"walking\" or \"attack slash\", and optionally a final_image to interpolate between a start and end frame. Describe the motion exactly and unambiguously, but do not over-describe it: an action the model already knows is one phrase, not a sequence of steps, and the character, art style, background and camera come from the image, not the prompt. For animations driven by up to three keyframes (including a middle frame), use animateSpriteKeyframes instead. The job result is a single sprite result: `spritesheet_url` (the sheet image), `video_url` (an mp4 of the animation - pass it as `video` to transferMotion or as `spritesheet_video_url` to createSpriteAudio; editSpritesheet takes `spritesheet_url`), `num_frames`/`num_cols`/`num_rows` (the grid layout), and, when requested, `gif_url`, `individual_frame_urls` and `spritesheet_with_background_url`. The hydra and hydra-plus models also return `audio_url`, a sound effect for the animation - there is no need to call createSpriteAudio afterwards; forge and forge-pixel produce no audio. The chosen model must support sprite animation and the duration must be valid for it; incompatible model/duration combinations return HTTP 400. Credits are held for the duration you requested when the job is accepted; the final charge is rate × seconds of video generated (legacy models keep their minimum charge), never more than for the duration you requested, and the difference (or everything, if the job fails or is cancelled) is refunded. The returned sheet is then trimmed to its best loop and can run slightly shorter than the video; that trim is not deducted. Choosing a tool: animateSprite (this one) when you can describe the motion in text; transferMotion when you want an exact motion copied from a reference video or one of the named presets from listAnimationPresets (e.g. a standard walk or attack cycle); generatePose first when the source image is not yet in the pose the animation should start from. Omit `model` to run on hydra (the default) - see the `model` field for the per-model rates. Pass an optional request_id to tag the result so you can locate it later via listGenerations (type spritesheet). Requires an API key (user scope). The call returns 202 with a job id - poll getApiJob (pass wait 30 to long-poll) honouring poll_after_ms, until status is succeeded; its result field is exactly the response documented for this operation. Synchronous responses are deprecated but still supported: pass `async: false` to block until the result is ready and receive it as the response body. Synchronous calls run on the same queue: the response carries an X-Ludo-Job-Id header, and a job still running after 15 minutes comes back as 202 with the job instead of an error. Each account may have up to 50 generations queued or running at once via the API; a request beyond that returns 429 (code PENDING_JOBS_LIMIT).\n\nCredits: credits/s × seconds, per model: Hydra 3/s (shortest duration 3s, so 9 credits minimum), Griffin 12 flat, Forge 1.5/s, Forge Pixel 1.5/s, Hydra+ 4/s (shortest duration 3s, so 12 credits minimum) [LEGACY], Blitz 1.9/s (min charge 4 credits) [LEGACY], Eagle 2.6/s (min charge 4 credits) [LEGACY], Eagle with Audio 3.1/s (min charge 4 credits) [LEGACY]; flat = credits per generation; [LEGACY] models are scheduled for removal - do not use them for new work; see this endpoint's full pricing table in the API docs."
+        "x-credit-description": "This endpoint's credit cost varies by model and duration (credits/s × seconds, rounded to 0.1; a model's minimum charge applies when that product is lower; a flat-priced model costs the same whatever the duration). Available models: Hydra (3 credits/s, shortest duration 3s, so 9 credits minimum; 3s = 9, 3.5s = 10.5, 4s = 12, 4.5s = 13.5, 5s = 15) · Griffin (flat 10 credits per generation) · Forge (1.5 credits/s; 1s = 1.5, 1.5s = 2.3, 2s = 3, 2.5s = 3.8, 3s = 4.5, 3.5s = 5.3, 4s = 6, 4.5s = 6.8, 5s = 7.5) · Forge Pixel (1.5 credits/s; 1s = 1.5, 1.5s = 2.3, 2s = 3, 2.5s = 3.8, 3s = 4.5, 3.5s = 5.3, 4s = 6, 4.5s = 6.8, 5s = 7.5) · Hydra+ (4 credits/s, shortest duration 3s, so 12 credits minimum; 3s = 12, 3.5s = 14, 4s = 16, 4.5s = 18, 5s = 20) - LEGACY - scheduled for removal, do not use for new work · Blitz (1.9 credits/s, minimum charge 4 credits per generation; 1.2s = 4, 1.5s = 4, 2s = 4, 2.5s = 4.8, 3s = 5.7, 3.5s = 6.7, 4s = 7.6) - LEGACY - scheduled for removal, do not use for new work · Eagle (2.6 credits/s, minimum charge 4 credits per generation; 1s = 4, 2s = 5.2, 3s = 7.8, 4s = 10.4) - LEGACY - scheduled for removal, do not use for new work · Eagle with Audio (3.1 credits/s, minimum charge 4 credits per generation; 1s = 4, 2s = 6.2, 3s = 9.3, 4s = 12.4) - LEGACY - scheduled for removal, do not use for new work",
+        "x-credit-summary": "credits/s × seconds, per model: Hydra 3/s (shortest duration 3s, so 9 credits minimum), Griffin 10 flat, Forge 1.5/s, Forge Pixel 1.5/s, Hydra+ 4/s (shortest duration 3s, so 12 credits minimum) [LEGACY], Blitz 1.9/s (min charge 4 credits) [LEGACY], Eagle 2.6/s (min charge 4 credits) [LEGACY], Eagle with Audio 3.1/s (min charge 4 credits) [LEGACY]; flat = credits per generation; [LEGACY] models are scheduled for removal - do not use them for new work; see this endpoint's full pricing table in the API docs",
+        "description": "Animate a static sprite into a spritesheet driven by a motion text prompt (image-to-spritesheet): supply an initial_image (URL or base64) plus a motion_prompt like \"walking\" or \"attack slash\", and optionally a final_image to interpolate between a start and end frame. Describe the motion exactly and unambiguously, but do not over-describe it: an action the model already knows is one phrase, not a sequence of steps, and the character, art style, background and camera come from the image, not the prompt. For animations driven by up to three keyframes (including a middle frame), use animateSpriteKeyframes instead. The job result is a single sprite result: `spritesheet_url` (the sheet image), `video_url` (an mp4 of the animation - pass it as `video` to transferMotion or as `spritesheet_video_url` to createSpriteAudio; editSpritesheet takes `spritesheet_url`), `num_frames`/`num_cols`/`num_rows` (the grid layout), and, when requested, `gif_url`, `individual_frame_urls` and `spritesheet_with_background_url`. The hydra and hydra-plus models also return `audio_url`, a sound effect for the animation - there is no need to call createSpriteAudio afterwards; forge and forge-pixel produce no audio. The chosen model must support sprite animation and the duration must be valid for it; incompatible model/duration combinations return HTTP 400. Credits are held for the duration you requested when the job is accepted; the final charge is rate × seconds of video generated (legacy models keep their minimum charge), never more than for the duration you requested, and the difference (or everything, if the job fails or is cancelled) is refunded. The returned sheet is then trimmed to its best loop and can run slightly shorter than the video; that trim is not deducted. Choosing a tool: animateSprite (this one) when you can describe the motion in text; transferMotion when you want an exact motion copied from a reference video or one of the named presets from listAnimationPresets (e.g. a standard walk or attack cycle); generatePose first when the source image is not yet in the pose the animation should start from. Omit `model` to run on hydra (the default) - see the `model` field for the per-model rates. Pass an optional request_id to tag the result so you can locate it later via listGenerations (type spritesheet). Requires an API key (user scope). The call returns 202 with a job id - poll getApiJob (pass wait 30 to long-poll) honouring poll_after_ms, until status is succeeded; its result field is exactly the response documented for this operation. Synchronous responses are deprecated but still supported: pass `async: false` to block until the result is ready and receive it as the response body. Synchronous calls run on the same queue: the response carries an X-Ludo-Job-Id header, and a job still running after 15 minutes comes back as 202 with the job instead of an error. Each account may have up to 50 generations queued or running at once via the API; a request beyond that returns 429 (code PENDING_JOBS_LIMIT).\n\n> **Credits:** This endpoint's credit cost varies by model and duration (credits/s × seconds, rounded to 0.1; a model's minimum charge applies when that product is lower; a flat-priced model costs the same whatever the duration). Available models: Hydra (3 credits/s, shortest duration 3s, so 9 credits minimum; 3s = 9, 3.5s = 10.5, 4s = 12, 4.5s = 13.5, 5s = 15) · Griffin (flat 10 credits per generation) · Forge (1.5 credits/s; 1s = 1.5, 1.5s = 2.3, 2s = 3, 2.5s = 3.8, 3s = 4.5, 3.5s = 5.3, 4s = 6, 4.5s = 6.8, 5s = 7.5) · Forge Pixel (1.5 credits/s; 1s = 1.5, 1.5s = 2.3, 2s = 3, 2.5s = 3.8, 3s = 4.5, 3.5s = 5.3, 4s = 6, 4.5s = 6.8, 5s = 7.5) · Hydra+ (4 credits/s, shortest duration 3s, so 12 credits minimum; 3s = 12, 3.5s = 14, 4s = 16, 4.5s = 18, 5s = 20) - LEGACY - scheduled for removal, do not use for new work · Blitz (1.9 credits/s, minimum charge 4 credits per generation; 1.2s = 4, 1.5s = 4, 2s = 4, 2.5s = 4.8, 3s = 5.7, 3.5s = 6.7, 4s = 7.6) - LEGACY - scheduled for removal, do not use for new work · Eagle (2.6 credits/s, minimum charge 4 credits per generation; 1s = 4, 2s = 5.2, 3s = 7.8, 4s = 10.4) - LEGACY - scheduled for removal, do not use for new work · Eagle with Audio (3.1 credits/s, minimum charge 4 credits per generation; 1s = 4, 2s = 6.2, 3s = 9.3, 4s = 12.4) - LEGACY - scheduled for removal, do not use for new work.",
+        "x-mcp-description": "Animate a static sprite into a spritesheet driven by a motion text prompt (image-to-spritesheet): supply an initial_image (URL or base64) plus a motion_prompt like \"walking\" or \"attack slash\", and optionally a final_image to interpolate between a start and end frame. Describe the motion exactly and unambiguously, but do not over-describe it: an action the model already knows is one phrase, not a sequence of steps, and the character, art style, background and camera come from the image, not the prompt. For animations driven by up to three keyframes (including a middle frame), use animateSpriteKeyframes instead. The job result is a single sprite result: `spritesheet_url` (the sheet image), `video_url` (an mp4 of the animation - pass it as `video` to transferMotion or as `spritesheet_video_url` to createSpriteAudio; editSpritesheet takes `spritesheet_url`), `num_frames`/`num_cols`/`num_rows` (the grid layout), and, when requested, `gif_url`, `individual_frame_urls` and `spritesheet_with_background_url`. The hydra and hydra-plus models also return `audio_url`, a sound effect for the animation - there is no need to call createSpriteAudio afterwards; forge and forge-pixel produce no audio. The chosen model must support sprite animation and the duration must be valid for it; incompatible model/duration combinations return HTTP 400. Credits are held for the duration you requested when the job is accepted; the final charge is rate × seconds of video generated (legacy models keep their minimum charge), never more than for the duration you requested, and the difference (or everything, if the job fails or is cancelled) is refunded. The returned sheet is then trimmed to its best loop and can run slightly shorter than the video; that trim is not deducted. Choosing a tool: animateSprite (this one) when you can describe the motion in text; transferMotion when you want an exact motion copied from a reference video or one of the named presets from listAnimationPresets (e.g. a standard walk or attack cycle); generatePose first when the source image is not yet in the pose the animation should start from. Omit `model` to run on hydra (the default) - see the `model` field for the per-model rates. Pass an optional request_id to tag the result so you can locate it later via listGenerations (type spritesheet). Requires an API key (user scope). The call returns 202 with a job id - poll getApiJob (pass wait 30 to long-poll) honouring poll_after_ms, until status is succeeded; its result field is exactly the response documented for this operation. Synchronous responses are deprecated but still supported: pass `async: false` to block until the result is ready and receive it as the response body. Synchronous calls run on the same queue: the response carries an X-Ludo-Job-Id header, and a job still running after 15 minutes comes back as 202 with the job instead of an error. Each account may have up to 50 generations queued or running at once via the API; a request beyond that returns 429 (code PENDING_JOBS_LIMIT).\n\nCredits: credits/s × seconds, per model: Hydra 3/s (shortest duration 3s, so 9 credits minimum), Griffin 10 flat, Forge 1.5/s, Forge Pixel 1.5/s, Hydra+ 4/s (shortest duration 3s, so 12 credits minimum) [LEGACY], Blitz 1.9/s (min charge 4 credits) [LEGACY], Eagle 2.6/s (min charge 4 credits) [LEGACY], Eagle with Audio 3.1/s (min charge 4 credits) [LEGACY]; flat = credits per generation; [LEGACY] models are scheduled for removal - do not use them for new work; see this endpoint's full pricing table in the API docs."
       }
     },
     "/assets/sprite/animate-keyframes": {
@@ -457,10 +457,10 @@
             "source": "import requests\n\nresponse = requests.post(\n    \"https://api.ludo.ai/api/assets/sprite/animate-keyframes\",\n    headers={\n        \"Authorization\": \"ApiKey YOUR_API_KEY\",\n        \"Content-Type\": \"application/json\"\n    },\n    json={\n      \"initial_image\": \"<url> OR data:image/png;base64,...\"\n    }\n)\n\nprint(response.json())"
           }
         ],
-        "x-credit-description": "This endpoint's credit cost varies by model and duration (credits/s × seconds, rounded to 0.1; a model's minimum charge applies when that product is lower; a flat-priced model costs the same whatever the duration). Available models: Hydra (3 credits/s, shortest duration 3s, so 9 credits minimum; 3s = 9, 3.5s = 10.5, 4s = 12, 4.5s = 13.5, 5s = 15) · Griffin (flat 12 credits per generation) · Forge (1.5 credits/s; 1s = 1.5, 1.5s = 2.3, 2s = 3, 2.5s = 3.8, 3s = 4.5, 3.5s = 5.3, 4s = 6, 4.5s = 6.8, 5s = 7.5) · Forge Pixel (1.5 credits/s; 1s = 1.5, 1.5s = 2.3, 2s = 3, 2.5s = 3.8, 3s = 4.5, 3.5s = 5.3, 4s = 6, 4.5s = 6.8, 5s = 7.5) · Hydra+ (4 credits/s, shortest duration 3s, so 12 credits minimum; 3s = 12, 3.5s = 14, 4s = 16, 4.5s = 18, 5s = 20) - LEGACY - scheduled for removal, do not use for new work",
-        "x-credit-summary": "credits/s × seconds, per model: Hydra 3/s (shortest duration 3s, so 9 credits minimum), Griffin 12 flat, Forge 1.5/s, Forge Pixel 1.5/s, Hydra+ 4/s (shortest duration 3s, so 12 credits minimum) [LEGACY]; flat = credits per generation; [LEGACY] models are scheduled for removal - do not use them for new work; see this endpoint's full pricing table in the API docs",
-        "description": "Animate a sprite through up to three fixed keyframes - initial_image, middle_image and final_image (each a URL or base64) - producing a spritesheet that interpolates through the provided frames in order. initial_image is required: the animation starts from it, and middle_image and final_image add keyframes after it (either may be omitted). The motion_prompt is optional here - when omitted, the motion is derived purely from the keyframes. Runs on hydra (default; also returns `audio_url`), hydra-plus (hydra with finer detail, also returns `audio_url`), forge, or forge-pixel for pixel-art sprites - the models that support a middle keyframe; any other model returns HTTP 400. For just a start and end frame, animateSprite with `final_image` does the same job. The job result is the same sprite result as animateSprite (`spritesheet_url`, `video_url`, grid fields, optional GIF and frame URLs, `audio_url` on hydra and hydra-plus). Credits are held for the duration you requested when the job is accepted; the final charge is rate × seconds of video generated, never more than for the duration you requested, and the difference (or everything, if the job fails or is cancelled) is refunded. The returned sheet is then trimmed to its best loop and can run slightly shorter than the video; that trim is not deducted. Use animateSprite instead for the classic single-image + text-prompt animation. Pass an optional request_id to tag the result so you can locate it later via listGenerations (type spritesheet). Requires an API key (user scope). The call returns 202 with a job id - poll getApiJob (pass wait 30 to long-poll) honouring poll_after_ms, until status is succeeded; its result field is exactly the response documented for this operation. Synchronous responses are deprecated but still supported: pass `async: false` to block until the result is ready and receive it as the response body. Synchronous calls run on the same queue: the response carries an X-Ludo-Job-Id header, and a job still running after 15 minutes comes back as 202 with the job instead of an error. Each account may have up to 50 generations queued or running at once via the API; a request beyond that returns 429 (code PENDING_JOBS_LIMIT).\n\n> **Credits:** This endpoint's credit cost varies by model and duration (credits/s × seconds, rounded to 0.1; a model's minimum charge applies when that product is lower; a flat-priced model costs the same whatever the duration). Available models: Hydra (3 credits/s, shortest duration 3s, so 9 credits minimum; 3s = 9, 3.5s = 10.5, 4s = 12, 4.5s = 13.5, 5s = 15) · Griffin (flat 12 credits per generation) · Forge (1.5 credits/s; 1s = 1.5, 1.5s = 2.3, 2s = 3, 2.5s = 3.8, 3s = 4.5, 3.5s = 5.3, 4s = 6, 4.5s = 6.8, 5s = 7.5) · Forge Pixel (1.5 credits/s; 1s = 1.5, 1.5s = 2.3, 2s = 3, 2.5s = 3.8, 3s = 4.5, 3.5s = 5.3, 4s = 6, 4.5s = 6.8, 5s = 7.5) · Hydra+ (4 credits/s, shortest duration 3s, so 12 credits minimum; 3s = 12, 3.5s = 14, 4s = 16, 4.5s = 18, 5s = 20) - LEGACY - scheduled for removal, do not use for new work.",
-        "x-mcp-description": "Animate a sprite through up to three fixed keyframes - initial_image, middle_image and final_image (each a URL or base64) - producing a spritesheet that interpolates through the provided frames in order. initial_image is required: the animation starts from it, and middle_image and final_image add keyframes after it (either may be omitted). The motion_prompt is optional here - when omitted, the motion is derived purely from the keyframes. Runs on hydra (default; also returns `audio_url`), hydra-plus (hydra with finer detail, also returns `audio_url`), forge, or forge-pixel for pixel-art sprites - the models that support a middle keyframe; any other model returns HTTP 400. For just a start and end frame, animateSprite with `final_image` does the same job. The job result is the same sprite result as animateSprite (`spritesheet_url`, `video_url`, grid fields, optional GIF and frame URLs, `audio_url` on hydra and hydra-plus). Credits are held for the duration you requested when the job is accepted; the final charge is rate × seconds of video generated, never more than for the duration you requested, and the difference (or everything, if the job fails or is cancelled) is refunded. The returned sheet is then trimmed to its best loop and can run slightly shorter than the video; that trim is not deducted. Use animateSprite instead for the classic single-image + text-prompt animation. Pass an optional request_id to tag the result so you can locate it later via listGenerations (type spritesheet). Requires an API key (user scope). The call returns 202 with a job id - poll getApiJob (pass wait 30 to long-poll) honouring poll_after_ms, until status is succeeded; its result field is exactly the response documented for this operation. Synchronous responses are deprecated but still supported: pass `async: false` to block until the result is ready and receive it as the response body. Synchronous calls run on the same queue: the response carries an X-Ludo-Job-Id header, and a job still running after 15 minutes comes back as 202 with the job instead of an error. Each account may have up to 50 generations queued or running at once via the API; a request beyond that returns 429 (code PENDING_JOBS_LIMIT).\n\nCredits: credits/s × seconds, per model: Hydra 3/s (shortest duration 3s, so 9 credits minimum), Griffin 12 flat, Forge 1.5/s, Forge Pixel 1.5/s, Hydra+ 4/s (shortest duration 3s, so 12 credits minimum) [LEGACY]; flat = credits per generation; [LEGACY] models are scheduled for removal - do not use them for new work; see this endpoint's full pricing table in the API docs."
+        "x-credit-description": "This endpoint's credit cost varies by model and duration (credits/s × seconds, rounded to 0.1; a model's minimum charge applies when that product is lower; a flat-priced model costs the same whatever the duration). Available models: Hydra (3 credits/s, shortest duration 3s, so 9 credits minimum; 3s = 9, 3.5s = 10.5, 4s = 12, 4.5s = 13.5, 5s = 15) · Griffin (flat 10 credits per generation) · Forge (1.5 credits/s; 1s = 1.5, 1.5s = 2.3, 2s = 3, 2.5s = 3.8, 3s = 4.5, 3.5s = 5.3, 4s = 6, 4.5s = 6.8, 5s = 7.5) · Forge Pixel (1.5 credits/s; 1s = 1.5, 1.5s = 2.3, 2s = 3, 2.5s = 3.8, 3s = 4.5, 3.5s = 5.3, 4s = 6, 4.5s = 6.8, 5s = 7.5) · Hydra+ (4 credits/s, shortest duration 3s, so 12 credits minimum; 3s = 12, 3.5s = 14, 4s = 16, 4.5s = 18, 5s = 20) - LEGACY - scheduled for removal, do not use for new work",
+        "x-credit-summary": "credits/s × seconds, per model: Hydra 3/s (shortest duration 3s, so 9 credits minimum), Griffin 10 flat, Forge 1.5/s, Forge Pixel 1.5/s, Hydra+ 4/s (shortest duration 3s, so 12 credits minimum) [LEGACY]; flat = credits per generation; [LEGACY] models are scheduled for removal - do not use them for new work; see this endpoint's full pricing table in the API docs",
+        "description": "Animate a sprite through up to three fixed keyframes - initial_image, middle_image and final_image (each a URL or base64) - producing a spritesheet that interpolates through the provided frames in order. initial_image is required: the animation starts from it, and middle_image and final_image add keyframes after it (either may be omitted). The motion_prompt is optional here - when omitted, the motion is derived purely from the keyframes. Runs on hydra (default; also returns `audio_url`), hydra-plus (hydra with finer detail, also returns `audio_url`), forge, or forge-pixel for pixel-art sprites - the models that support a middle keyframe; any other model returns HTTP 400. For just a start and end frame, animateSprite with `final_image` does the same job. The job result is the same sprite result as animateSprite (`spritesheet_url`, `video_url`, grid fields, optional GIF and frame URLs, `audio_url` on hydra and hydra-plus). Credits are held for the duration you requested when the job is accepted; the final charge is rate × seconds of video generated, never more than for the duration you requested, and the difference (or everything, if the job fails or is cancelled) is refunded. The returned sheet is then trimmed to its best loop and can run slightly shorter than the video; that trim is not deducted. Use animateSprite instead for the classic single-image + text-prompt animation. Pass an optional request_id to tag the result so you can locate it later via listGenerations (type spritesheet). Requires an API key (user scope). The call returns 202 with a job id - poll getApiJob (pass wait 30 to long-poll) honouring poll_after_ms, until status is succeeded; its result field is exactly the response documented for this operation. Synchronous responses are deprecated but still supported: pass `async: false` to block until the result is ready and receive it as the response body. Synchronous calls run on the same queue: the response carries an X-Ludo-Job-Id header, and a job still running after 15 minutes comes back as 202 with the job instead of an error. Each account may have up to 50 generations queued or running at once via the API; a request beyond that returns 429 (code PENDING_JOBS_LIMIT).\n\n> **Credits:** This endpoint's credit cost varies by model and duration (credits/s × seconds, rounded to 0.1; a model's minimum charge applies when that product is lower; a flat-priced model costs the same whatever the duration). Available models: Hydra (3 credits/s, shortest duration 3s, so 9 credits minimum; 3s = 9, 3.5s = 10.5, 4s = 12, 4.5s = 13.5, 5s = 15) · Griffin (flat 10 credits per generation) · Forge (1.5 credits/s; 1s = 1.5, 1.5s = 2.3, 2s = 3, 2.5s = 3.8, 3s = 4.5, 3.5s = 5.3, 4s = 6, 4.5s = 6.8, 5s = 7.5) · Forge Pixel (1.5 credits/s; 1s = 1.5, 1.5s = 2.3, 2s = 3, 2.5s = 3.8, 3s = 4.5, 3.5s = 5.3, 4s = 6, 4.5s = 6.8, 5s = 7.5) · Hydra+ (4 credits/s, shortest duration 3s, so 12 credits minimum; 3s = 12, 3.5s = 14, 4s = 16, 4.5s = 18, 5s = 20) - LEGACY - scheduled for removal, do not use for new work.",
+        "x-mcp-description": "Animate a sprite through up to three fixed keyframes - initial_image, middle_image and final_image (each a URL or base64) - producing a spritesheet that interpolates through the provided frames in order. initial_image is required: the animation starts from it, and middle_image and final_image add keyframes after it (either may be omitted). The motion_prompt is optional here - when omitted, the motion is derived purely from the keyframes. Runs on hydra (default; also returns `audio_url`), hydra-plus (hydra with finer detail, also returns `audio_url`), forge, or forge-pixel for pixel-art sprites - the models that support a middle keyframe; any other model returns HTTP 400. For just a start and end frame, animateSprite with `final_image` does the same job. The job result is the same sprite result as animateSprite (`spritesheet_url`, `video_url`, grid fields, optional GIF and frame URLs, `audio_url` on hydra and hydra-plus). Credits are held for the duration you requested when the job is accepted; the final charge is rate × seconds of video generated, never more than for the duration you requested, and the difference (or everything, if the job fails or is cancelled) is refunded. The returned sheet is then trimmed to its best loop and can run slightly shorter than the video; that trim is not deducted. Use animateSprite instead for the classic single-image + text-prompt animation. Pass an optional request_id to tag the result so you can locate it later via listGenerations (type spritesheet). Requires an API key (user scope). The call returns 202 with a job id - poll getApiJob (pass wait 30 to long-poll) honouring poll_after_ms, until status is succeeded; its result field is exactly the response documented for this operation. Synchronous responses are deprecated but still supported: pass `async: false` to block until the result is ready and receive it as the response body. Synchronous calls run on the same queue: the response carries an X-Ludo-Job-Id header, and a job still running after 15 minutes comes back as 202 with the job instead of an error. Each account may have up to 50 generations queued or running at once via the API; a request beyond that returns 429 (code PENDING_JOBS_LIMIT).\n\nCredits: credits/s × seconds, per model: Hydra 3/s (shortest duration 3s, so 9 credits minimum), Griffin 10 flat, Forge 1.5/s, Forge Pixel 1.5/s, Hydra+ 4/s (shortest duration 3s, so 12 credits minimum) [LEGACY]; flat = credits per generation; [LEGACY] models are scheduled for removal - do not use them for new work; see this endpoint's full pricing table in the API docs."
       }
     },
     "/assets/sprite/pose": {
@@ -1020,10 +1020,10 @@
             "source": "import requests\n\nresponse = requests.post(\n    \"https://api.ludo.ai/api/assets/sprite/edit\",\n    headers={\n        \"Authorization\": \"ApiKey YOUR_API_KEY\",\n        \"Content-Type\": \"application/json\"\n    },\n    json={\n      \"spritesheet_url\": \"<url>\"\n    }\n)\n\nprint(response.json())"
           }
         ],
-        "x-credit-description": "This endpoint's credit cost varies by model and duration (credits/s × seconds, rounded to 0.1; a model's minimum charge applies when that product is lower; a flat-priced model costs the same whatever the duration). Available models: Hydra (3 credits/s; 3s = 9, 3.5s = 10.5, 4s = 12, 4.5s = 13.5, 5s = 15) · Griffin (flat 12 credits per generation) · Forge (2 credits/s; 1s = 2, 1.5s = 3, 2s = 4, 2.5s = 5, 3s = 6, 3.5s = 7, 4s = 8, 4.5s = 9, 5s = 10) · Forge Pixel (2 credits/s; 1s = 2, 1.5s = 3, 2s = 4, 2.5s = 5, 3s = 6, 3.5s = 7, 4s = 8, 4.5s = 9, 5s = 10). edit_mode \"fix_loop\" / \"outpaint\": flat 1 credit per second of output, capped at the source spritesheet's video length, no minimum, model ignored; edit_mode \"improve\" (hydra spritesheets only): flat 1 credit per second of output, same terms; edit_mode \"prompt\": per model as listed",
-        "x-credit-summary": "edit_mode \"fix_loop\" / \"outpaint\": flat 1 credit per second of output, capped at the source spritesheet's video length, no minimum, model ignored; edit_mode \"improve\" (hydra spritesheets only): flat 1 credit per second of output, same terms; edit_mode \"prompt\": per model as listed - credits/s × seconds, per model: Hydra 3/s, Griffin 12 flat, Forge 2/s, Forge Pixel 2/s; flat = credits per generation; see this endpoint's full pricing table in the API docs",
-        "description": "Edit a previously generated spritesheet: re-prompt its underlying animation (edit_mode \"prompt\"), extend the frame beyond its borders (\"outpaint\"), repair a bad loop (\"fix_loop\"), or re-render it with finer detail (\"improve\": the extra pass hydra-plus runs when it generates, on a spritesheet generated with hydra only - any other returns HTTP 400; a sheet generated on hydra-plus already has it). Pass the `spritesheet_url` you received from `animateSprite`, `animateSpriteKeyframes`, `transferMotion`, or an earlier edit - it must be a spritesheet you generated within the last 7 days; arbitrary external images are not accepted. Omit `duration`, `frames`, `frame_size`, `crop` and `model` to keep the source spritesheet's values. A `prompt` is required for edit_mode \"prompt\", optional for \"outpaint\", and not accepted for \"fix_loop\" or \"improve\"; optionally add up to 5 reference `images` (URL or base64) to guide the edit. The job result is the same result shape as animateSprite (spritesheet URL, frame layout, optional GIF or individual frames). Credits are held when the job is accepted; the final charge is rate × seconds of video generated, never more than was held, and the difference (or everything, if the job fails or is cancelled) is refunded. The returned sheet is then trimmed to its best loop and can run slightly shorter than the video; that trim is not deducted. Prompt edits are priced per model (credits/second × duration) and held for the duration you requested; \"outpaint\", \"fix_loop\" and \"improve\" run a lighter pipeline in which `model` is ignored and are billed at a flat 1 credit per second of output, held for and capped at the length of the source spritesheet's video (`duration` does not change their price). Outpaint decides the extra margin itself - there is no amount parameter. The result carries the same fields as animateSprite (`spritesheet_url`, `video_url`, grid fields); new audio is generated only by prompt edits on hydra: \"fix_loop\", \"outpaint\" and \"improve\" do not regenerate it, and their result carries the source spritesheet's `audio_url` when it had one. Pass an optional `request_id` to tag the result for later retrieval via listGenerations (type spritesheet). Requires an API key (user scope). The call returns 202 with a job id - poll getApiJob (pass wait 30 to long-poll) honouring poll_after_ms, until status is succeeded; its result field is exactly the response documented for this operation. Synchronous responses are deprecated but still supported: pass `async: false` to block until the result is ready and receive it as the response body. Synchronous calls run on the same queue: the response carries an X-Ludo-Job-Id header, and a job still running after 15 minutes comes back as 202 with the job instead of an error. Each account may have up to 50 generations queued or running at once via the API; a request beyond that returns 429 (code PENDING_JOBS_LIMIT).\n\n> **Credits:** This endpoint's credit cost varies by model and duration (credits/s × seconds, rounded to 0.1; a model's minimum charge applies when that product is lower; a flat-priced model costs the same whatever the duration). Available models: Hydra (3 credits/s; 3s = 9, 3.5s = 10.5, 4s = 12, 4.5s = 13.5, 5s = 15) · Griffin (flat 12 credits per generation) · Forge (2 credits/s; 1s = 2, 1.5s = 3, 2s = 4, 2.5s = 5, 3s = 6, 3.5s = 7, 4s = 8, 4.5s = 9, 5s = 10) · Forge Pixel (2 credits/s; 1s = 2, 1.5s = 3, 2s = 4, 2.5s = 5, 3s = 6, 3.5s = 7, 4s = 8, 4.5s = 9, 5s = 10). edit_mode \"fix_loop\" / \"outpaint\": flat 1 credit per second of output, capped at the source spritesheet's video length, no minimum, model ignored; edit_mode \"improve\" (hydra spritesheets only): flat 1 credit per second of output, same terms; edit_mode \"prompt\": per model as listed.",
-        "x-mcp-description": "Edit a previously generated spritesheet: re-prompt its underlying animation (edit_mode \"prompt\"), extend the frame beyond its borders (\"outpaint\"), repair a bad loop (\"fix_loop\"), or re-render it with finer detail (\"improve\": the extra pass hydra-plus runs when it generates, on a spritesheet generated with hydra only - any other returns HTTP 400; a sheet generated on hydra-plus already has it). Pass the `spritesheet_url` you received from `animateSprite`, `animateSpriteKeyframes`, `transferMotion`, or an earlier edit - it must be a spritesheet you generated within the last 7 days; arbitrary external images are not accepted. Omit `duration`, `frames`, `frame_size`, `crop` and `model` to keep the source spritesheet's values. A `prompt` is required for edit_mode \"prompt\", optional for \"outpaint\", and not accepted for \"fix_loop\" or \"improve\"; optionally add up to 5 reference `images` (URL or base64) to guide the edit. The job result is the same result shape as animateSprite (spritesheet URL, frame layout, optional GIF or individual frames). Credits are held when the job is accepted; the final charge is rate × seconds of video generated, never more than was held, and the difference (or everything, if the job fails or is cancelled) is refunded. The returned sheet is then trimmed to its best loop and can run slightly shorter than the video; that trim is not deducted. Prompt edits are priced per model (credits/second × duration) and held for the duration you requested; \"outpaint\", \"fix_loop\" and \"improve\" run a lighter pipeline in which `model` is ignored and are billed at a flat 1 credit per second of output, held for and capped at the length of the source spritesheet's video (`duration` does not change their price). Outpaint decides the extra margin itself - there is no amount parameter. The result carries the same fields as animateSprite (`spritesheet_url`, `video_url`, grid fields); new audio is generated only by prompt edits on hydra: \"fix_loop\", \"outpaint\" and \"improve\" do not regenerate it, and their result carries the source spritesheet's `audio_url` when it had one. Pass an optional `request_id` to tag the result for later retrieval via listGenerations (type spritesheet). Requires an API key (user scope). The call returns 202 with a job id - poll getApiJob (pass wait 30 to long-poll) honouring poll_after_ms, until status is succeeded; its result field is exactly the response documented for this operation. Synchronous responses are deprecated but still supported: pass `async: false` to block until the result is ready and receive it as the response body. Synchronous calls run on the same queue: the response carries an X-Ludo-Job-Id header, and a job still running after 15 minutes comes back as 202 with the job instead of an error. Each account may have up to 50 generations queued or running at once via the API; a request beyond that returns 429 (code PENDING_JOBS_LIMIT).\n\nCredits: edit_mode \"fix_loop\" / \"outpaint\": flat 1 credit per second of output, capped at the source spritesheet's video length, no minimum, model ignored; edit_mode \"improve\" (hydra spritesheets only): flat 1 credit per second of output, same terms; edit_mode \"prompt\": per model as listed - credits/s × seconds, per model: Hydra 3/s, Griffin 12 flat, Forge 2/s, Forge Pixel 2/s; flat = credits per generation; see this endpoint's full pricing table in the API docs."
+        "x-credit-description": "This endpoint's credit cost varies by model and duration (credits/s × seconds, rounded to 0.1; a model's minimum charge applies when that product is lower; a flat-priced model costs the same whatever the duration). Available models: Hydra (3 credits/s; 3s = 9, 3.5s = 10.5, 4s = 12, 4.5s = 13.5, 5s = 15) · Griffin (flat 10 credits per generation) · Forge (2 credits/s; 1s = 2, 1.5s = 3, 2s = 4, 2.5s = 5, 3s = 6, 3.5s = 7, 4s = 8, 4.5s = 9, 5s = 10) · Forge Pixel (2 credits/s; 1s = 2, 1.5s = 3, 2s = 4, 2.5s = 5, 3s = 6, 3.5s = 7, 4s = 8, 4.5s = 9, 5s = 10). edit_mode \"fix_loop\" / \"outpaint\": flat 1 credit per second of output, capped at the source spritesheet's video length, no minimum, model ignored; edit_mode \"improve\" (hydra spritesheets only): flat 1 credit per second of output, same terms; edit_mode \"prompt\": per model as listed",
+        "x-credit-summary": "edit_mode \"fix_loop\" / \"outpaint\": flat 1 credit per second of output, capped at the source spritesheet's video length, no minimum, model ignored; edit_mode \"improve\" (hydra spritesheets only): flat 1 credit per second of output, same terms; edit_mode \"prompt\": per model as listed - credits/s × seconds, per model: Hydra 3/s, Griffin 10 flat, Forge 2/s, Forge Pixel 2/s; flat = credits per generation; see this endpoint's full pricing table in the API docs",
+        "description": "Edit a previously generated spritesheet: re-prompt its underlying animation (edit_mode \"prompt\"), extend the frame beyond its borders (\"outpaint\"), repair a bad loop (\"fix_loop\"), or re-render it with finer detail (\"improve\": the extra pass hydra-plus runs when it generates, on a spritesheet generated with hydra only - any other returns HTTP 400; a sheet generated on hydra-plus already has it). Pass the `spritesheet_url` you received from `animateSprite`, `animateSpriteKeyframes`, `transferMotion`, or an earlier edit - it must be a spritesheet you generated within the last 7 days; arbitrary external images are not accepted. Omit `duration`, `frames`, `frame_size`, `crop` and `model` to keep the source spritesheet's values. A `prompt` is required for edit_mode \"prompt\", optional for \"outpaint\", and not accepted for \"fix_loop\" or \"improve\"; optionally add up to 5 reference `images` (URL or base64) to guide the edit. The job result is the same result shape as animateSprite (spritesheet URL, frame layout, optional GIF or individual frames). Credits are held when the job is accepted; the final charge is rate × seconds of video generated, never more than was held, and the difference (or everything, if the job fails or is cancelled) is refunded. The returned sheet is then trimmed to its best loop and can run slightly shorter than the video; that trim is not deducted. Prompt edits are priced per model (credits/second × duration) and held for the duration you requested; \"outpaint\", \"fix_loop\" and \"improve\" run a lighter pipeline in which `model` is ignored and are billed at a flat 1 credit per second of output, held for and capped at the length of the source spritesheet's video (`duration` does not change their price). Outpaint decides the extra margin itself - there is no amount parameter. The result carries the same fields as animateSprite (`spritesheet_url`, `video_url`, grid fields); new audio is generated only by prompt edits on hydra: \"fix_loop\", \"outpaint\" and \"improve\" do not regenerate it, and their result carries the source spritesheet's `audio_url` when it had one. Pass an optional `request_id` to tag the result for later retrieval via listGenerations (type spritesheet). Requires an API key (user scope). The call returns 202 with a job id - poll getApiJob (pass wait 30 to long-poll) honouring poll_after_ms, until status is succeeded; its result field is exactly the response documented for this operation. Synchronous responses are deprecated but still supported: pass `async: false` to block until the result is ready and receive it as the response body. Synchronous calls run on the same queue: the response carries an X-Ludo-Job-Id header, and a job still running after 15 minutes comes back as 202 with the job instead of an error. Each account may have up to 50 generations queued or running at once via the API; a request beyond that returns 429 (code PENDING_JOBS_LIMIT).\n\n> **Credits:** This endpoint's credit cost varies by model and duration (credits/s × seconds, rounded to 0.1; a model's minimum charge applies when that product is lower; a flat-priced model costs the same whatever the duration). Available models: Hydra (3 credits/s; 3s = 9, 3.5s = 10.5, 4s = 12, 4.5s = 13.5, 5s = 15) · Griffin (flat 10 credits per generation) · Forge (2 credits/s; 1s = 2, 1.5s = 3, 2s = 4, 2.5s = 5, 3s = 6, 3.5s = 7, 4s = 8, 4.5s = 9, 5s = 10) · Forge Pixel (2 credits/s; 1s = 2, 1.5s = 3, 2s = 4, 2.5s = 5, 3s = 6, 3.5s = 7, 4s = 8, 4.5s = 9, 5s = 10). edit_mode \"fix_loop\" / \"outpaint\": flat 1 credit per second of output, capped at the source spritesheet's video length, no minimum, model ignored; edit_mode \"improve\" (hydra spritesheets only): flat 1 credit per second of output, same terms; edit_mode \"prompt\": per model as listed.",
+        "x-mcp-description": "Edit a previously generated spritesheet: re-prompt its underlying animation (edit_mode \"prompt\"), extend the frame beyond its borders (\"outpaint\"), repair a bad loop (\"fix_loop\"), or re-render it with finer detail (\"improve\": the extra pass hydra-plus runs when it generates, on a spritesheet generated with hydra only - any other returns HTTP 400; a sheet generated on hydra-plus already has it). Pass the `spritesheet_url` you received from `animateSprite`, `animateSpriteKeyframes`, `transferMotion`, or an earlier edit - it must be a spritesheet you generated within the last 7 days; arbitrary external images are not accepted. Omit `duration`, `frames`, `frame_size`, `crop` and `model` to keep the source spritesheet's values. A `prompt` is required for edit_mode \"prompt\", optional for \"outpaint\", and not accepted for \"fix_loop\" or \"improve\"; optionally add up to 5 reference `images` (URL or base64) to guide the edit. The job result is the same result shape as animateSprite (spritesheet URL, frame layout, optional GIF or individual frames). Credits are held when the job is accepted; the final charge is rate × seconds of video generated, never more than was held, and the difference (or everything, if the job fails or is cancelled) is refunded. The returned sheet is then trimmed to its best loop and can run slightly shorter than the video; that trim is not deducted. Prompt edits are priced per model (credits/second × duration) and held for the duration you requested; \"outpaint\", \"fix_loop\" and \"improve\" run a lighter pipeline in which `model` is ignored and are billed at a flat 1 credit per second of output, held for and capped at the length of the source spritesheet's video (`duration` does not change their price). Outpaint decides the extra margin itself - there is no amount parameter. The result carries the same fields as animateSprite (`spritesheet_url`, `video_url`, grid fields); new audio is generated only by prompt edits on hydra: \"fix_loop\", \"outpaint\" and \"improve\" do not regenerate it, and their result carries the source spritesheet's `audio_url` when it had one. Pass an optional `request_id` to tag the result for later retrieval via listGenerations (type spritesheet). Requires an API key (user scope). The call returns 202 with a job id - poll getApiJob (pass wait 30 to long-poll) honouring poll_after_ms, until status is succeeded; its result field is exactly the response documented for this operation. Synchronous responses are deprecated but still supported: pass `async: false` to block until the result is ready and receive it as the response body. Synchronous calls run on the same queue: the response carries an X-Ludo-Job-Id header, and a job still running after 15 minutes comes back as 202 with the job instead of an error. Each account may have up to 50 generations queued or running at once via the API; a request beyond that returns 429 (code PENDING_JOBS_LIMIT).\n\nCredits: edit_mode \"fix_loop\" / \"outpaint\": flat 1 credit per second of output, capped at the source spritesheet's video length, no minimum, model ignored; edit_mode \"improve\" (hydra spritesheets only): flat 1 credit per second of output, same terms; edit_mode \"prompt\": per model as listed - credits/s × seconds, per model: Hydra 3/s, Griffin 10 flat, Forge 2/s, Forge Pixel 2/s; flat = credits per generation; see this endpoint's full pricing table in the API docs."
       }
     },
     "/assets/sprite/rotate-spritesheet": {
@@ -1694,7 +1694,7 @@
             "source": "import requests\n\nresponse = requests.post(\n    \"https://api.ludo.ai/api/assets/sprite/directional-accessories\",\n    headers={\n        \"Authorization\": \"ApiKey YOUR_API_KEY\",\n        \"Content-Type\": \"application/json\"\n    },\n    json={\n      \"model\": \"<url> OR data:model/gltf-binary;base64,...\",\n      \"items\": [\n        \"...\"\n      ]\n    }\n)\n\nprint(response.json())"
           }
         ],
-        "description": "Put accessories on a rigged 3D model for Directional Sprites: up to 8 items, each at the `placement` fitDirectionalAccessory returned (or, without one, at the automatic fit plus the same size/move/turn adjustments). Returns `model_url`, one GLB of the model holding them all (kept 7 days): pass it as `model` to createDirectionalSprites, createDirectionalStills or previewDirectionalSprites. When `model` is the URL of one of your 3D models (as listGenerations or create3DModel returned it), the items are also saved on that model (`saved: true`; `save_on_model: false` skips it), so the Ludo web app's Directional Sprites shows them on it; the list saved replaces the model's previous items. Free (no credits) and synchronous. Requires an API key (user scope)."
+        "description": "Put accessories on a rigged 3D model for Directional Sprites: up to 8 items, each at the `placement` fitDirectionalAccessory returned (or, without one, at the automatic fit plus the same size/move/turn adjustments). Returns `model_url`, one GLB of the model holding them all (kept 7 days): pass it as `model` to createDirectionalSprites, createDirectionalStills or previewDirectionalSprites. When `model` is the URL of one of your 3D models (as listGenerations or create3DModel returned it), the items are also saved on that model (`saved: true`; `save_on_model: false` skips it), so the Ludo web app's Directional Sprites shows them on it. Items the model already had saved stay on it and in the GLB (`kept`), except those held by a bone a new item takes; `keep_saved: false` replaces them all. Free (no credits) and synchronous. Requires an API key (user scope)."
       }
     },
     "/assets/video": {
@@ -2163,6 +2163,81 @@
         "x-credit-summary": "This endpoint consumes 0.5 credits per result",
         "description": "Upscale an image: the same picture at a higher resolution, up to 4x, with the result capped at 2048px on its longest side. The source image (URL or base64) must be below 2048px on its longest side; a larger one is rejected with HTTP 400. The job result is a single image result with a url (not an array). The image is uploaded and validated, and an image larger than 15MB is rejected with HTTP 400. Credits are held when the job is accepted and refunded if it fails or is cancelled. Use upscaleImage to raise the resolution of an image you already have; createImage and editImage make new or changed images instead. Pass an optional request_id to tag the result so you can retrieve it later via listGenerations (type image). Requires an API key (user scope). The call returns 202 with a job id - poll `GET /assets/jobs/{id}`, honouring poll_after_ms or long-polling with wait=30, until status is succeeded; its result field is exactly the response documented for this operation. Synchronous responses are deprecated but still supported: pass `async: false` to block until the result is ready and receive it as the response body. Synchronous calls run on the same queue: the response carries an X-Ludo-Job-Id header, and a job still running after 15 minutes comes back as 202 with the job instead of an error. Each account may have up to 50 generations queued or running at once via the API; a request beyond that returns 429 (code PENDING_JOBS_LIMIT).\n\n> **Credits:** This endpoint consumes 0.5 credits per result.",
         "x-mcp-description": "Upscale an image: the same picture at a higher resolution, up to 4x, with the result capped at 2048px on its longest side. The source image (URL or base64) must be below 2048px on its longest side; a larger one is rejected with HTTP 400. The job result is a single image result with a url (not an array). The image is uploaded and validated, and an image larger than 15MB is rejected with HTTP 400. Credits are held when the job is accepted and refunded if it fails or is cancelled. Use upscaleImage to raise the resolution of an image you already have; createImage and editImage make new or changed images instead. Pass an optional request_id to tag the result so you can retrieve it later via listGenerations (type image). Requires an API key (user scope). The call returns 202 with a job id - poll `GET /assets/jobs/{id}`, honouring poll_after_ms or long-polling with wait=30, until status is succeeded; its result field is exactly the response documented for this operation. Synchronous responses are deprecated but still supported: pass `async: false` to block until the result is ready and receive it as the response body. Synchronous calls run on the same queue: the response carries an X-Ludo-Job-Id header, and a job still running after 15 minutes comes back as 202 with the job instead of an error. Each account may have up to 50 generations queued or running at once via the API; a request beyond that returns 429 (code PENDING_JOBS_LIMIT).\n\nCredits: This endpoint consumes 0.5 credits per result."
+      }
+    },
+    "/assets/image/normal-map": {
+      "post": {
+        "summary": "createNormalMap",
+        "tags": [
+          "Images"
+        ],
+        "operationId": "createNormalMap",
+        "x-cli-name": "normal-map",
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateNormalMapPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NormalMapResult"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Accepted - the generation was queued; poll GET /assets/jobs/{id}. A synchronous (async: false) call still running after 15 minutes also receives this.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicJob"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "Shell",
+            "label": "cURL",
+            "source": "curl -X POST \"https://api.ludo.ai/api/assets/image/normal-map\" \\\n  -H \"Authorization: ApiKey YOUR_API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"image\":\"<url> OR data:image/png;base64,...\"}'"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "JavaScript",
+            "source": "const response = await fetch(\"https://api.ludo.ai/api/assets/image/normal-map\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"ApiKey YOUR_API_KEY\",\n    \"Content-Type\": \"application/json\"\n  },\n  body: JSON.stringify({\n    \"image\": \"<url> OR data:image/png;base64,...\"\n  })\n});\n\nconst data = await response.json();\nconsole.log(data);"
+          },
+          {
+            "lang": "Python",
+            "label": "Python",
+            "source": "import requests\n\nresponse = requests.post(\n    \"https://api.ludo.ai/api/assets/image/normal-map\",\n    headers={\n        \"Authorization\": \"ApiKey YOUR_API_KEY\",\n        \"Content-Type\": \"application/json\"\n    },\n    json={\n      \"image\": \"<url> OR data:image/png;base64,...\"\n    }\n)\n\nprint(response.json())"
+          }
+        ],
+        "description": "Make the normal map of an image, for 2.5D lighting: a lossless WebP of the same size and alpha as the image (transparent pixels are flat), in the OpenGL convention (red = right, green = up, blue = towards the viewer; Unity and Godot read it as is, Unreal expects green flipped). Pixel art gets one normal per art pixel, and the map of a seamless tile tiles the same way. An image you generated on Ludo is read with its type and pixel grid; for any other image pixel art is detected. Free, and limited to 20 calls per 5 minutes, 120 an hour and 1000 a day (HTTP 429 beyond). To get maps with new images or spritesheets, pass save_normals: true to the generation instead. The image is uploaded and validated, and an image larger than 15MB is rejected with HTTP 400. Requires an API key (user scope). The call returns 202 with a job id - poll `GET /assets/jobs/{id}`, honouring poll_after_ms or long-polling with wait=30, until status is succeeded; its result field is exactly the response documented for this operation. Synchronous responses are deprecated but still supported: pass `async: false` to block until the result is ready and receive it as the response body. Synchronous calls run on the same queue: the response carries an X-Ludo-Job-Id header, and a job still running after 15 minutes comes back as 202 with the job instead of an error. Each account may have up to 50 generations queued or running at once via the API; a request beyond that returns 429 (code PENDING_JOBS_LIMIT)."
       }
     },
     "/assets/image/pixel-art": {
@@ -4335,6 +4410,7 @@
               "sprite-vfx",
               "sprite-tiling-horizontal",
               "sprite-tiling-vertical",
+              "scatter-pattern",
               "icon",
               "logo",
               "ui_asset",
@@ -4443,6 +4519,12 @@
             "description": "Rewrites your prompt behind the scenes into the form the model works best with. Leave it on (the default). Turning it off does not give you more control - it usually gives worse results. Do not disable it unless you really know what you are doing and have tested your prompts extensively.",
             "example": true
           },
+          "save_normals": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also make a normal map of each image, for 2.5D lighting, returned as normal_map_url. It is a lossless WebP of the same size and alpha as the image, in the OpenGL convention (red = right, green = up, blue = towards the viewer; Unity and Godot read it as is, Unreal expects green flipped). Pixel art gets one normal per art pixel. Free; when a map could not be made, its normal_map_url is absent.",
+            "example": false
+          },
           "request_id": {
             "type": "string",
             "description": "Optional client-provided identifier, unique per request. Re-sending the same request_id returns the existing job instead of generating again. Also usable as the request_id filter of listGenerations."
@@ -4460,6 +4542,11 @@
         "properties": {
           "url": {
             "type": "string",
+            "example": "<url>"
+          },
+          "normal_map_url": {
+            "type": "string",
+            "description": "The image's normal map (lossless WebP), when save_normals was true and the map could be made.",
             "example": "<url>"
           },
           "request_id": {
@@ -4566,6 +4653,7 @@
               "sprite-vfx",
               "sprite-tiling-horizontal",
               "sprite-tiling-vertical",
+              "scatter-pattern",
               "icon",
               "logo",
               "ui_asset",
@@ -4597,6 +4685,12 @@
             "default": true,
             "description": "Rewrites your prompt behind the scenes into the form the model works best with. Leave it on (the default). Turning it off does not give you more control - it usually gives worse results. Do not disable it unless you really know what you are doing and have tested your prompts extensively.",
             "example": true
+          },
+          "save_normals": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also make a normal map of each image, for 2.5D lighting, returned as normal_map_url. It is a lossless WebP of the same size and alpha as the image, in the OpenGL convention (red = right, green = up, blue = towards the viewer; Unity and Godot read it as is, Unreal expects green flipped). Pixel art gets one normal per art pixel. Free; when a map could not be made, its normal_map_url is absent.",
+            "example": false
           },
           "request_id": {
             "type": "string",
@@ -4658,6 +4752,7 @@
               "sprite-vfx",
               "sprite-tiling-horizontal",
               "sprite-tiling-vertical",
+              "scatter-pattern",
               "icon",
               "logo",
               "ui_asset",
@@ -4689,6 +4784,12 @@
             "description": "Ignored: edits always rewrite your prompt into the long, structured form the edit model needs (which subjects are in the image, what changes and what stays). Without that rewrite, edits miss the request and lose quality, so it can no longer be turned off. Still accepted so existing requests keep working; omit it.",
             "example": true,
             "deprecated": true
+          },
+          "save_normals": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also make a normal map of each image, for 2.5D lighting, returned as normal_map_url. It is a lossless WebP of the same size and alpha as the image, in the OpenGL convention (red = right, green = up, blue = towards the viewer; Unity and Godot read it as is, Unreal expects green flipped). Pixel art gets one normal per art pixel. Free; when a map could not be made, its normal_map_url is absent.",
+            "example": false
           },
           "request_id": {
             "type": "string",
@@ -4810,6 +4911,7 @@
               "logo",
               "sprite-tiling-horizontal",
               "sprite-tiling-vertical",
+              "scatter-pattern",
               "parallax_layer",
               "tile",
               "texture",
@@ -4820,7 +4922,7 @@
           },
           "model": {
             "type": "string",
-            "description": "Model to use. Available models:\n- \"hydra\" (Hydra): 3 credits/s, shortest duration 3s, so 9 credits minimum · Most reliable all-around model, generates audio\n- \"griffin-hd\" (Griffin): flat 12 credits per generation · High resolution animations, best for highly detailed sprites\n- \"forge\" (Forge): 1.5 credits/s · Best for simple body shapes and short actions; may need a few tries\n- \"forge-pixel\" (Forge Pixel): 1.5 credits/s · Best for low-res pixel art animations\n- \"hydra-plus\" (Hydra+): 4 credits/s, shortest duration 3s, so 12 credits minimum · LEGACY - scheduled for removal, do not use for new work\n- \"blitz\" (Blitz): 1.9 credits/s, min charge 4 credits · LEGACY - scheduled for removal, do not use for new work\n- \"eagle\" (Eagle): 2.6 credits/s, min charge 4 credits · LEGACY - scheduled for removal, do not use for new work\n- \"eagle-audio\" (Eagle with Audio): 3.1 credits/s, min charge 4 credits · LEGACY - scheduled for removal, do not use for new work\nLegacy aliases: \"standard\" → blitz.\nModels marked LEGACY still work for existing integrations but will be removed; pick a current model for anything new.\nforge-pixel expects real pixel art - a perfect pixel grid at its natural resolution; for other art use hydra or forge. Tiling image types stay seamless only on forge and forge-pixel.",
+            "description": "Model to use. Available models:\n- \"hydra\" (Hydra): 3 credits/s, shortest duration 3s, so 9 credits minimum · Best motion and prompt adherence\n- \"griffin-hd\" (Griffin): flat 10 credits per generation · Highest resolution and best image fidelity\n- \"forge\" (Forge): 1.5 credits/s · Cheapest alternative, for simple body shapes and simple actions\n- \"forge-pixel\" (Forge Pixel): 1.5 credits/s · Best for low-res pixel art animations\n- \"hydra-plus\" (Hydra+): 4 credits/s, shortest duration 3s, so 12 credits minimum · LEGACY - scheduled for removal, do not use for new work\n- \"blitz\" (Blitz): 1.9 credits/s, min charge 4 credits · LEGACY - scheduled for removal, do not use for new work\n- \"eagle\" (Eagle): 2.6 credits/s, min charge 4 credits · LEGACY - scheduled for removal, do not use for new work\n- \"eagle-audio\" (Eagle with Audio): 3.1 credits/s, min charge 4 credits · LEGACY - scheduled for removal, do not use for new work\nLegacy aliases: \"standard\" → blitz.\nModels marked LEGACY still work for existing integrations but will be removed; pick a current model for anything new.\nforge-pixel expects real pixel art - a perfect pixel grid at its natural resolution; for other art use hydra or forge. Art that only looks pixelated (an AI image with soft edges or uneven blocks) is refused: convert it with convertToPixelArt (free) first. Tiling image types stay seamless only on forge and forge-pixel.",
             "enum": [
               "hydra",
               "griffin-hd",
@@ -4869,6 +4971,12 @@
           "use_pixel_grid": {
             "type": "boolean",
             "description": "Use the animation's pixel grid if one is detected. Defaults to true. true: when Ludo detects a pixel grid with confidence, the sheet is packed on it (logical pixels, scaled up by whole blocks); when none is detected, this has no effect. false: always pack as ordinary art, for when the detected grid is wrong for your asset (for example a smooth sprite coming back as coarse blocks). Ignored for forge-pixel animations, which are always packed on their grid."
+          },
+          "save_normals": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also make a normal map of the spritesheet, for 2.5D lighting, returned as normal_map_url. It lines up with the sheet pixel for pixel and frame for frame (same layout, cells and alpha), as a lossless WebP in the OpenGL convention (red = right, green = up, blue = towards the viewer; Unity and Godot read it as is, Unreal expects green flipped). Pixel art gets one normal per art pixel. 0.5 credits per map on top of the generation; a map that could not be made is not charged, and its normal_map_url is absent.",
+            "example": false
           },
           "request_id": {
             "type": "string",
@@ -4942,11 +5050,51 @@
           },
           "out_of_frame": {
             "type": "boolean",
-            "description": "true when Ludo detected the sprite running past the edges of the frame during the animation, so parts of it are cut off. It is a hint, not a guarantee: look at the frames. The cut is in the generated video, so adjustSpritesheet can't recover it. Call editSpritesheet with edit_mode \"outpaint\" to extend the frame beyond its borders, or generate again with a larger margin on the axis that was cut (margin_ratio_horizontal / margin_ratio_vertical)."
+            "description": "true when Ludo detected the sprite running past the edges of the frame during the animation, so parts of it are cut off. It is a hint, not a guarantee: look at the frames. The cut is in the generated video, so adjustSpritesheet can't recover it. Call editSpritesheet with edit_mode \"outpaint\" to extend the frame beyond its borders, or generate again with a larger margin on the axis that was cut (margin_ratio_horizontal / margin_ratio_vertical). If the input image itself is cut at that edge (the sprite touches or runs past the image border), a larger margin won't help, because the missing part isn't in the input: use outpaint, or animate an input with the whole subject inside the image."
           },
           "bad_loop": {
             "type": "boolean",
-            "description": "true when Ludo detected that the animation doesn't loop cleanly. It is a hint, not a guarantee. Call editSpritesheet with edit_mode \"fix_loop\" to repair the loop."
+            "description": "true when Ludo detected that the animation doesn't loop cleanly. It is a hint, not a guarantee. Call editSpritesheet with edit_mode \"fix_loop\" to repair the loop. fix_loop generates a new clip, so run it only when bad_loop is true, and keep the source if the fix comes back worse."
+          },
+          "frame_width": {
+            "type": "integer",
+            "description": "Width in pixels of one cell of the sheet. Every frame is the same size. Absent on older spritesheets."
+          },
+          "frame_height": {
+            "type": "integer",
+            "description": "Height in pixels of one cell of the sheet. Absent on older spritesheets."
+          },
+          "pixel_block": {
+            "type": "integer",
+            "description": "Pixel art only, absent otherwise. How many sheet pixels make up one art pixel, so the art is frame_width / pixel_block pixels wide. Snap or scale by this to keep the pixels crisp. On a true-size export the block grid can be shifted from the frame's top-left corner."
+          },
+          "loop_score": {
+            "type": "number",
+            "format": "float",
+            "description": "0 to 1, how similar the last frame played is to the first. bad_loop is exactly loop_score < 0.7. Absent on older spritesheets."
+          },
+          "loop_detected": {
+            "type": "boolean",
+            "description": "true when a loop was requested and the sheet holds one full cycle: it was found in the video, or the final keyframe was the same image as the first. false means the whole clip was packed, ending wherever the video ended. Absent on older spritesheets."
+          },
+          "out_of_frame_edges": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "top",
+                "bottom",
+                "left",
+                "right"
+              ],
+              "example": "top"
+            },
+            "description": "The borders the sprite is cut off on, which tells you where to add margin. Empty when nothing is cut off; out_of_frame is true exactly when it is non-empty. Absent on older spritesheets."
+          },
+          "normal_map_url": {
+            "type": "string",
+            "description": "The spritesheet's normal map (lossless WebP, same layout as the sheet), when save_normals was true and the map could be made.",
+            "example": "<url>"
           },
           "request_id": {
             "type": "string"
@@ -4984,7 +5132,7 @@
           },
           "model": {
             "type": "string",
-            "description": "Model to use. Available models:\n- \"hydra\" (Hydra): 3 credits/s, shortest duration 3s, so 9 credits minimum · Most reliable all-around model, generates audio\n- \"griffin-hd\" (Griffin): flat 12 credits per generation · High resolution animations, best for highly detailed sprites\n- \"forge\" (Forge): 1.5 credits/s · Best for simple body shapes and short actions; may need a few tries\n- \"forge-pixel\" (Forge Pixel): 1.5 credits/s · Best for low-res pixel art animations\n- \"hydra-plus\" (Hydra+): 4 credits/s, shortest duration 3s, so 12 credits minimum · LEGACY - scheduled for removal, do not use for new work\nModels marked LEGACY still work for existing integrations but will be removed; pick a current model for anything new.\nforge-pixel expects real pixel art - a perfect pixel grid at its natural resolution; for other art use hydra or forge. Tiling image types stay seamless only on forge and forge-pixel.",
+            "description": "Model to use. Available models:\n- \"hydra\" (Hydra): 3 credits/s, shortest duration 3s, so 9 credits minimum · Best motion and prompt adherence\n- \"griffin-hd\" (Griffin): flat 10 credits per generation · Highest resolution and best image fidelity\n- \"forge\" (Forge): 1.5 credits/s · Cheapest alternative, for simple body shapes and simple actions\n- \"forge-pixel\" (Forge Pixel): 1.5 credits/s · Best for low-res pixel art animations\n- \"hydra-plus\" (Hydra+): 4 credits/s, shortest duration 3s, so 12 credits minimum · LEGACY - scheduled for removal, do not use for new work\nModels marked LEGACY still work for existing integrations but will be removed; pick a current model for anything new.\nforge-pixel expects real pixel art - a perfect pixel grid at its natural resolution; for other art use hydra or forge. Art that only looks pixelated (an AI image with soft edges or uneven blocks) is refused: convert it with convertToPixelArt (free) first. Tiling image types stay seamless only on forge and forge-pixel.",
             "enum": [
               "hydra",
               "griffin-hd",
@@ -5081,6 +5229,7 @@
               "logo",
               "sprite-tiling-horizontal",
               "sprite-tiling-vertical",
+              "scatter-pattern",
               "parallax_layer",
               "tile",
               "texture",
@@ -5123,6 +5272,12 @@
           "use_pixel_grid": {
             "type": "boolean",
             "description": "Use the animation's pixel grid if one is detected. Defaults to true. true: when Ludo detects a pixel grid with confidence, the sheet is packed on it (logical pixels, scaled up by whole blocks); when none is detected, this has no effect. false: always pack as ordinary art, for when the detected grid is wrong for your asset (for example a smooth sprite coming back as coarse blocks). Ignored for forge-pixel animations, which are always packed on their grid."
+          },
+          "save_normals": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also make a normal map of the spritesheet, for 2.5D lighting, returned as normal_map_url. It lines up with the sheet pixel for pixel and frame for frame (same layout, cells and alpha), as a lossless WebP in the OpenGL convention (red = right, green = up, blue = towards the viewer; Unity and Godot read it as is, Unreal expects green flipped). Pixel art gets one normal per art pixel. 0.5 credits per map on top of the generation; a map that could not be made is not charged, and its normal_map_url is absent.",
+            "example": false
           },
           "request_id": {
             "type": "string",
@@ -5197,6 +5352,12 @@
             "example": true,
             "deprecated": true
           },
+          "save_normals": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also make a normal map of each image, for 2.5D lighting, returned as normal_map_url. It is a lossless WebP of the same size and alpha as the image, in the OpenGL convention (red = right, green = up, blue = towards the viewer; Unity and Godot read it as is, Unreal expects green flipped). Pixel art gets one normal per art pixel. Free; when a map could not be made, its normal_map_url is absent.",
+            "example": false
+          },
           "request_id": {
             "type": "string",
             "description": "Optional client-provided identifier, unique per request. Re-sending the same request_id returns the existing job instead of generating again. Also usable as the request_id filter of listGenerations."
@@ -5237,6 +5398,11 @@
           "prompt": {
             "type": "string",
             "description": "The prompt as the model received it."
+          },
+          "normal_map_url": {
+            "type": "string",
+            "description": "The image's normal map (lossless WebP), when save_normals was true and the map could be made.",
+            "example": "<url>"
           }
         }
       },
@@ -5294,6 +5460,12 @@
             "example": true,
             "deprecated": true
           },
+          "save_normals": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also make a normal map of each image, for 2.5D lighting, returned as normal_map_url. It is a lossless WebP of the same size and alpha as the image, in the OpenGL convention (red = right, green = up, blue = towards the viewer; Unity and Godot read it as is, Unreal expects green flipped). Pixel art gets one normal per art pixel. Free; when a map could not be made, its normal_map_url is absent.",
+            "example": false
+          },
           "request_id": {
             "type": "string",
             "description": "Optional client-provided identifier, unique per request. Re-sending the same request_id returns the existing job instead of generating again. Also usable as the request_id filter of listGenerations."
@@ -5330,6 +5502,11 @@
           "prompt": {
             "type": "string",
             "description": "The prompt as the model received it."
+          },
+          "normal_map_url": {
+            "type": "string",
+            "description": "The image's normal map (lossless WebP), when save_normals was true and the map could be made.",
+            "example": "<url>"
           }
         }
       },
@@ -5475,7 +5652,7 @@
           },
           "model": {
             "type": "string",
-            "description": "Model to use. Available models:\n- \"hydra\" (Hydra): 3 credits/s · Most reliable all-around model, generates audio\n- \"forge\" (Forge): 2 credits/s · Best for simple body shapes and short actions; may need a few tries\n- \"forge-pixel\" (Forge Pixel): 2 credits/s · Best for low-res pixel art animations\n- \"tango\" (Tango): 4 credits/s, min charge 4 credits · LEGACY - scheduled for removal, do not use for new work\nModels marked LEGACY still work for existing integrations but will be removed; pick a current model for anything new.\nforge is tuned for the motion presets (preset_id) and often fails to follow your own video - use hydra for custom footage. forge-pixel expects real pixel art - a perfect pixel grid at its natural resolution.",
+            "description": "Model to use. Available models:\n- \"hydra\" (Hydra): 3 credits/s · Best motion and prompt adherence\n- \"forge\" (Forge): 2 credits/s · Cheapest alternative, for simple body shapes and simple actions\n- \"forge-pixel\" (Forge Pixel): 2 credits/s · Best for low-res pixel art animations\n- \"tango\" (Tango): 4 credits/s, min charge 4 credits · LEGACY - scheduled for removal, do not use for new work\nModels marked LEGACY still work for existing integrations but will be removed; pick a current model for anything new.\nforge is tuned for the motion presets (preset_id) and often fails to follow your own video - use hydra for custom footage. forge-pixel expects real pixel art - a perfect pixel grid at its natural resolution; convert art that only looks pixelated with convertToPixelArt (free) first.",
             "enum": [
               "hydra",
               "forge",
@@ -5495,6 +5672,12 @@
             "default": 1.5,
             "description": "Duration in seconds. If the reference video is longer, it will be compressed to this duration. Available values depend on the model:\n- hydra: 3, 3.5, 4, 4.5, 5\n- forge: 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5\n- forge-pixel: 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5\n- tango: 1, 1.5, 2, 2.5, 3, 3.5, 4",
             "example": 1.5
+          },
+          "save_normals": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also make a normal map of the spritesheet, for 2.5D lighting, returned as normal_map_url. It lines up with the sheet pixel for pixel and frame for frame (same layout, cells and alpha), as a lossless WebP in the OpenGL convention (red = right, green = up, blue = towards the viewer; Unity and Godot read it as is, Unreal expects green flipped). Pixel art gets one normal per art pixel. 0.5 credits per map on top of the generation; a map that could not be made is not charged, and its normal_map_url is absent.",
+            "example": false
           },
           "request_id": {
             "type": "string",
@@ -5589,7 +5772,7 @@
           },
           "edit_mode": {
             "type": "string",
-            "description": "Edit operation to perform. \"improve\" re-renders the animation with finer detail (the extra pass hydra-plus runs when it generates) and only takes a spritesheet generated with hydra; any other source returns HTTP 400, including an already improved spritesheet (or a loop fix or outpaint of one), which has that detail already.",
+            "description": "Edit operation to perform. \"improve\" re-renders the animation with finer detail (the extra pass hydra-plus runs when it generates) and only takes a spritesheet generated with hydra; any other source returns HTTP 400, including an already improved spritesheet (or a loop fix or outpaint of one), which has that detail already. \"fix_loop\" generates a new clip rather than patching the seam, so run it only on a spritesheet whose result had bad_loop true: on a loop that is already clean it can come back with a worse seam. If the fix is worse, keep the source.",
             "enum": [
               "prompt",
               "outpaint",
@@ -5618,7 +5801,7 @@
           },
           "model": {
             "type": "string",
-            "description": "Model to use. Available models:\n- \"hydra\" (Hydra): 3 credits/s · Most reliable all-around model, generates audio\n- \"griffin-hd\" (Griffin): flat 12 credits per generation · High resolution animations, best for highly detailed sprites\n- \"forge\" (Forge): 2 credits/s · Best for simple body shapes and short actions; may need a few tries\n- \"forge-pixel\" (Forge Pixel): 2 credits/s · Best for low-res pixel art animations",
+            "description": "Model to use. Available models:\n- \"hydra\" (Hydra): 3 credits/s · Best motion and prompt adherence\n- \"griffin-hd\" (Griffin): flat 10 credits per generation · Highest resolution and best image fidelity\n- \"forge\" (Forge): 2 credits/s · Cheapest alternative, for simple body shapes and simple actions\n- \"forge-pixel\" (Forge Pixel): 2 credits/s · Best for low-res pixel art animations",
             "enum": [
               "hydra",
               "griffin-hd",
@@ -5687,6 +5870,12 @@
             "type": "boolean",
             "description": "Use the animation's pixel grid if one is detected. true: when Ludo detects a pixel grid with confidence, the sheet is packed on it (logical pixels, scaled up by whole blocks); when none is detected, this has no effect. false: always pack as ordinary art, for when the detected grid is wrong for your asset (for example a smooth sprite coming back as coarse blocks). Ignored for forge-pixel animations, which are always packed on their grid. Unset keeps the source spritesheet's setting (true unless it was made with false)."
           },
+          "save_normals": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also make a normal map of the spritesheet, for 2.5D lighting, returned as normal_map_url. It lines up with the sheet pixel for pixel and frame for frame (same layout, cells and alpha), as a lossless WebP in the OpenGL convention (red = right, green = up, blue = towards the viewer; Unity and Godot read it as is, Unreal expects green flipped). Pixel art gets one normal per art pixel. 0.5 credits per map on top of the generation; a map that could not be made is not charged, and its normal_map_url is absent.",
+            "example": false
+          },
           "request_id": {
             "type": "string",
             "description": "Optional client-provided identifier, unique per request. Re-sending the same request_id returns the existing job instead of generating again. Also usable as the request_id filter of listGenerations."
@@ -5734,7 +5923,7 @@
           },
           "model": {
             "type": "string",
-            "description": "Model to use. Available models:\n- \"hydra\" (Hydra): 3 credits/s, shortest duration 3s, so 9 credits minimum · Most reliable all-around model, generates audio\n- \"hydra-plus\" (Hydra+): 4 credits/s, shortest duration 3s, so 12 credits minimum · LEGACY - scheduled for removal, do not use for new work\nModels marked LEGACY still work for existing integrations but will be removed; pick a current model for anything new.",
+            "description": "Model to use. Available models:\n- \"hydra\" (Hydra): 3 credits/s, shortest duration 3s, so 9 credits minimum · Best motion and prompt adherence\n- \"hydra-plus\" (Hydra+): 4 credits/s, shortest duration 3s, so 12 credits minimum · LEGACY - scheduled for removal, do not use for new work\nModels marked LEGACY still work for existing integrations but will be removed; pick a current model for anything new.",
             "enum": [
               "hydra",
               "hydra-plus"
@@ -5800,6 +5989,12 @@
           "use_pixel_grid": {
             "type": "boolean",
             "description": "Use the animation's pixel grid if one is detected. true: when Ludo detects a pixel grid with confidence, the sheet is packed on it (logical pixels, scaled up by whole blocks); when none is detected, this has no effect. false: always pack as ordinary art, for when the detected grid is wrong for your asset (for example a smooth sprite coming back as coarse blocks). Ignored for forge-pixel animations, which are always packed on their grid. Unset keeps the source spritesheet's setting (true unless it was made with false)."
+          },
+          "save_normals": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also make a normal map of the spritesheet, for 2.5D lighting, returned as normal_map_url. It lines up with the sheet pixel for pixel and frame for frame (same layout, cells and alpha), as a lossless WebP in the OpenGL convention (red = right, green = up, blue = towards the viewer; Unity and Godot read it as is, Unreal expects green flipped). Pixel art gets one normal per art pixel. 0.5 credits per map on top of the generation; a map that could not be made is not charged, and its normal_map_url is absent.",
+            "example": false
           },
           "request_id": {
             "type": "string",
@@ -5885,6 +6080,12 @@
           "use_pixel_grid": {
             "type": "boolean",
             "description": "Use the animation's pixel grid if one is detected. true: when Ludo detects a pixel grid with confidence, the sheet is packed on it (logical pixels, scaled up by whole blocks); when none is detected, this has no effect. false: always pack as ordinary art, for when the detected grid is wrong for your asset (for example a smooth sprite coming back as coarse blocks). Ignored for forge-pixel animations, which are always packed on their grid. Unset keeps the source spritesheet's setting (true unless it was made with false). Re-cutting with false fixes a sheet whose detected grid is wrong without generating it again."
+          },
+          "save_normals": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also make a normal map of the new spritesheet, for 2.5D lighting, returned as normal_map_url. It lines up with the sheet pixel for pixel and frame for frame (same layout, cells and alpha), as a lossless WebP in the OpenGL convention (red = right, green = up, blue = towards the viewer; Unity and Godot read it as is, Unreal expects green flipped). Pixel art gets one normal per art pixel. Adjusting is free, but the map costs 0.5 credits; a map that could not be made is not charged, and its normal_map_url is absent.",
+            "example": false
           },
           "request_id": {
             "type": "string",
@@ -6216,6 +6417,12 @@
             "description": "Also return each sheet's frames as separate images (individual_frame_urls).",
             "example": false
           },
+          "save_normals": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also make a normal map of each result, for 2.5D lighting, returned as its normal_map_url. These are the 3D model's own surface normals on the same pixels, not estimates, as a lossless WebP in the OpenGL convention (red = right, green = up, blue = towards the viewer; Unity and Godot read it as is, Unreal expects green flipped). Pixel styles get one normal per art pixel. 0.5 credits per map on top of the render; a map that could not be made is not charged, and its normal_map_url is absent.",
+            "example": false
+          },
           "request_id": {
             "type": "string",
             "description": "Optional client-provided identifier, unique per request. Re-sending the same request_id returns the existing job instead of generating again. Also usable as the request_id filter of listGenerations."
@@ -6305,6 +6512,12 @@
           "style_params": {
             "type": "object",
             "description": "The style's settings to change, by name, each one of its listed option values (true/false for a bool setting, or any colour for a color one). Omit a setting to keep its default."
+          },
+          "save_normals": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also make a normal map of each result, for 2.5D lighting, returned as its normal_map_url. These are the 3D model's own surface normals on the same pixels, not estimates, as a lossless WebP in the OpenGL convention (red = right, green = up, blue = towards the viewer; Unity and Godot read it as is, Unreal expects green flipped). Pixel styles get one normal per art pixel. Free; when a map could not be made, its normal_map_url is absent.",
+            "example": false
           },
           "request_id": {
             "type": "string",
@@ -6512,7 +6725,7 @@
             "type": "array",
             "minItems": 1,
             "maxItems": 8,
-            "description": "Every item the model holds, at most one closing each hand (the first one in it).",
+            "description": "The items to put on the model, at most one closing each hand (the first one in it). Items the model already has saved stay on it (see keep_saved).",
             "items": {
               "$ref": "#/components/schemas/DirectionalAccessoryItem"
             }
@@ -6521,6 +6734,12 @@
             "type": "boolean",
             "default": true,
             "description": "Save the items on the model when it is one of your 3D models. False only builds the GLB.",
+            "example": true
+          },
+          "keep_saved": {
+            "type": "boolean",
+            "default": true,
+            "description": "When the model is one of your 3D models, keep the items it already has saved, except those held by a bone one of these items takes, and put them in the GLB too (listed in `kept`). False replaces them all with these items.",
             "example": true
           }
         }
@@ -6547,6 +6766,21 @@
                 },
                 "placement": {
                   "$ref": "#/components/schemas/DirectionalAccessoryPlacement"
+                }
+              }
+            }
+          },
+          "kept": {
+            "type": "array",
+            "description": "The items the model already had saved that it keeps (keep_saved), in the GLB too.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "bone": {
+                  "type": "string"
                 }
               }
             }
@@ -6834,6 +7068,45 @@
             "default": true,
             "description": "Defaults to true: the call returns 202 immediately with a job id to poll with getApiJob. Set false for a synchronous response (deprecated but supported): the call then blocks until the result is ready.",
             "example": true
+          }
+        }
+      },
+      "CreateNormalMapPayload": {
+        "type": "object",
+        "description": "Payload for making the normal map of an image",
+        "required": [
+          "image"
+        ],
+        "properties": {
+          "image": {
+            "type": "string",
+            "description": "URL or base64-encoded image, opaque or a cut-out. An image you generated on Ludo in the last 30 days, given by its URL, is read with its type and pixel grid.",
+            "example": "<url> OR data:image/png;base64,..."
+          },
+          "request_id": {
+            "type": "string",
+            "description": "Optional client-provided identifier, unique per request. Re-sending the same request_id returns the existing job instead of generating again."
+          },
+          "async": {
+            "type": "boolean",
+            "default": true,
+            "description": "Defaults to true: the call returns 202 immediately with a job id to poll with getApiJob. Set false for a synchronous response (deprecated but supported): the call then blocks until the result is ready.",
+            "example": true
+          }
+        }
+      },
+      "NormalMapResult": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "URL of the image the map was made from.",
+            "example": "<url>"
+          },
+          "normal_map_url": {
+            "type": "string",
+            "description": "URL of the normal map, a lossless WebP of the same size and alpha as the image.",
+            "example": "<url>"
           }
         }
       },
@@ -8249,6 +8522,11 @@
           "loop": {
             "type": "boolean",
             "description": "Whether the animation loops: the loop you asked for, else the animation's own. false is a one-shot (a jump, a death) that should play once in an engine."
+          },
+          "normal_map_url": {
+            "type": "string",
+            "description": "The spritesheet's normal map (lossless WebP, same layout as the sheet), when save_normals was true and the map could be made.",
+            "example": "<url>"
           }
         }
       },
@@ -8271,6 +8549,11 @@
           },
           "render_3d": {
             "$ref": "#/components/schemas/DirectionalSpriteRender"
+          },
+          "normal_map_url": {
+            "type": "string",
+            "description": "The image's normal map (lossless WebP), when save_normals was true and the map could be made.",
+            "example": "<url>"
           }
         }
       },
@@ -8361,7 +8644,7 @@
           "through": {
             "type": "number",
             "format": "float",
-            "description": "For an item on the head - the share of the head's vertices (hair and all) poking out through it where it covers the head, in %. Near 0 is right for a helmet."
+            "description": "For an item on the head - the share of the head's vertices (hair and all) poking out through it, in %: for a helmet, where it covers the head; for a hat, under the hat only (ears standing beside it are not counted). A helmet draws in what would poke through it (hair, ear tips) when it is put on, so near 0 is expected."
           }
         }
       },
@@ -8550,11 +8833,46 @@
           },
           "out_of_frame": {
             "type": "boolean",
-            "description": "spritesheet only: true when Ludo detected the sprite running past the frame's edges, so parts of it are cut off. A hint; editSpritesheet edit_mode \"outpaint\" extends the frame."
+            "description": "spritesheet only: true when Ludo detected the sprite running past the frame's edges, so parts of it are cut off. A hint; editSpritesheet edit_mode \"outpaint\" extends the frame. A larger margin can't help when the input image itself is cut at that edge."
           },
           "bad_loop": {
             "type": "boolean",
-            "description": "spritesheet only: true when Ludo detected that the animation doesn't loop cleanly. A hint; editSpritesheet edit_mode \"fix_loop\" repairs it."
+            "description": "spritesheet only: true when Ludo detected that the animation doesn't loop cleanly. A hint; editSpritesheet edit_mode \"fix_loop\" generates a new clip to repair it, so use it only when this is true."
+          },
+          "frame_width": {
+            "type": "integer",
+            "description": "spritesheet only: width in pixels of one cell of the sheet. Every frame is the same size. Absent on older spritesheets."
+          },
+          "frame_height": {
+            "type": "integer",
+            "description": "spritesheet only: height in pixels of one cell of the sheet. Absent on older spritesheets."
+          },
+          "pixel_block": {
+            "type": "integer",
+            "description": "spritesheet only: pixel art only, absent otherwise. How many sheet pixels make up one art pixel, so the art is frame_width / pixel_block pixels wide. Snap or scale by this to keep the pixels crisp. On a true-size export the block grid can be shifted from the frame's top-left corner."
+          },
+          "loop_score": {
+            "type": "number",
+            "format": "float",
+            "description": "spritesheet only: 0 to 1, how similar the last frame played is to the first. bad_loop is exactly loop_score < 0.7. Absent on older spritesheets."
+          },
+          "loop_detected": {
+            "type": "boolean",
+            "description": "spritesheet only: true when a loop was requested and the sheet holds one full cycle: it was found in the video, or the final keyframe was the same image as the first. false means the whole clip was packed, ending wherever the video ended. Absent on older spritesheets."
+          },
+          "out_of_frame_edges": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "top",
+                "bottom",
+                "left",
+                "right"
+              ],
+              "example": "top"
+            },
+            "description": "spritesheet only: the borders the sprite is cut off on, which tells you where to add margin. Empty when nothing is cut off; out_of_frame is true exactly when it is non-empty. Absent on older spritesheets."
           },
           "model_url": {
             "type": "string",

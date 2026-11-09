@@ -67,10 +67,10 @@ test("model labels map to their ids, and a flat-priced model costs its flat pric
   assert.equal(labels.get("Griffin"), "griffin-hd");
   assert.equal(labels.get("Hydra+"), "hydra-plus");
   const rates = parseModelRates(animate.creditDetail, labels);
-  assert.deepEqual(rates.find(r => r.id === "griffin-hd"), { id: "griffin-hd", rate: 0, minimum: 0, shortest: 0, longest: 0, flat: 12 });
+  assert.deepEqual(rates.find(r => r.id === "griffin-hd"), { id: "griffin-hd", rate: 0, minimum: 0, shortest: 0, longest: 0, flat: 10 });
   assert.equal(rates.find(r => r.id === "hydra-plus").rate, 4);
   for (const id of ["animateSprite", "animateSpriteKeyframes", "editSpritesheet"]) {
-    assert.deepEqual(estimatePrice(byId(id), { model: "griffin-hd", duration: 5 }), { credits: 12, exact: true }, id);
+    assert.deepEqual(estimatePrice(byId(id), { model: "griffin-hd", duration: 5 }), { credits: 10, exact: true }, id);
   }
   assert.equal(estimatePrice(animate, { model: "hydra-plus", duration: 5 }).credits, 20);
   // An unlisted model still falls back to the dearest, flat prices included.
