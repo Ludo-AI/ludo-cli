@@ -117,6 +117,16 @@ export function estimatePrice(command: Command, body: Record<string, unknown>): 
     const masked = body.mask ? /([\d.]+) credits? per result with a mask/i.exec(text) : null;
     return { credits: round1(Number((masked || perResult)[1]) * n), exact: true };
   }
+  // Directional Sprites / Stills: "consumes 0.5 credits per direction (one
+  // image each)", times the directions asked for (the spec's default is ["SW"]).
+  const perDirection = /consumes ([\d.]+) credits? per direction/i.exec(text);
+  if (perDirection) {
+    const directions = body.directions ?? fieldDefault(command, "directions") ?? ["SW"];
+    const count = Array.isArray(directions)
+      ? directions.length
+      : String(directions).split(",").filter(s => s.trim()).length;
+    return { credits: round1(Number(perDirection[1]) * Math.max(1, count)), exact: true };
+  }
   const perCall = /consumes ([\d.]+) credits? per call/i.exec(text);
   if (perCall) return perCallPrice(command, body, text, Number(perCall[1]));
 

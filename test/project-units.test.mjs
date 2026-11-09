@@ -92,6 +92,11 @@ test("estimates follow the published prices", () => {
   assert.equal(heroRig.exact, false);
   assert.equal(estimatePrice(create3D, { rig: true }).credits, 5);
   assert.equal(estimatePrice(create3D, { model: "titan" }).credits, 15); // unlisted: dearest
+  // Directional renders: per direction, default one (["SW"]). They returned
+  // credits null in a dry run before (triage 6af1c05c).
+  assert.deepEqual(estimatePrice(byId("createDirectionalStills"), {}), { credits: 0.5, exact: true });
+  assert.equal(estimatePrice(byId("createDirectionalStills"), { directions: ["S", "SW", "W", "NW", "N", "NE", "E", "SE"] }).credits, 4);
+  assert.equal(estimatePrice(byId("createDirectionalSprites"), { directions: ["S", "N"] }).credits, 2);
   assert.equal(estimatePrice(byId("animateSprite"), { model: "forge", duration: 4 }).credits, 6);
   assert.equal(estimatePrice(byId("animateSprite"), { model: "forge", duration: 1 }).credits, 1.5);
   assert.equal(estimatePrice(byId("animateSprite"), { model: "eagle", duration: 1 }).credits, 4); // legacy minimum charge
