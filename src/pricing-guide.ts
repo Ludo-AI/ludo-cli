@@ -4,7 +4,7 @@ import { CliError, EXIT } from "./errors.js";
 import { printJson, type Ctx } from "./generate.js";
 
 // `ludo pricing`: what Ludo's plans cost and include, and the rules an agent
-// needs before it tells a user to pay (API, MCP and CLI need Pro or Studio,
+// needs before it tells a user to pay (API, MCP and CLI need a paid plan,
 // and there every generation costs credits). The server writes all of it
 // (GET /pricing), so plans and rules change without a CLI release. Works
 // logged out, and with a key on a plan that has no API access: the server

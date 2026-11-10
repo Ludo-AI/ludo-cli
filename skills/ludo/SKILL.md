@@ -10,8 +10,8 @@ It has two kinds of commands:
 
 - **`ludo toolbox ...` is free**: it runs offline, needs no account, no login and no credits. Use it
   for asset chores (see "Free tools" below) instead of writing your own image or audio script.
-- **Everything else generates with Ludo AI**: it needs an account on a plan with API access (Pro or
-  Studio) and costs credits on every plan. `ludo pricing` (free, no login) gives the plans, prices
+- **Everything else generates with Ludo AI**: it needs an account on a paid plan and costs
+  credits on every plan. `ludo pricing` (free, no login) gives the plans, prices
   and what each call costs; quote it rather than guessing.
 
 Generating needs a prior `ludo login` or an API key in `LUDO_API_KEY`. If a command exits with code 3,
