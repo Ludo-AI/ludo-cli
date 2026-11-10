@@ -67,7 +67,9 @@ Use them instead of writing your own image or audio script:
   each continues from the one before (check the transitions it reports). A GIF or animated WebP
   reads as a sheet.
 - Video (needs ffmpeg): `sprite from-video <clip>` turns a clip into a sheet; `sprite video <sheet>
-  --format webm|mov|mp4` goes the other way.
+  --format webm|mov|mp4` goes the other way. A sheet holds 64 megapixels: for a clip of more than
+  a second or two pass `--duration`/`--fps`/`--width`, or the frames are shrunk to fit. If ffmpeg
+  is installed but not found, set `LUDO_FFMPEG` to its path.
 - Images, per frame on a sheet: `image trim|pad|extrude|scale|flip|rotate|outline|shadow`.
   `image palette` lists or saves colours; `image recolor --palette <file|hexes> | --swap A --to B`
   changes them. `image tiles <tileset> --size 16x16` cuts tiles or writes Tiled/Godot/Unity

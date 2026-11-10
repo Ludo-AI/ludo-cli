@@ -398,10 +398,12 @@ test("tempo readings: an octave with no support is not named; a near tie at 3:2 
 
 // ---- The CLI ----
 
-// opts.noPath: no PATH under any spelling (Windows has Path), so no ffmpeg.
+// opts.noPath: no PATH under any spelling (Windows has Path), and LUDO_FFMPEG
+// naming a file that is not there (or the installers' folders would be
+// searched), so no ffmpeg.
 function run(args, opts = {}) {
   const cwd = opts.cwd ?? tmp();
-  const base = opts.noPath ? { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toUpperCase() !== "PATH")), PATH: "" } : process.env;
+  const base = opts.noPath ? { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toUpperCase() !== "PATH")), PATH: "", LUDO_FFMPEG: path.join(cwd, "no-ffmpeg") } : process.env;
   return new Promise(resolve => {
     const child = spawn(process.execPath, [CLI, ...args], {
       cwd,

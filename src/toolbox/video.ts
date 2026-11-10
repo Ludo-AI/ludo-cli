@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { CliError, EXIT } from "../errors.js";
+import fs from "node:fs";
+import path from "node:path";
+import { because, CliError, EXIT } from "../errors.js";
 import type { Image } from "../tty/png.js";
 
 // Video in and out through the ffmpeg the system has (the toolbox does not
@@ -14,22 +16,76 @@ export interface VideoInfo {
   alpha: boolean; // VP8/VP9 with an alpha channel (WebM's alpha_mode tag)
 }
 
-export const run = (cmd: string, args: string[], input?: Buffer) =>
-  spawnSync(cmd, args, { input, maxBuffer: 2 ** 31, timeout: 10 * 60_000, windowsHide: true });
+type Tool = "ffmpeg" | "ffprobe";
+const exe = (name: Tool) => (process.platform === "win32" ? `${name}.exe` : name);
 
-export function haveFfmpeg(): boolean {
+// Where the usual installers put ffmpeg. A coding agent's shell often has a
+// shorter PATH than the person's terminal (no Homebrew folder), and on Windows
+// an install reaches only the terminals opened after it.
+function installDirs(): string[] {
+  const env = process.env;
+  if (process.platform === "win32") {
+    return [
+      env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, "Microsoft", "WinGet", "Links"),
+      env.USERPROFILE && path.join(env.USERPROFILE, "scoop", "shims"),
+      env.ProgramData && path.join(env.ProgramData, "chocolatey", "bin"),
+      env.ProgramFiles && path.join(env.ProgramFiles, "ffmpeg", "bin"),
+      "C:\\ffmpeg\\bin"
+    ].filter((d): d is string => !!d);
+  }
+  if (process.platform === "darwin") return ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"];
+  return ["/usr/bin", "/usr/local/bin", "/snap/bin", "/home/linuxbrew/.linuxbrew/bin"];
+}
+
+const works = (cmd: string) => {
   try {
-    return run("ffmpeg", ["-version"]).status === 0 && run("ffprobe", ["-version"]).status === 0;
+    return spawnSync(cmd, ["-version"], { timeout: 15_000, windowsHide: true }).status === 0;
   } catch {
     return false;
   }
+};
+
+// LUDO_FFMPEG names the binary outright, and then nothing else is tried
+// (ffprobe is the one beside it, or LUDO_FFPROBE). Otherwise the PATH, then
+// the installers' folders.
+const found = new Map<Tool, string | null>();
+function tool(name: Tool): string | null {
+  const known = found.get(name);
+  if (known !== undefined) return known;
+  const ffmpeg = process.env.LUDO_FFMPEG;
+  const pinned = name === "ffmpeg" ? ffmpeg : process.env.LUDO_FFPROBE || (ffmpeg && (path.basename(ffmpeg) === ffmpeg ? "ffprobe" : path.join(path.dirname(ffmpeg), exe("ffprobe"))));
+  let hit: string | null;
+  if (pinned) hit = works(pinned) ? pinned : null;
+  else if (works(name)) hit = name;
+  else
+    hit =
+      installDirs()
+        .map(d => path.join(d, exe(name)))
+        .find(f => fs.existsSync(f) && works(f)) ?? null;
+  found.set(name, hit);
+  return hit;
+}
+
+// `ffmpeg` and `ffprobe` run from wherever they were found.
+export const run = (cmd: string, args: string[], input?: Buffer) =>
+  spawnSync((cmd === "ffmpeg" || cmd === "ffprobe" ? tool(cmd) : null) ?? cmd, args, { input, maxBuffer: 2 ** 31, timeout: 10 * 60_000, windowsHide: true });
+
+export function haveFfmpeg(): boolean {
+  return !!tool("ffmpeg") && !!tool("ffprobe");
 }
 
 export const FFMPEG_INSTALL = process.platform === "darwin" ? "brew install ffmpeg" : process.platform === "win32" ? "winget install ffmpeg" : "sudo apt install ffmpeg (or your system's package)";
 
 export function needFfmpeg(what = "Video", otherwise?: string) {
   if (haveFfmpeg()) return;
-  throw new CliError(`${what} needs ffmpeg, which is not installed (ffmpeg and ffprobe on the PATH)`, EXIT.BAD_INPUT, `Install it: ${FFMPEG_INSTALL}${otherwise ? `; or ${otherwise}` : ""}`);
+  throw because(
+    "no-ffmpeg",
+    new CliError(
+      `${what} needs ffmpeg, which was not found (ffmpeg and ffprobe, on the PATH or where installers put them)`,
+      EXIT.BAD_INPUT,
+      `Install it: ${FFMPEG_INSTALL}${otherwise ? `; or ${otherwise}` : ""}. Installed somewhere else? Set LUDO_FFMPEG to the ffmpeg binary.`
+    )
+  );
 }
 
 const rate = (r: string | undefined) => {
@@ -47,7 +103,7 @@ export function probeVideo(file: string): VideoInfo {
     info = {};
   }
   const s = info.streams?.[0];
-  if (res.status !== 0 || !s?.width || !s.height) throw new CliError(`Cannot read ${file} as a video: ${res.stderr.toString().trim().split("\n").pop() || "ffprobe found no video stream"}`, EXIT.BAD_INPUT);
+  if (res.status !== 0 || !s?.width || !s.height) throw because("not-a-video", new CliError(`Cannot read ${file} as a video: ${res.stderr.toString().trim().split("\n").pop() || "ffprobe found no video stream"}`, EXIT.BAD_INPUT));
   return {
     width: s.width,
     height: s.height,
@@ -66,20 +122,53 @@ export interface DecodeOptions {
   maxPixels: number; // refuse more than this in all frames together
 }
 
-// The frames as RGBA, after ffmpeg's fps and scale filters.
-export function decodeVideo(file: string, info: VideoInfo, opts: DecodeOptions): Image[] {
+// The frame size to decode at, so that all the frames together stay within
+// maxPixels (they end up in one sheet). A width the caller chose is kept, and
+// refused when it is too much. With none chosen, frames that would go over are
+// shrunk to fit, down to MIN_FIT_WIDTH: below that the clip is simply too long
+// for a sheet and the caller has to say which part of it they want.
+const MIN_FIT_WIDTH = 256;
+const heightAt = (info: VideoInfo, width: number) => Math.max(2, Math.round((info.height * width) / info.width / 2) * 2);
+
+export interface Fit {
+  width: number;
+  height: number;
+  shrunk: boolean; // smaller than asked (or than the video) so the frames fit
+}
+
+export function fitFrames(info: VideoInfo, opts: DecodeOptions): Fit {
   const w = opts.width ?? info.width;
-  const h = opts.width ? Math.max(2, Math.round((info.height * opts.width) / info.width / 2) * 2) : info.height;
+  const h = opts.width ? heightAt(info, opts.width) : info.height;
   const fps = opts.fps ?? info.fps;
   const seconds = opts.duration ?? Math.max(0, (info.duration || 0) - (opts.start ?? 0));
-  if (seconds && w * h * Math.ceil(seconds * fps + 1) > opts.maxPixels) {
-    throw new CliError(
+  const count = Math.ceil(seconds * fps + 1);
+  // A container that does not say how long it is cannot be sized up front.
+  if (!seconds || w * h * count <= opts.maxPixels) return { width: w, height: h, shrunk: false };
+  if (!opts.width) {
+    let fw = Math.floor(Math.sqrt((opts.maxPixels / count) * (info.width / info.height)) / 2) * 2;
+    while (fw >= MIN_FIT_WIDTH && fw * heightAt(info, fw) * count > opts.maxPixels) fw -= 2;
+    if (fw >= MIN_FIT_WIDTH) return { width: fw, height: heightAt(info, fw), shrunk: true };
+  }
+  // What would fit, as flags to copy: the seconds that fit at this size.
+  const fits = Math.floor(((Math.floor(opts.maxPixels / (w * h)) - 1) / fps) * 10) / 10;
+  const smaller = opts.width ? "a smaller --width" : `--width ${MIN_FIT_WIDTH}`;
+  throw because(
+    "too-big",
+    new CliError(
       `${Math.ceil(seconds * fps)} frames of ${w}x${h} would be over ${opts.maxPixels / 1024 / 1024} megapixels`,
       EXIT.USAGE,
-      "Take fewer frames (--fps, --start, --duration) or smaller ones (--width)."
-    );
-  }
-  const filters = [`fps=${fps}`, ...(opts.width ? [`scale=${w}:${h}:flags=lanczos`] : [])];
+      `Take fewer frames (--fps, --start, --duration) or smaller ones (--width). ${fits >= 0.1 ? `At ${w}x${h} and ${Math.round(fps * 100) / 100} fps, ${fits} s fit: --duration ${fits}` : `Try ${smaller} with a short --duration`}.`
+    )
+  );
+}
+
+// The frames as RGBA, after ffmpeg's fps and scale filters, at the size
+// fitFrames gives.
+export function decodeVideo(file: string, info: VideoInfo, opts: DecodeOptions): Image[] {
+  const { width: w, height: h } = fitFrames(info, opts);
+  const scaled = w !== info.width || h !== info.height;
+  const fps = opts.fps ?? info.fps;
+  const filters = [`fps=${fps}`, ...(scaled ? [`scale=${w}:${h}:flags=lanczos`] : [])];
   const args = [
     "-v",
     "error",
@@ -98,11 +187,11 @@ export function decodeVideo(file: string, info: VideoInfo, opts: DecodeOptions):
     "pipe:1"
   ];
   const res = run("ffmpeg", args);
-  if (res.status !== 0) throw new CliError(`ffmpeg could not decode ${file}: ${res.stderr.toString().trim().split("\n").pop()}`, EXIT.BAD_INPUT);
+  if (res.status !== 0) throw because("decode-failed", new CliError(`ffmpeg could not decode ${file}: ${res.stderr.toString().trim().split("\n").pop()}`, EXIT.BAD_INPUT));
   const size = w * h * 4;
   const out: Image[] = [];
   for (let o = 0; o + size <= res.stdout.length; o += size) out.push({ width: w, height: h, rgba: new Uint8Array(res.stdout.subarray(o, o + size)) });
-  if (!out.length) throw new CliError(`${file} gave no frames${opts.start ? ` after ${opts.start} s` : ""}`, EXIT.BAD_INPUT);
+  if (!out.length) throw because("no-frames", new CliError(`${file} gave no frames${opts.start ? ` after ${opts.start} s` : ""}`, EXIT.BAD_INPUT));
   return out;
 }
 
@@ -143,7 +232,7 @@ export function encodeVideo(frames: Image[], fps: number, format: VideoFormat, f
   const res = run("ffmpeg", ["-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", `${w}x${h}`, "-r", String(fps), "-i", "pipe:0", ...codec[format], file], raw);
   if (res.status !== 0) {
     const why = res.stderr.toString().trim().split("\n").pop() ?? "";
-    throw new CliError(`ffmpeg could not write ${file}: ${why}`, EXIT.BAD_INPUT, /Unknown encoder/.test(why) ? "This ffmpeg was built without that encoder; try another --format." : undefined);
+    throw because("encode-failed", new CliError(`ffmpeg could not write ${file}: ${why}`, EXIT.BAD_INPUT, /Unknown encoder/.test(why) ? "This ffmpeg was built without that encoder; try another --format." : undefined));
   }
   return { width: w, height: h };
 }

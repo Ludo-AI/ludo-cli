@@ -1,5 +1,5 @@
 import { GLOBAL_FLAGS, type Parsed } from "../args.js";
-import { CliError, EXIT } from "../errors.js";
+import { because, CliError, EXIT } from "../errors.js";
 import type { Ctx } from "../generate.js";
 import { hintId, noteFact, triedName } from "../telemetry.js";
 import { TOOL_GROUPS, TOOLS, type Tool, type ToolCall } from "./registry.js";
@@ -129,7 +129,7 @@ export function parseToolArgv(argv: string[], tool: Tool): ToolCall {
     const spec = known.get(name);
     if (!spec) {
       const list = tool.flags.map(f => f.flag).join(", ");
-      throw new CliError(`Unknown flag for ludo toolbox ${tool.group} ${tool.name}: ${name}`, EXIT.USAGE, list ? `Flags: ${list}` : undefined);
+      throw because("unknown-flag", new CliError(`Unknown flag for ludo toolbox ${tool.group} ${tool.name}: ${name}`, EXIT.USAGE, list ? `Flags: ${list}` : undefined));
     }
     if (!spec.value) {
       if (eq >= 0) throw new CliError(`${name} does not take a value`, EXIT.USAGE);

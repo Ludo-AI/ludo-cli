@@ -482,6 +482,7 @@ run(process.argv.slice(2)).then(
       if (json) printJson({ error: { message: err.message, exit_code: err.exitCode, hint: err.hint, details: err.details } }, false);
       process.stderr.write(`Error: ${err.message}\n${err.hint ? `${err.hint}\n` : ""}`);
       if (err.exitCode === EXIT.CREDITS && !json) await offerBilling();
+      if (err.reason) noteFact("error_code", err.reason);
       await sendTelemetry(commandLabel, err.exitCode, startedAt, argvForTelemetry);
       return finish(err.exitCode);
     }

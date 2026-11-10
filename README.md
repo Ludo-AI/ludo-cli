@@ -203,6 +203,8 @@ ludo toolbox sprite sequence idle.png jump.png --mode separate --engine godot
 ludo toolbox sprite slice dance.gif
 
 # Video (needs ffmpeg): a clip to a sheet, and a sheet to WebM or MOV with transparency, or MP4.
+# ffmpeg is found on the PATH or where brew, winget, scoop and choco put it; LUDO_FFMPEG names another.
+# A sheet holds 64 megapixels: without --width, a longer clip's frames are shrunk to fit.
 ludo toolbox sprite from-video knight-walk.mp4 --fps 12
 ludo toolbox sprite video knight-walk.png --format webm --loops 3
 

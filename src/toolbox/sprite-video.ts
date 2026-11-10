@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { CliError, EXIT } from "../errors.js";
+import { because, CliError, EXIT } from "../errors.js";
 import { printJson, type Ctx } from "../generate.js";
 import { GRID_KEY } from "../tty/preview.js";
 import { MAX_TOOLBOX_PIXELS, textChunk, type Image } from "../tty/png.js";
@@ -9,7 +9,7 @@ import { crop, joinFrames, sliceSheet } from "./sheet.js";
 import { scaleUp } from "./pixels.js";
 import { gridFlag, hexColour, positiveInt, positiveNumber, textFlag } from "./flags.js";
 import { resolveGrid } from "./sprite.js";
-import { decodeVideo, encodeVideo, needFfmpeg, probeVideo, VIDEO_FORMATS, type VideoFormat } from "./video.js";
+import { decodeVideo, encodeVideo, fitFrames, needFfmpeg, probeVideo, VIDEO_FORMATS, type VideoFormat } from "./video.js";
 import { hint, playHint, TOOLS, type ToolCall } from "./registry.js";
 
 // Spritesheets from video clips and back, through the system's ffmpeg.
@@ -32,7 +32,9 @@ TOOLS.push({
   details: [
     "Every frame of the clip (or of --start for --duration, at --fps) laid out in a grid and stamped",
     "with it, so every sheet tool, preview and engine export takes the result. Needs ffmpeg; WebM",
-    "with alpha keeps its alpha. A Ludo animation needs none of this: it comes as a spritesheet."
+    "with alpha keeps its alpha. A sheet holds 64 megapixels: without --width, the frames of a clip",
+    "that would go over are shrunk to fit (and the output says so). A Ludo animation needs none of",
+    "this: it comes as a spritesheet."
   ],
   flags: [
     { flag: "--fps", value: "n", description: "Frames per second to take (default: the video's)" },
@@ -44,14 +46,19 @@ TOOLS.push({
   async run(ctx: Ctx, call: ToolCall) {
     if (call.args.length !== 1) throw usage("Usage: ludo toolbox sprite from-video <video> [--fps n]");
     const file = call.args[0];
-    if (!fs.existsSync(file)) throw usage(`File not found: ${file}`);
+    if (!fs.existsSync(file)) throw because("file-not-found", usage(`File not found: ${file}`));
     needFfmpeg();
     const fps = positiveNumber(call, "--fps");
     if (fps !== undefined && fps > 120) throw usage("--fps goes up to 120");
     const width = positiveInt(call, "--width");
     if (width !== undefined && (width < 2 || width > 8192)) throw usage("--width takes 2 to 8192");
     const info = probeVideo(file);
-    const frames = decodeVideo(file, info, { fps, start: seconds(call, "--start"), duration: seconds(call, "--duration"), width, maxPixels: MAX_TOOLBOX_PIXELS });
+    const take = { fps, start: seconds(call, "--start"), duration: seconds(call, "--duration"), width, maxPixels: MAX_TOOLBOX_PIXELS };
+    // Too many pixels for one sheet and no --width given: the frames are
+    // shrunk to fit, and the output says so.
+    const fit = fitFrames(info, take);
+    const frames = decodeVideo(file, info, take);
+    const shrunk = fit.shrunk ? `Frames shrunk from ${info.width}x${info.height} to ${fit.width}x${fit.height} so the sheet stays within ${MAX_TOOLBOX_PIXELS / 1024 / 1024} megapixels; for full-size frames take fewer (--fps, --start, --duration), or pick the size with --width` : undefined;
     const n = frames.length;
     const cols = Math.min(n, positiveInt(call, "--cols") ?? Math.ceil(Math.sqrt(n)));
     const { sheet, rows } = joinFrames(frames, cols);
@@ -70,6 +77,7 @@ TOOLS.push({
           height: sheet.height,
           grid: { cols, rows, frames: n, frame_width: frames[0].width, frame_height: frames[0].height, fps: rate },
           source: { width: info.width, height: info.height, fps: Math.round(info.fps * 1000) / 1000, codec: info.codec, alpha: info.alpha },
+          ...(shrunk ? { shrunk: true, note: shrunk } : {}),
           ...(engine.length ? { engine_files: engine.map(shown) } : {}),
           ...(ctx.globals.quiet ? {} : { hint: next })
         },
@@ -77,6 +85,7 @@ TOOLS.push({
       );
     } else {
       process.stdout.write(`${n} frames of ${frames[0].width}x${frames[0].height} at ${rate} fps\n`);
+      if (shrunk) process.stderr.write(`${shrunk}\n`);
       process.stdout.write(`Saved ${shown(out)} (${cols}x${rows} grid)\n`);
       for (const f of engine) process.stdout.write(`Saved ${shown(f)}\n`);
       if (!ctx.globals.quiet) process.stderr.write(`Next: ${next.text}: ${next.command}\n`);

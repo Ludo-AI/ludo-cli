@@ -31,6 +31,10 @@ export class CliError extends Error {
   network?: boolean;
   // A 429's Retry-After, in seconds, when the server sent one (header or body).
   retryAfterS?: number;
+  // Why it failed, as a slug for the usage counts ("no-ffmpeg", "too-big"):
+  // an exit code alone does not tell a missing tool from an unreadable file.
+  // Letters, digits and hyphens only; never a file name or a message.
+  reason?: string;
 
   constructor(message: string, exitCode: number = EXIT.ERROR, hint?: string, details?: unknown) {
     super(message);
@@ -38,6 +42,11 @@ export class CliError extends Error {
     this.hint = hint;
     this.details = details;
   }
+}
+
+export function because(reason: string, err: CliError): CliError {
+  err.reason = reason;
+  return err;
 }
 
 // Errors from the person's machine rather than a bug in the CLI: a folder it

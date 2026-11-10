@@ -97,9 +97,10 @@ export function noteJob(id: unknown, credits?: unknown) {
 // read (counts and formats, never names), which engine files it wrote, which
 // "Next:" line it showed, how many gaps `asset manifest` found and of which
 // kinds, whether the installed skill was brought up to date, and the command
-// name tried when there is no such command (see triedName).
+// name tried when there is no such command (see triedName), and why a command
+// failed when the error says (CliError.reason).
 const facts: Record<string, string | number | boolean> = {};
-export function noteFact(key: "engine" | "grid_from" | "hint" | "gap_kinds" | "tried", value: string): void;
+export function noteFact(key: "engine" | "grid_from" | "hint" | "gap_kinds" | "tried" | "error_code", value: string): void;
 export function noteFact(key: "frames" | "gaps", value: number): void;
 export function noteFact(key: "skill_refreshed", value: boolean): void;
 export function noteFact(key: string, value: string | number | boolean) {

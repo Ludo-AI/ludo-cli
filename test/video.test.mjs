@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 import { encodePng, readPng, withText } from "../dist/tty/png.js";
 import { readGrid } from "../dist/tty/preview.js";
 import { joinFrames, sliceSheet } from "../dist/toolbox/sheet.js";
+import { fitFrames } from "../dist/toolbox/video.js";
 
 const exec = promisify(execFile);
 const CLI = path.join(import.meta.dirname, "..", "dist", "cli.js");
@@ -94,11 +95,88 @@ test("from-video resamples with --fps and --width", { skip }, async () => {
   assert.equal((await ludo(dir, ["from-video", clip, "--key"])).code, 2);
 });
 
+// LUDO_FFMPEG names a binary that is not there: with it set nothing else is
+// tried, so the installers' folders don't supply one.
 test("without ffmpeg the video tools say how to get it", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-video-none-"));
   const { file } = sheet(dir);
-  const r = await ludo(dir, ["video", file], { PATH: path.join(dir, "no-such-bin") });
+  const r = await ludo(dir, ["video", file], { PATH: path.join(dir, "no-such-bin"), LUDO_FFMPEG: path.join(dir, "no-such-bin", "ffmpeg") });
   assert.equal(r.code, 12);
   assert.match(r.stderr, /needs ffmpeg/);
   assert.match(r.stderr, /Install it:/);
+  assert.match(r.stderr, /LUDO_FFMPEG/);
+});
+
+test("LUDO_FFMPEG names an ffmpeg that is not on the PATH", { skip }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-video-pinned-"));
+  const { file } = sheet(dir);
+  const where = spawnSync(process.platform === "win32" ? "where" : "which", ["ffmpeg"]).stdout.toString().split(/\r?\n/)[0].trim();
+  assert.ok(where, "ffmpeg's path");
+  const noPath = Object.fromEntries(Object.keys(process.env).filter(k => k.toUpperCase() === "PATH").map(k => [k, ""]));
+  const r = await ludo(dir, ["video", file], { ...noPath, PATH: "", LUDO_FFMPEG: where });
+  assert.equal(r.code, 0, r.stderr);
+});
+
+const HD = { width: 1920, height: 1080, fps: 30, duration: 3, codec: "h264", alpha: false };
+const CAP = 8192 * 8192;
+
+test("fitFrames keeps what fits, shrinks what does not, and refuses what would be tiny or was asked for", () => {
+  // Half a second of 1080p (16 frames) fits as it is.
+  assert.deepEqual(fitFrames(HD, { duration: 0.5, maxPixels: CAP }), { width: 1920, height: 1080, shrunk: false });
+  // 3 s: 91 frames, shrunk to the largest even size that fits, aspect kept.
+  const fit = fitFrames(HD, { maxPixels: CAP });
+  assert.equal(fit.shrunk, true);
+  assert.ok(fit.width % 2 === 0 && fit.height % 2 === 0);
+  assert.ok(fit.width * fit.height * 91 <= CAP, "fits");
+  assert.ok((fit.width + 2) * (Math.round(((fit.width + 2) * 1080) / 1920 / 2) * 2) * 91 > CAP, "and is the largest that does");
+  assert.ok(Math.abs(fit.width / fit.height - 16 / 9) < 0.01);
+  // A lower --fps is fewer frames, so less shrinking.
+  assert.ok(fitFrames(HD, { fps: 10, maxPixels: CAP }).width > fit.width);
+  // A --width the caller chose is never changed: too much is refused, with the seconds that fit.
+  assert.throws(
+    () => fitFrames(HD, { width: 1600, maxPixels: CAP }),
+    err => err.exitCode === 2 && err.reason === "too-big" && /megapixels/.test(err.message) && /--duration 1\.5\b/.test(err.hint)
+  );
+  // Ten minutes would leave frames under 256 px wide: refused, not shrunk to a smudge.
+  assert.throws(() => fitFrames({ ...HD, duration: 600 }, { maxPixels: CAP }), err => err.exitCode === 2 && err.reason === "too-big" && /--duration 1\b/.test(err.hint));
+  // A container that does not say how long it is is left alone.
+  assert.deepEqual(fitFrames({ ...HD, duration: 0 }, { maxPixels: CAP }), { width: 1920, height: 1080, shrunk: false });
+});
+
+test("from-video shrinks the frames of a clip too big for one sheet, and says so", { skip }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-video-big-"));
+  const clip = path.join(dir, "big.mp4");
+  execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc=size=1920x1080:rate=30", "-t", "3", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", clip]);
+  const r = await ludo(dir, ["from-video", clip]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(r.out.shrunk, true);
+  assert.match(r.out.note, /shrunk from 1920x1080 to \d+x\d+/);
+  assert.equal(r.out.grid.frames, 90);
+  assert.ok(r.out.grid.frame_width < 1920 && r.out.grid.frame_width >= 256);
+  assert.ok(r.out.width * r.out.height <= CAP);
+  assert.deepEqual([r.out.source.width, r.out.source.height], [1920, 1080]);
+  // The size the caller asked for is kept or refused, never changed.
+  const asked = await ludo(dir, ["from-video", clip, "--width", "1600"]);
+  assert.equal(asked.code, 2);
+  assert.match(asked.stderr, /megapixels[\s\S]*--duration/);
+  const part = await ludo(dir, ["from-video", clip, "--duration", "0.5", "--name", "part"]);
+  assert.equal(part.code, 0, part.stderr);
+  assert.equal(part.out.shrunk, undefined);
+  assert.equal(part.out.grid.frame_width, 1920);
+});
+
+test("a failure's reason goes with the usage event, as a slug", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-video-why-"));
+  const { file } = sheet(dir);
+  const env = { LUDO_TELEMETRY: "1", DO_NOT_TRACK: "", CI: "", LUDO_API_URL: "http://127.0.0.1:9", PATH: path.join(dir, "no-such-bin"), LUDO_FFMPEG: path.join(dir, "no-such-bin", "ffmpeg") };
+  assert.equal((await ludo(dir, ["video", file], env)).code, 12);
+  assert.equal((await ludo(dir, ["from-video", path.join(dir, "missing.mp4")], env)).code, 2);
+  assert.equal((await ludo(dir, ["from-video", file, "--speed", "2"], env)).code, 2);
+  const events = fs.readFileSync(path.join(dir, ".config", "telemetry-queue.jsonl"), "utf8").trim().split("\n").map(l => JSON.parse(l));
+  assert.deepEqual(events.map(e => [e.command, e.props.exit_code, e.props.error_code]), [
+    ["toolbox sprite video", 12, "no-ffmpeg"],
+    ["toolbox sprite from-video", 2, "file-not-found"],
+    ["toolbox sprite from-video", 2, "unknown-flag"]
+  ]);
+  assert.doesNotMatch(JSON.stringify(events), /missing|disc/);
 });
