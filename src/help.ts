@@ -227,6 +227,12 @@ ${TOOLS.map(t => `- \`ludo toolbox ${t.group} ${t.name} ${t.args}\`: ${t.summary
   (\`ludo model create --image hero.png --rig\`), pick a style (\`ludo sprite directional-styles\`), check the look
   with \`ludo sprite directional-preview\` (free; saves the frames as images to look at; one preview at a time per
   account), then render \`ludo sprite directional\` (one sheet per direction, files named \`-SW\`, \`-N\`, ...).
+- Your own animations (a move no animation preset covers, for humanoid characters): \`ludo model animation --prompt "overhead sword slash"\`
+  generates it once and saves it to the account for good, tied to no model (its preview mp4 is saved with the job's files).
+  Pass its \`id\` as \`--animation-id\` wherever \`--preset-id\` goes: \`ludo model animate-preset\`, \`ludo sprite directional\`,
+  \`ludo sprite directional-preview\` and \`ludo sprite transfer-motion\` (with \`--perspective\` and \`--direction\`).
+  \`--mirror\` plays a preset or an animation on the other side. \`ludo model animations\` (free) lists the ones already on
+  the account: check it, and \`ludo sprite list-animation-presets\`, before generating a move.
   Long jobs: \`--no-wait\` returns \`{id, status}\`; resume with \`ludo jobs wait <id>\`.
 
 ## Output

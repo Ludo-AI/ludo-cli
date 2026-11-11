@@ -53,6 +53,18 @@ with API access if needed) and approve the CLI.
    came out). It is free but capped at a few a day, so one report per issue, and never include
    secrets, personal data or file contents.
 
+## Animations: presets first, then your own
+
+For a humanoid character, look for the move in `ludo sprite list-animation-presets` (free) first.
+When no preset covers it, `ludo model animation --prompt "overhead sword slash"` generates the move
+once (0.5 credits per animation) and saves it to the user's account for good, tied to no model;
+`ludo model animations` (free) lists the ones already there, so check it before generating a move
+again. An animation's `id` goes as `--animation-id` wherever `--preset-id` goes:
+`ludo model animate-preset` (onto a rigged 3D model), `ludo sprite directional` and
+`ludo sprite directional-preview` (a 3D model seen from up to 8 directions) and
+`ludo sprite transfer-motion` (onto a 2D sprite, with `--perspective` and `--direction`).
+`--mirror` plays a preset or an animation on the other side, left and right swapped.
+
 ## Free tools: `ludo toolbox`
 
 Free and offline, with no account and no login. `ludo toolbox` lists every tool and each has `--help`.

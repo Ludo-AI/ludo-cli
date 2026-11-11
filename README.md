@@ -34,7 +34,7 @@ ludo <group> <command> --help
 | `image` | `create`, `generate-with-style`, `edit`, `remove-background` |
 | `sprite` | `animate`, `animate-keyframes`, `generate-pose`, `rotate`, `transfer-motion`, `list-animation-presets`, `edit`, `create-audio` |
 | `video` | `create`, `create-from-references`, `edit`, `upscale` |
-| `model` | `create`, `rig`, `animate`, `animate-preset` |
+| `model` | `create`, `rig`, `animate`, `animate-preset`, `animation`, `animations` |
 | `audio` | `sound-effect`, `ambiance`, `music`, `transform`, `voice`, `speech`, `speech-preset` |
 | `jobs` | `list`, `get`, `cancel`, `wait` |
 | `generations` | `list` |
