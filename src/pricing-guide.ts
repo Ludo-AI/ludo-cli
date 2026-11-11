@@ -44,6 +44,36 @@ function planText(p: Plan, currency: string): string {
   return lines.join("\n");
 }
 
+interface Bracket {
+  credits: number;
+  cents: number;
+}
+interface TopUps {
+  min_credits: number;
+  max_credits: number;
+  eligible: string;
+  brackets?: Bracket[];
+  tiers?: { name: string; cents_per_credit: number; brackets: Bracket[] }[];
+}
+
+// The "Extra credits" block. What an extra credit costs depends on the plan,
+// so there is one line per plan; a server from before per-plan prices sends
+// one table and gets one line.
+export function topUpLines(top: TopUps | undefined, currency: string): string[] {
+  const priced = (brackets: Bracket[]) => brackets.map(b => `${num(b.credits)} for ${money(b.cents / 100, currency)}`).join(", ");
+  if (top?.tiers?.length) {
+    return [
+      `Extra credits (${top.eligible}): ${num(top.min_credits)} to ${num(top.max_credits)} at a time, priced by plan:`,
+      ...top.tiers.map(t => `  ${t.name} (from ${t.cents_per_credit}¢ a credit): ${priced(t.brackets)}`),
+      ""
+    ];
+  }
+  if (top?.brackets?.length) {
+    return [`Extra credits (${top.eligible}): ${num(top.min_credits)} to ${num(top.max_credits)} at a time; ${priced(top.brackets)}.`, ""];
+  }
+  return [];
+}
+
 export async function pricing(ctx: Ctx): Promise<number> {
   const apiUrl = resolveApiUrl(ctx.globals.apiUrl);
   const res = await new Api(apiUrl, resolveApiKey(ctx.globals.apiKey)).request("GET", "/pricing", { timeoutMs: 15_000 });
@@ -58,11 +88,7 @@ export async function pricing(ctx: Ctx): Promise<number> {
   }
   const currency = guide.currency || "usd";
   const out = [guide.summary, "", ...guide.plans.map((p: Plan) => planText(p, currency) + "\n")];
-  const top = guide.top_ups;
-  if (top?.brackets?.length) {
-    const brackets = top.brackets.map((b: { credits: number; cents: number }) => `${num(b.credits)} for ${money(b.cents / 100, currency)}`).join(", ");
-    out.push(`Extra credits (${top.eligible}): ${num(top.min_credits)} to ${num(top.max_credits)} at a time; ${brackets}.`, "");
-  }
+  out.push(...topUpLines(guide.top_ups, currency));
   out.push("Good to know:");
   for (const r of guide.rules || []) out.push(`  • ${r.text}`);
   out.push("", `Each command's price: ludo <group> <command> --help. Plans: ${guide.links?.pricing}. Buy or change plan: ludo billing.`);

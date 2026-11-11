@@ -11,6 +11,7 @@ import { upsertSection } from "../dist/workspace.js";
 import { parsePick } from "../dist/generate.js";
 import { extractInlineFiles, freePath } from "../dist/jobs.js";
 import { fileBaseName } from "../dist/args.js";
+import { topUpLines } from "../dist/pricing-guide.js";
 import os from "node:os";
 import path from "node:path";
 import { appendAssets, readAssets } from "../dist/assets.js";
@@ -216,4 +217,27 @@ test("fileBaseName drops a media extension and refuses folders", () => {
   assert.equal(fileBaseName("hero.PNG", "--name"), "hero");
   assert.equal(fileBaseName("knight.walk", "--name"), "knight.walk");
   for (const bad of ["a/b", "a\\b", "..", "../x", "", "  ", ".webp"]) assert.throws(() => fileBaseName(bad, "--name"), /plain file name/, bad);
+});
+
+test("pricing lists what extra credits cost on each plan", () => {
+  const top = {
+    min_credits: 250,
+    max_credits: 17000,
+    eligible: "any active paid plan",
+    brackets: [{ credits: 250, cents: 1500 }, { credits: 1000, cents: 6000 }],
+    tiers: [
+      { name: "Indie", cents_per_credit: 6, brackets: [{ credits: 250, cents: 1500 }, { credits: 1000, cents: 6000 }] },
+      { name: "Pro", cents_per_credit: 3.5, brackets: [{ credits: 250, cents: 875 }, { credits: 1000, cents: 3500 }] }
+    ]
+  };
+  assert.deepEqual(topUpLines(top, "usd"), [
+    "Extra credits (any active paid plan): 250 to 17,000 at a time, priced by plan:",
+    "  Indie (from 6¢ a credit): 250 for $15, 1,000 for $60",
+    "  Pro (from 3.5¢ a credit): 250 for $8.75, 1,000 for $35",
+    ""
+  ]);
+  // A server from before per-plan prices sends one table.
+  const { tiers, ...old } = top;
+  assert.deepEqual(topUpLines(old, "usd"), ["Extra credits (any active paid plan): 250 to 17,000 at a time; 250 for $15, 1,000 for $60.", ""]);
+  assert.deepEqual(topUpLines(undefined, "usd"), []);
 });

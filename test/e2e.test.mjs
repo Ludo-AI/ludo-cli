@@ -48,7 +48,18 @@ const PRICING = {
     { id: "free-trial", name: "Free Trial", api_access: false, credits_per_month: null, credits_at_signup: 30, seats: 1, active_projects: "1", queue_concurrency: 1, prices: [], included: ["1 seat"], not_included: [] },
     { id: "pro", name: "Pro", api_access: true, credits_per_month: 1000, credits_at_signup: null, seats: 1, active_projects: "unlimited", queue_concurrency: 2, prices: [{ interval: "month", amount: 50, credits_granted: 1000 }, { interval: "year", amount: 420, per_month: 35, credits_granted: 12000 }], included: ["API, MCP and CLI access"], not_included: [] }
   ],
-  top_ups: { currency: "usd", min_credits: 250, max_credits: 17000, step_credits: 50, brackets: [{ credits: 250, cents: 1500 }], eligible: "any active paid plan" },
+  top_ups: {
+    currency: "usd",
+    min_credits: 250,
+    max_credits: 17000,
+    step_credits: 50,
+    brackets: [{ credits: 250, cents: 1500 }],
+    tiers: [
+      { id: "indie", name: "Indie", cents_per_credit: 6, brackets: [{ credits: 250, cents: 1500 }, { credits: 1000, cents: 6000 }] },
+      { id: "pro", name: "Pro", cents_per_credit: 3.5, brackets: [{ credits: 250, cents: 875 }, { credits: 1000, cents: 3500 }] }
+    ],
+    eligible: "any active paid plan"
+  },
   rules: [{ id: "api_always_pays", text: "Every generation through the API, MCP or CLI costs credits." }],
   costs: [{ operation: "createImage", credits: "0.5 credits per result" }],
   links: { pricing: "https://ludo.ai/pricing", billing: "http://web.test/account/billing" }
