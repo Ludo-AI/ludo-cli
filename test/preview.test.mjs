@@ -114,3 +114,21 @@ test("image contact: takes stay apart (numbered, cut in the middle), other scrip
   fs.writeFileSync(path.join(none, "broken.png"), "not a png");
   assert.equal((await run(["toolbox", "image", "contact", "broken.png", "--json"], none)).code, EXIT.BAD_INPUT);
 });
+
+test("image contact: a list of names quoted into one argument is a usage error, not a crash", async () => {
+  const dir = tmp();
+  const names = Array.from({ length: 40 }, (_, i) => `pose_crouch_look_down-${i}.png pose_skid_hard-${i}.png`).join("\n");
+  const r = await run(["toolbox", "image", "contact", names], dir);
+  assert.equal(r.code, EXIT.USAGE, r.stderr);
+  assert.match(r.stderr, /each image as its own argument/);
+});
+
+test("image contact: an output folder that is really a file is bad input, not a crash", async () => {
+  const dir = tmp();
+  const rgba = new Uint8Array(8 * 8 * 4).fill(255);
+  fs.writeFileSync(path.join(dir, "a.png"), encodePng({ width: 8, height: 8, rgba }));
+  fs.writeFileSync(path.join(dir, "blocker"), "not a folder");
+  const r = await run(["toolbox", "image", "contact", "a.png", "--out", "blocker/sub"], dir);
+  assert.equal(r.code, EXIT.BAD_INPUT, r.stderr);
+  assert.match(r.stderr, /Could not write/);
+});

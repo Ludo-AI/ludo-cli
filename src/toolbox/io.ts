@@ -161,8 +161,15 @@ export function engineFiles(ctx: Ctx, sheet: string, image: { width: number; hei
 }
 
 export function writePng(file: string, image: Image, chunks: RawChunk[] = []) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, encodePng(image, { chunks }));
+  const data = encodePng(image, { chunks });
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, data);
+  } catch (err) {
+    // The output path is the caller's: a folder that is really a file, a
+    // read-only or full disk. Bad input, not a crash to report.
+    throw new CliError(`Could not write ${shown(file)}: ${(err as Error).message}`, EXIT.BAD_INPUT);
+  }
 }
 
 // <dir>/<base>, or <base>-2, -3... when taken: never overwrite.

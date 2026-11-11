@@ -40,7 +40,15 @@ const IMAGE_FILE = /\.(png|webp|gif|jpe?g)$/i;
 // Each argument is an image, or a folder whose images are taken in natural order.
 function imageFiles(args: string[]): string[] {
   return args.flatMap(arg => {
-    const stat = fs.statSync(arg, { throwIfNoEntry: false });
+    let stat: fs.Stats | undefined;
+    try {
+      stat = fs.statSync(arg, { throwIfNoEntry: false });
+    } catch {
+      // ENAMETOOLONG and the like: not a path at all, usually several file
+      // names quoted into one argument.
+      const first = arg.trim().split(/\s+/)[0].slice(0, 60);
+      throw usage(`Not a file or folder name: "${first}..."${/\s/.test(arg.trim()) ? ". Pass each image as its own argument, not one quoted list" : ""}`);
+    }
     if (!stat?.isDirectory()) return [arg];
     const found = fs.readdirSync(arg).filter(f => IMAGE_FILE.test(f)).sort(natural.compare);
     if (!found.length) throw usage(`No PNG, WebP, GIF or JPEG files in ${arg}`);
