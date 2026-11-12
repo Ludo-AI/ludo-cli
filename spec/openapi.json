@@ -6326,12 +6326,14 @@
           },
           "perspectives": {
             "type": "array",
+            "description": "The named camera heights. `perspective` also takes any angle in degrees from 0 (side view) to 90 (straight down).",
             "items": {
               "type": "string"
             }
           },
           "directions": {
             "type": "array",
+            "description": "The named directions. `directions` also takes any angle in degrees (S = 0, SW = 45, W = 90, N = 180).",
             "items": {
               "type": "string"
             }
@@ -6372,16 +6374,8 @@
             "description": "The name of an animation the GLB itself carries. At most one of animation_url, preset_id, animation_id and model_animation; with none, the preview is a single frame."
           },
           "perspective": {
-            "type": "string",
             "default": "isometric",
-            "description": "Camera height, from the side (horizon) to straight down (top).",
-            "enum": [
-              "horizon",
-              "low",
-              "isometric",
-              "high",
-              "top"
-            ],
+            "description": "Camera height: a name - horizon (0 degrees), low (15), isometric (35.264), high (60) or top (80) - or any number of degrees above the horizon from 0 (side view) to 90 (straight down), to match a game's own camera (53.13, say). Every direction of one height shares a frame; different heights do not.",
             "example": "isometric"
           },
           "directions": {
@@ -6392,20 +6386,9 @@
             "minItems": 1,
             "maxItems": 8,
             "uniqueItems": true,
-            "description": "Where the camera stands around a character facing S, each direction at most once. One preview per direction, in this order.",
+            "description": "Where the camera stands around a character facing S, each direction at most once. One preview per direction, in this order. A direction is a compass name (S, SW, W, NW, N, NE, E, SE) or any angle in degrees on the same scale (S = 0, SW = 45, W = 90, N = 180, E = -90 or 270; angles wrap around), 60-degree steps for a hex grid, say. Angles use a slightly larger frame than the names: a request with any angle uses it for all its directions, so give every direction as an angle when they must line up.",
             "items": {
-              "type": "string",
-              "enum": [
-                "S",
-                "SW",
-                "W",
-                "NW",
-                "N",
-                "NE",
-                "E",
-                "SE"
-              ],
-              "example": "S"
+              "description": "A compass name (S, SW, W, NW, N, NE, E, SE) or an angle in degrees."
             },
             "example": [
               "SW"
@@ -6493,16 +6476,8 @@
             "description": "The name of an animation the GLB itself carries. At most one of animation_url, preset_id, animation_id and model_animation; with none, each sheet is a single frame."
           },
           "perspective": {
-            "type": "string",
             "default": "isometric",
-            "description": "Camera height, from the side (horizon) to straight down (top).",
-            "enum": [
-              "horizon",
-              "low",
-              "isometric",
-              "high",
-              "top"
-            ],
+            "description": "Camera height: a name - horizon (0 degrees), low (15), isometric (35.264), high (60) or top (80) - or any number of degrees above the horizon from 0 (side view) to 90 (straight down), to match a game's own camera (53.13, say). Every direction of one height shares a frame; different heights do not.",
             "example": "isometric"
           },
           "directions": {
@@ -6513,20 +6488,9 @@
             "minItems": 1,
             "maxItems": 8,
             "uniqueItems": true,
-            "description": "Where the camera stands around a character facing S, each direction at most once. One sheet per direction, in this order, rendered together on the same frame size, scale and floor so they line up.",
+            "description": "Where the camera stands around a character facing S, each direction at most once. One sheet per direction, in this order, rendered together on the same frame size, scale and floor so they line up. A direction is a compass name (S, SW, W, NW, N, NE, E, SE) or any angle in degrees on the same scale (S = 0, SW = 45, W = 90, N = 180, E = -90 or 270; angles wrap around), 60-degree steps for a hex grid, say. Angles use a slightly larger frame than the names: a request with any angle uses it for all its directions, so give every direction as an angle when they must line up.",
             "items": {
-              "type": "string",
-              "enum": [
-                "S",
-                "SW",
-                "W",
-                "NW",
-                "N",
-                "NE",
-                "E",
-                "SE"
-              ],
-              "example": "S"
+              "description": "A compass name (S, SW, W, NW, N, NE, E, SE) or an angle in degrees."
             },
             "example": [
               "SW"
@@ -6633,16 +6597,8 @@
             "example": "<url> OR data:model/gltf-binary;base64,..."
           },
           "perspective": {
-            "type": "string",
             "default": "isometric",
-            "description": "Camera height, from the side (horizon) to straight down (top).",
-            "enum": [
-              "horizon",
-              "low",
-              "isometric",
-              "high",
-              "top"
-            ],
+            "description": "Camera height: a name - horizon (0 degrees), low (15), isometric (35.264), high (60) or top (80) - or any number of degrees above the horizon from 0 (side view) to 90 (straight down), to match a game's own camera (53.13, say). Every direction of one height shares a frame; different heights do not.",
             "example": "isometric"
           },
           "directions": {
@@ -6653,20 +6609,9 @@
             "minItems": 1,
             "maxItems": 8,
             "uniqueItems": true,
-            "description": "Where the camera stands around a character facing S, each direction at most once. One image per direction, in this order, rendered together so they line up.",
+            "description": "Where the camera stands around a character facing S, each direction at most once. One image per direction, in this order, rendered together so they line up. A direction is a compass name (S, SW, W, NW, N, NE, E, SE) or any angle in degrees on the same scale (S = 0, SW = 45, W = 90, N = 180, E = -90 or 270; angles wrap around), 60-degree steps for a hex grid, say. Angles use a slightly larger frame than the names: a request with any angle uses it for all its directions, so give every direction as an angle when they must line up.",
             "items": {
-              "type": "string",
-              "enum": [
-                "S",
-                "SW",
-                "W",
-                "NW",
-                "N",
-                "NE",
-                "E",
-                "SE"
-              ],
-              "example": "S"
+              "description": "A compass name (S, SW, W, NW, N, NE, E, SE) or an angle in degrees."
             },
             "example": [
               "SW"
@@ -8743,7 +8688,7 @@
         "properties": {
           "direction": {
             "type": "string",
-            "description": "The direction this preview is seen from."
+            "description": "The direction this preview is seen from, as it was asked for (a compass name, or the angle in degrees as text)."
           },
           "frame_urls": {
             "type": "array",
@@ -8776,7 +8721,7 @@
         "properties": {
           "direction": {
             "type": "string",
-            "description": "The direction this sheet is seen from."
+            "description": "The direction this sheet is seen from, as it was asked for (a compass name, or the angle in degrees as text)."
           },
           "spritesheet_url": {
             "type": "string",
@@ -8833,7 +8778,7 @@
         "properties": {
           "direction": {
             "type": "string",
-            "description": "The direction this image is seen from."
+            "description": "The direction this image is seen from, as it was asked for (a compass name, or the angle in degrees as text)."
           },
           "url": {
             "type": "string",
@@ -9348,9 +9293,16 @@
             "type": "integer",
             "format": "int64"
           },
+          "tiers": {
+            "type": "array",
+            "description": "What extra credits cost on each plan, cheapest plan first. A credit costs less on a bigger plan.",
+            "items": {
+              "$ref": "#/components/schemas/TopupTier"
+            }
+          },
           "brackets": {
             "type": "array",
-            "description": "The price at each bracket, in cents. An amount between two brackets is priced on the straight line between them.",
+            "description": "The Indie price table, kept for older clients. Read `tiers` for the price on a given plan.",
             "items": {
               "$ref": "#/components/schemas/TopupBracket"
             }
@@ -9543,6 +9495,30 @@
             "type": "integer",
             "format": "int64",
             "description": "Credits per interval. Annual plans grant the whole year at once."
+          }
+        }
+      },
+      "TopupTier": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "indie, pro or studio. A plan outside these three buys at one of their prices (Indie+ at Indie's)."
+          },
+          "name": {
+            "type": "string"
+          },
+          "cents_per_credit": {
+            "type": "number",
+            "format": "float",
+            "description": "The base price of a credit, in cents, before the volume discount."
+          },
+          "brackets": {
+            "type": "array",
+            "description": "The price at each bracket, in cents. An amount between two brackets is priced on the straight line between them.",
+            "items": {
+              "$ref": "#/components/schemas/TopupBracket"
+            }
           }
         }
       },
