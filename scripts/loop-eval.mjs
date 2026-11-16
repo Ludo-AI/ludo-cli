@@ -1,15 +1,14 @@
 // Measures the loop quality on real spritesheets: every PNG under the given
 // folders that carries a ludo:grid stamp. Real sheets come with no answer, so
-// the sheets that loop cleanly as found are damaged in known ways, and each
-// damage must take the quality under VISIBLE:
+// the sheets that loop cleanly as found are changed in known ways:
 //
-//   first     the first frame appended again       -> repeat 1
-//   three     the first three appended again       -> repeat 3
-//   far       the frame least like the first added -> a jump
+//   first     the first frame appended again       -> reported as repeat 1
+//   three     the first three appended again       -> reported as repeat 3
+//   far       the frame least like the first added -> quality under VISIBLE
 //   reversed  played backwards                     -> still clean
 //
-// A damaged sheet that still scores VISIBLE or more is missed; a reversed
-// one under CLEAN is wrong. The scores as found are printed for reference.
+// A repeat is reported, not scored (the last frame matches the first). The
+// scores as found are printed for reference.
 //
 //   npm run build && node scripts/loop-eval.mjs ~/some/folder [...]
 import fs from "node:fs";
@@ -18,7 +17,7 @@ import { readPng } from "../dist/tty/png.js";
 import { readGrid } from "../dist/tty/preview.js";
 import { sliceSheet } from "../dist/toolbox/sheet.js";
 import { backgroundOf } from "../dist/toolbox/grid.js";
-import { analyseLoop, CLEAN, frameDifferences, VISIBLE } from "../dist/toolbox/loop.js";
+import { analyseLoop, CLEAN, frameDifferences, loopScore, VISIBLE } from "../dist/toolbox/loop.js";
 
 function* pngs(dir) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -30,13 +29,13 @@ function* pngs(dir) {
   }
 }
 
-const analyse = (frames, bg) => analyseLoop(frameDifferences(frames, bg));
+const analyse = (frames, bg) => analyseLoop(frameDifferences(frames, bg), loopScore(frames, bg));
 
 const variants = {
-  first: f => [[...f, f[0]], false],
-  three: f => [[...f, f[0], f[1], f[2]], false],
-  far: (f, D) => [[...f, f[D[0].indexOf(Math.max(...D[0]))]], false],
-  reversed: f => [[...f].reverse(), true]
+  first: f => [[...f, f[0]], r => r.seam.repeats === 1],
+  three: f => [[...f, f[0], f[1], f[2]], r => r.seam.repeats === 3],
+  far: (f, D) => [[...f, f[D[0].indexOf(Math.max(...D[0]))]], r => r.quality < VISIBLE],
+  reversed: f => [[...f].reverse(), r => r.quality >= CLEAN]
 };
 
 const sheets = [];
@@ -79,11 +78,10 @@ for (const [name, make] of Object.entries(variants)) {
   const tally = { sheets: 0, right: 0, missed: 0 };
   const wrong = [];
   for (const s of sheets) {
-    const [frames, stillClean] = make(s.frames, s.D);
+    const [frames, expected] = make(s.frames, s.D);
     const r = analyse(frames, s.bg);
     tally.sheets++;
-    const ok = stillClean ? r.quality >= CLEAN : r.quality < VISIBLE;
-    if (ok) tally.right++;
+    if (expected(r)) tally.right++;
     else (tally.missed++, wrong.push(`  ${s.file}: quality ${r.quality}, seam ${r.seam.ratio}`));
   }
   wrongTotal += tally.missed;

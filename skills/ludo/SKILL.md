@@ -71,7 +71,7 @@ Free and offline, with no account and no login. `ludo toolbox` lists every tool 
 Use them instead of writing your own image or audio script:
 - Sheets: `ludo toolbox sprite slice <sheet>` cuts one into frames, `sprite join <frames...>` puts
   frames back, `sprite frames <sheet> --drop 7 --hold 4x3` edits frames, `sprite loop <sheet>`
-  scores the loop (0 to 1: the seam against the clip's pace), `sprite loop <take1> <take2>...`
+  scores the loop (0 to 1, close to the API's loop_score: under 0.7 the seam shows), `sprite loop <take1> <take2>...`
   ranks several takes of one animation (after `--n 4`, keep the best; a bad loop on a Ludo
   sheet: `ludo sprite edit --edit-mode fix_loop`), `sprite gif <sheet>` makes a GIF,
   `sprite pack <sheets...>` brings a character's animations to one size and ground line

@@ -8,7 +8,7 @@ import { baseOf, carriedChunks, engineFiles, freeName, loadImageFile, shown, wri
 import { noteFact } from "../telemetry.js";
 import { crop, joinFrames, sliceSheet } from "./sheet.js";
 import { applyFrameOps, parseFrameList, parseHolds, type FrameOps } from "./frames.js";
-import { analyseLoop, CLEAN, frameDifferences, VISIBLE, type LoopReport } from "./loop.js";
+import { analyseLoop, CLEAN, frameDifferences, loopScore, VISIBLE, type LoopReport } from "./loop.js";
 import { gridFlag, hexColour, positiveInt, positiveNumber, textFlag } from "./flags.js";
 import { makeGif, MAX_GIF_FPS } from "./gif.js";
 import { scaleUp } from "./pixels.js";
@@ -292,10 +292,25 @@ function inspectLoop(call: ToolCall, file: string) {
   const n = grid.frames;
   if (n < 2) throw new CliError(`${src.file} has a single frame; there is nothing to loop`, EXIT.BAD_INPUT);
   const cells = sliceSheet(src.image, grid.cols, grid.rows, n);
-  return { src, grid, from, cells, report: analyseLoop(frameDifferences(cells, backgroundOf(src.image))) };
+  const bg = backgroundOf(src.image);
+  return { src, grid, from, cells, report: analyseLoop(frameDifferences(cells, bg), loopScore(cells, bg)) };
 }
 
-const qualityWord = (q: number | null) => (q === null ? "static" : q >= CLEAN ? "loops cleanly" : q >= VISIBLE ? "a small hitch at the seam" : "a hitch at the seam");
+// A low score with a seam no bigger than the clip's other steps is a clip of
+// few frames and big steps, where every frame differs that much from the
+// next: on Ludo's own sheets that case is a bad loop about half the time, a
+// low score with a jump nine times in ten. Only the second is called a seam.
+const seamShows = (r: LoopReport) => r.quality !== null && r.quality < VISIBLE && r.seam.verdict === "jump";
+const qualityWord = (r: LoopReport) =>
+  r.quality === null
+    ? "static"
+    : r.quality >= CLEAN
+      ? "loops cleanly"
+      : r.quality >= VISIBLE
+        ? "loops, with a small seam"
+        : seamShows(r)
+          ? "a visible seam"
+          : "the last and first frames differ, but no more than neighbouring frames do";
 const seamText = (r: LoopReport) =>
   r.seam.verdict === "repeat" ? `the last ${r.seam.repeats === 1 ? "frame repeats the first" : `${r.seam.repeats} frames repeat the first ${r.seam.repeats}`}` : `seam ${r.seam.ratio}x a typical step`;
 
@@ -317,7 +332,7 @@ function compareLoops(ctx: Ctx, call: ToolCall): number {
   process.stdout.write(`${rows.length} sheets, the best loop first:\n`);
   rows.forEach((r, i) =>
     process.stdout.write(
-      `  ${String(i + 1).padStart(2)}. ${r.sheet.padEnd(width)}  ${r.quality === null ? "  -" : r.quality.toFixed(2)}  ${qualityWord(r.quality)}` +
+      `  ${String(i + 1).padStart(2)}. ${r.sheet.padEnd(width)}  ${r.quality === null ? "  -" : r.quality.toFixed(2)}  ${qualityWord(r.report)}` +
         `${r.quality === null ? "" : ` (${seamText(r.report)})`}${r.jumps.length ? `; big steps into ${r.jumps.join(", ")}` : ""}\n`
     )
   );
@@ -331,12 +346,14 @@ TOOLS.push({
   args: "<sheet> [<sheet>...]",
   summary: "How well an animation loops (0 to 1), or which of several takes loops best",
   details: [
-    "Compares every frame with every other (the frame-difference matrix of Video Textures,",
-    "Schödl et al. 2000) and scores the seam, the step from the last frame back to the first,",
-    `against the animation's typical step: 1 when it plays like any other step, ${CLEAN} and up clean,`,
-    `under ${VISIBLE} a hitch a player sees. Much bigger is a jump; much smaller, the motion hovering at`,
-    "the loop point; none, a pose shown twice. Big steps inside the clip are listed, not scored.",
-    "Held frames (--hold) do not count, and a ping-pong is reported as mirrored. Given several sheets",
+    "Scores how alike the last frame and the first are: 1 when the clip flows into its start,",
+    `${CLEAN} and up clean, under ${VISIBLE} with a jump at the seam a seam a player sees. It approximates the loop_score`,
+    `Ludo's API returns with a sheet (under ${VISIBLE} it flags bad_loop), measured offline from each frame's`,
+    "edges, colours and silhouette: usually within 0.1 of it. It also compares every frame with every",
+    "other (the frame-difference matrix of Video Textures, Schödl et al. 2000) to report the seam",
+    "against a typical step, big steps inside the clip, held frames (--hold), a ping-pong (mirrored),",
+    "and a last frame that repeats the first: a pose shown twice, which is reported, not scored;",
+    "`sprite frames --drop` removes it. Given several sheets",
     "(takes of one animation, like `--n 4`), it ranks them, the best loop first. It only measures,",
     "and never cuts. Ludo's sheets come cut to their loop already; if one of Ludo's does not loop,",
     "`ludo sprite edit --edit-mode fix_loop` repairs it."
@@ -352,7 +369,7 @@ TOOLS.push({
     const next =
       quality === null
         ? undefined
-        : quality >= VISIBLE
+        : !seamShows(report)
           ? playHint(ctx, sheetArg)
           : hint("If Ludo made it, Ludo can repair the loop (1 credit a second)", "ludo sprite edit --spritesheet-url <its spritesheet_url> --edit-mode fix_loop");
 
@@ -379,8 +396,8 @@ TOOLS.push({
       out(`${n} frames (${grid.cols}x${grid.rows} grid${from === "stamp" ? ", from its Ludo stamp" : from === "gif" ? ", the GIF's frames" : from === "webp" ? ", the WebP's frames" : from === "flag" ? "" : ", detected"})`);
       if (quality === null) out("No frame moves: there is nothing to loop.");
       else {
-        out(`Loop quality ${quality.toFixed(2)}: ${qualityWord(quality)} (${seamText(report)}, ${n} -> 1).`);
-        if (seam.verdict === "repeat") out("So the loop shows that pose twice.");
+        out(`Loop quality ${quality.toFixed(2)}: ${qualityWord(report)} (${seamText(report)}, ${n} -> 1).`);
+        if (seam.verdict === "repeat") out(`So the loop shows ${seam.repeats === 1 ? "that pose" : "those poses"} twice; dropping ${seam.repeats === 1 ? `frame ${n}` : `the last ${seam.repeats} frames`} fixes it.`);
         if (report.mirrored) out("It plays forward then back (a ping-pong).");
         if (report.holds.length) out(`Held frames: ${report.holds.join(", ")}.`);
         if (report.jumps.length) out(`Big steps (over twice the typical one) into frames ${report.jumps.join(", ")}.`);

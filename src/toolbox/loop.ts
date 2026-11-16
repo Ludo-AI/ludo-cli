@@ -3,54 +3,51 @@ import type { Background } from "./grid.js";
 
 // How well does an animation loop? One number, 0 to 1, and where it hitches.
 //
-// The method is the frame-distance matrix of Video Textures (Schödl,
-// Szeliski, Salesin & Essa, SIGGRAPH 2000, §3): D(i, j) is how different
-// frames i and j are, and a jump from frame e back to frame s looks like an
-// ordinary step when the frame that would have followed e matches s,
-// D(e+1, s) ≈ 0. Their "preserving dynamics" filter with m = 1 averages that
-// with the tap one step earlier, D(e, s-1), so a pose passed through in the
-// opposite direction does not count as a match. Here:
+// Two things are measured.
 //
-// - D is the larger of two measures, each in units of the animation's
-//   typical step (the median adjacent distance, held frames left out), so the
-//   numbers mean the same on a slow idle and a fast attack:
-//   - the mean absolute difference of premultiplied RGBA, which sees colour
-//     and catches a repeated frame exactly, but saturates: sprite limbs move
-//     further than their own width between frames, and two poses that share
-//     no pixels look equally far whatever the distance between them;
-//   - the symmetric chamfer distance between the two silhouettes' outlines
-//     (Barrow et al. 1977; the 3-4 distance transform of Borgefors 1986),
-//     which keeps growing with how far things moved;
-// - a tap only counts when the step it leans on is an ordinary one (not a
-//   held frame, not a jump): a sheet whose last frame is a glitch would
-//   otherwise vouch for loops that run into the glitch. With no usable tap
-//   the seam itself is judged: up to about one step is smooth, much more is
-//   a jump;
-// - a loop whose last frames are its first ones again shows them twice, and
-//   its seam can measure like an ordinary step while it steps backwards, so
-//   that is checked on its own (whole cycles excepted);
-// - the quality is how far the seam, the step from the last frame back to
-//   the first, is off the pace: bigger than a typical step is a jump,
-//   smaller than the steps either side of it a hover (a clip stalling at its
-//   loop point), and none at all a pose shown twice.
-//   A seam measured against the clip's own median step is what best told
-//   bad loops from good in Ludo's ML calibration (28 loops marked blind,
-//   ai-server research_findings/sprite-animation.md), better than the biggest
-//   step anywhere. Big steps inside the clip are listed (jumps), not scored.
-//   It never cuts: Ludo's sheets come cut to their loop, and a second cut
-//   inside the first one is wrong.
+// 1. The quality: how alike the last frame and the first are, in absolute
+//    terms. It approximates the loop_score Ludo's API returns with a sheet
+//    (1 minus the mean distance between the DINOv3 patch features of the two
+//    frames; under 0.7 Ludo flags bad_loop), without the network: each frame
+//    goes to 224 px on a green screen and is cut into the same 16x16 patches,
+//    and a patch is described by its edge directions (an 8-bin histogram of
+//    oriented gradients) and its mean colour. The score is a linear mix of
+//    six distances, fitted on 3,041 looping sheets Ludo generated (Nov 2026):
+//    edges and colour at the seam on a coarser 8x8 grid, colour with each
+//    patch allowed its best neighbour (a shape that moved a few pixels), how
+//    much the two silhouettes overlap, and the clip's own typical colour and
+//    overlap change from frame to frame. On those sheets it lands within 0.10
+//    of loop_score 87% of the time and within 0.20 98% of the time, and it
+//    agrees with bad_loop on 91%. It reads less than the network does: a
+//    change of meaning in a small area (a glass filling up) costs it less,
+//    and a thin shape that shifted costs it more.
+//    An earlier version scored the seam against the clip's median step. That
+//    ratio does not track what people call a bad loop (a near-still idle
+//    fails it), and it disagreed with bad_loop on four sheets in ten.
 //
-// The thresholds are ours, picked on the fixtures in test/toolbox.test.mjs
-// and on real sheets. Ludo's own wrap check is DINOv3 patch similarity, a
-// different measure: the two numbers are not comparable.
+// 2. Where it hitches: the frame-distance matrix of Video Textures (Schödl,
+//    Szeliski, Salesin & Essa, SIGGRAPH 2000, §3). D(i, j) is how different
+//    frames i and j are, in units of the animation's typical step (the median
+//    adjacent distance, held frames left out), as the larger of:
+//    - the mean absolute difference of premultiplied RGBA, which sees colour
+//      and catches a repeated frame exactly, but saturates: sprite limbs move
+//      further than their own width between frames;
+//    - the symmetric chamfer distance between the two silhouettes' outlines
+//      (Barrow et al. 1977; the 3-4 distance transform of Borgefors 1986),
+//      which keeps growing with how far things moved.
+//    From it come the steps, the held frames, the big steps inside the clip
+//    (jumps), a ping-pong, and the seam's size against a typical step. A loop
+//    whose last frames are its first ones again shows them twice: that is
+//    reported (repeat) and does not lower the quality, since the two frames
+//    match and the fix is to drop a frame, not to regenerate.
+//    It never cuts: Ludo's sheets come cut to their loop, and a second cut
+//    inside the first one is wrong.
 
 export const SAME = 0.25; // under a quarter of a step: the same frame
 export const SMOOTH = 1.5; // a seam up to 1.5 steps plays as smooth
 const JUMP = 2; // an adjacent step over twice the typical one is a jump
-// The quality is 1 / (1 + (w - 1)²) for a seam w times off the pace: 0.8 at
-// 1.5, 0.5 at 2 (a jump).
-export const CLEAN = 0.8; // quality from here up: loops cleanly
-export const VISIBLE = 0.5; // under this: a hitch a player sees
+export const CLEAN = 0.85; // quality from here up: loops cleanly
+export const VISIBLE = 0.7; // under this: a seam a player sees (where Ludo flags bad_loop)
 const MAX_SIDE = 128; // frames are compared at this size or smaller
 const BUDGET = 5e7; // pixel comparisons for the whole matrix
 
@@ -62,7 +59,7 @@ export interface LoopReport {
   // repeat: the last `repeats` frames are the first ones again.
   seam: { ratio: number; verdict: "smooth" | "jump" | "repeat" | "static"; repeats: number };
   mirrored: boolean; // plays forward then back (a ping-pong)
-  // 1 = the seam plays like any other step; null when nothing moves.
+  // 1 = the last frame flows into the first; null when nothing moves.
   quality: number | null;
   matrix: number[][]; // D in typical steps: 1 = an ordinary step, 0 = the same frame
 }
@@ -202,7 +199,8 @@ function median(xs: number[]): number {
 
 const round = (x: number, places = 2) => Math.round(x * 10 ** places) / 10 ** places;
 
-export function analyseLoop(D: Float64Array[]): LoopReport {
+// `score` is loopScore() of the same frames.
+export function analyseLoop(D: Float64Array[], score: number): LoopReport {
   const n = D.length;
   const adjacent = Array.from({ length: n - 1 }, (_, i) => D[i][i + 1]);
   const { step, isHold } = typicalStep(D);
@@ -233,15 +231,7 @@ export function analyseLoop(D: Float64Array[]): LoopReport {
   const repeats = repeatsAtEnd();
   const verdict = repeats ? "repeat" : seamRatio <= SMOOTH ? "smooth" : "jump";
 
-  // How far the seam is off the pace (see the top). Bigger is judged against
-  // the typical step; smaller against the steps either side of it, up to a
-  // typical one, since an idle that is slow at its loop point anyway does not
-  // hover there. A pose shown twice is a stutter whatever the seam measures.
-  const beside = [adjacent[n - 2], adjacent[0]].filter(d => !isHold(d)).map(d => d / step);
-  const pace = Math.min(1, beside.length ? beside.reduce((a, b) => a + b, 0) / beside.length : 1);
-  const slow = pace / Math.max(seamRatio, 0.05);
-  const off = repeats ? Math.max(1 / SAME, slow) : Math.max(1, seamRatio, slow);
-  const quality = round(1 / (1 + (off - 1) ** 2));
+  const quality = round(score);
 
   // A ping-pong: some pivot mirrors every frame onto a twin, i + j ≡ 2c.
   let mirrored = false;
@@ -275,4 +265,223 @@ export function analyseLoop(D: Float64Array[]): LoopReport {
     quality,
     matrix
   };
+}
+
+// ---- The quality (see the top) ----
+
+const SIDE = 224; // frames are described at this size
+const PATCH = 14; // in patches this wide, as a ViT-S/14 sees them
+const CELLS = SIDE / PATCH; // 16 a side
+const BINS = 8;
+const INK = 0.04; // a patch (or pixel) with less cover than this is empty
+
+interface Described {
+  alpha: Float32Array; // per pixel, 0..1
+  hog: Float32Array; // per patch: gradient magnitude by direction
+  col: Float32Array; // per patch: mean colour on the green screen, 0..1
+  cov: Float32Array; // per patch: mean cover
+}
+
+// Triangle-filter weights taking `from` samples to `to`, widened when it
+// shrinks so that every source pixel counts.
+function resampler(from: number, to: number): { first: number; weights: Float32Array }[] {
+  const scale = from / to;
+  const support = Math.max(1, scale);
+  return Array.from({ length: to }, (_, o) => {
+    const centre = (o + 0.5) * scale;
+    const first = Math.max(0, Math.floor(centre - support));
+    const last = Math.min(from - 1, Math.ceil(centre + support));
+    const weights = new Float32Array(last - first + 1);
+    let sum = 0;
+    for (let s = first; s <= last; s++) sum += weights[s - first] = Math.max(0, 1 - Math.abs(s + 0.5 - centre) / support);
+    for (let i = 0; i < weights.length; i++) weights[i] /= sum || 1;
+    return { first, weights };
+  });
+}
+
+function describe(f: Image, bg: Background): Described {
+  const { width, height, rgba } = f;
+  // Premultiplied, with the background's pixels made clear.
+  const xs = resampler(width, SIDE);
+  const ys = resampler(height, SIDE);
+  const rowsDone = new Float32Array(height * SIDE * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < SIDE; x++) {
+      const { first, weights } = xs[x];
+      let [r, g, b, a] = [0, 0, 0, 0];
+      for (let i = 0; i < weights.length; i++) {
+        const p = (y * width + first + i) * 4;
+        if (!bg.isInk(rgba, p)) continue;
+        const w = (weights[i] * rgba[p + 3]) / 255;
+        r += w * rgba[p];
+        g += w * rgba[p + 1];
+        b += w * rgba[p + 2];
+        a += w;
+      }
+      rowsDone.set([r, g, b, a], (y * SIDE + x) * 4);
+    }
+  }
+  const n = SIDE * SIDE;
+  const rgb = new Float32Array(n * 3);
+  const alpha = new Float32Array(n);
+  const lum = new Float32Array(n);
+  for (let y = 0; y < SIDE; y++) {
+    const { first, weights } = ys[y];
+    for (let x = 0; x < SIDE; x++) {
+      let [r, g, b, a] = [0, 0, 0, 0];
+      for (let i = 0; i < weights.length; i++) {
+        const p = ((first + i) * SIDE + x) * 4;
+        r += weights[i] * rowsDone[p];
+        g += weights[i] * rowsDone[p + 1];
+        b += weights[i] * rowsDone[p + 2];
+        a += weights[i] * rowsDone[p + 3];
+      }
+      const p = y * SIDE + x;
+      alpha[p] = a;
+      // On a green screen, as Ludo's check sees the frames.
+      rgb[p * 3] = r;
+      rgb[p * 3 + 1] = g + 255 * (1 - a);
+      rgb[p * 3 + 2] = b;
+      lum[p] = 0.299 * rgb[p * 3] + 0.587 * rgb[p * 3 + 1] + 0.114 * rgb[p * 3 + 2];
+    }
+  }
+  const hog = new Float32Array(CELLS * CELLS * BINS);
+  const col = new Float32Array(CELLS * CELLS * 3);
+  const cov = new Float32Array(CELLS * CELLS);
+  for (let y = 0; y < SIDE; y++) {
+    for (let x = 0; x < SIDE; x++) {
+      const p = y * SIDE + x;
+      const k = Math.floor(y / PATCH) * CELLS + Math.floor(x / PATCH);
+      col[k * 3] += rgb[p * 3];
+      col[k * 3 + 1] += rgb[p * 3 + 1];
+      col[k * 3 + 2] += rgb[p * 3 + 2];
+      cov[k] += alpha[p];
+      if (y === 0 || x === 0 || y === SIDE - 1 || x === SIDE - 1) continue;
+      const gx = lum[p + 1] - lum[p - 1];
+      const gy = lum[p + SIDE] - lum[p - SIDE];
+      const m = Math.hypot(gx, gy);
+      if (!m) continue;
+      let t = Math.atan2(gy, gx);
+      if (t < 0) t += Math.PI;
+      hog[k * BINS + Math.min(BINS - 1, Math.floor((t / Math.PI) * BINS))] += m;
+    }
+  }
+  for (let k = 0; k < CELLS * CELLS; k++) {
+    for (let c = 0; c < 3; c++) col[k * 3 + c] /= PATCH * PATCH * 255;
+    cov[k] /= PATCH * PATCH;
+  }
+  return { alpha, hog, col, cov };
+}
+
+// The distance between two edge histograms, each scaled to length 1 (an
+// edgeless patch counts as all zeros): 0 to √2.
+function edgeDistance(a: Float32Array, i: number, b: Float32Array, j: number): number {
+  let [na, nb] = [0, 0];
+  for (let t = 0; t < BINS; t++) (na += a[i + t] ** 2), (nb += b[j + t] ** 2);
+  [na, nb] = [Math.sqrt(na), Math.sqrt(nb)];
+  let d = 0;
+  for (let t = 0; t < BINS; t++) d += ((na > 1e-3 ? a[i + t] / na : 0) - (nb > 1e-3 ? b[j + t] / nb : 0)) ** 2;
+  return Math.sqrt(d);
+}
+
+const colourDistance = (a: Float32Array, i: number, b: Float32Array, j: number) => Math.hypot(a[i] - b[j], a[i + 1] - b[j + 1], a[i + 2] - b[j + 2]);
+
+// Mean colour distance over the patches either frame covers, and how much
+// the two silhouettes overlap (intersection over union).
+function colourAndOverlap(a: Described, b: Described): { col: number; iou: number } {
+  let [sum, patches] = [0, 0];
+  for (let k = 0; k < CELLS * CELLS; k++) {
+    if (a.cov[k] < INK && b.cov[k] < INK) continue;
+    sum += colourDistance(a.col, k * 3, b.col, k * 3);
+    patches++;
+  }
+  let [both, either] = [0, 0];
+  for (let p = 0; p < a.alpha.length; p++) {
+    const [ia, ib] = [a.alpha[p] > INK, b.alpha[p] > INK];
+    if (ia || ib) either++;
+    if (ia && ib) both++;
+  }
+  return { col: patches ? sum / patches : 0, iou: either ? both / either : 1 };
+}
+
+// Edge and colour distance on a grid of 2x2 patches (8 cells a side).
+function coarse(a: Described, b: Described): { hog: number; col: number } {
+  const C = 2;
+  const g = CELLS / C;
+  let [dh, dc, cells] = [0, 0, 0];
+  const [ha, hb] = [new Float32Array(BINS), new Float32Array(BINS)];
+  const [ca, cb] = [new Float32Array(3), new Float32Array(3)];
+  for (let cy = 0; cy < g; cy++) {
+    for (let cx = 0; cx < g; cx++) {
+      ha.fill(0), hb.fill(0), ca.fill(0), cb.fill(0);
+      let [wa, wb] = [0, 0];
+      for (let j = 0; j < C; j++) {
+        for (let i = 0; i < C; i++) {
+          const k = (cy * C + j) * CELLS + cx * C + i;
+          for (let t = 0; t < BINS; t++) (ha[t] += a.hog[k * BINS + t]), (hb[t] += b.hog[k * BINS + t]);
+          for (let c = 0; c < 3; c++) (ca[c] += a.col[k * 3 + c] / (C * C)), (cb[c] += b.col[k * 3 + c] / (C * C));
+          (wa += a.cov[k]), (wb += b.cov[k]);
+        }
+      }
+      if (wa / (C * C) < INK && wb / (C * C) < INK) continue;
+      cells++;
+      dh += edgeDistance(ha, 0, hb, 0);
+      dc += colourDistance(ca, 0, cb, 0);
+    }
+  }
+  return { hog: cells ? dh / cells : 0, col: cells ? dc / cells : 0 };
+}
+
+// Colour distance with each patch matched to the best of the other frame's
+// 3x3 neighbourhood (by edges and colour together), both ways round.
+function shiftedColour(a: Described, b: Described): number {
+  let [sum, count] = [0, 0];
+  for (const [A, B] of [
+    [a, b],
+    [b, a]
+  ]) {
+    for (let y = 0; y < CELLS; y++) {
+      for (let x = 0; x < CELLS; x++) {
+        const k = y * CELLS + x;
+        if (A.cov[k] < INK && B.cov[k] < INK) continue;
+        let [bestEdge, bestColour] = [9, 9];
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const [yy, xx] = [y + dy, x + dx];
+            if (yy < 0 || xx < 0 || yy >= CELLS || xx >= CELLS) continue;
+            const k2 = yy * CELLS + xx;
+            const e = edgeDistance(A.hog, k * BINS, B.hog, k2 * BINS);
+            const c = colourDistance(A.col, k * 3, B.col, k2 * 3);
+            if (e + 2 * c < bestEdge + 2 * bestColour) [bestEdge, bestColour] = [e, c];
+          }
+        }
+        sum += bestColour;
+        count++;
+      }
+    }
+  }
+  return count ? sum / count : 0;
+}
+
+// What the score is made of: four distances between the last frame and the
+// first, and the clip's typical colour and overlap change between
+// neighbouring frames.
+export function loopFeatures(frames: Image[], bg: Background): number[] {
+  const d = frames.map(f => describe(f, bg));
+  const [last, first] = [d[d.length - 1], d[0]];
+  const seam = colourAndOverlap(last, first);
+  const grid = coarse(last, first);
+  const steps = d.slice(0, -1).map((f, i) => colourAndOverlap(f, d[i + 1]));
+  // The upper median, as the fit used.
+  const typical = (xs: number[]) => [...xs].sort((x, y) => x - y)[xs.length >> 1] ?? 0;
+  return [grid.hog, shiftedColour(last, first), grid.col, 1 - seam.iou, typical(steps.map(s => s.col)), 1 - typical(steps.map(s => s.iou))];
+}
+
+// Fitted by least squares on loop_score (see the top): the intercept, then
+// one weight per feature.
+const WEIGHTS = [0.964, -0.429, -0.678, -0.137, -0.239, 0.641, -0.116];
+
+export function loopScore(frames: Image[], bg: Background): number {
+  const x = loopFeatures(frames, bg);
+  return Math.max(0, Math.min(1, x.reduce((s, v, i) => s + v * WEIGHTS[i + 1], WEIGHTS[0])));
 }
