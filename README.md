@@ -253,7 +253,7 @@ project uses Claude Code). Every command run anywhere below that folder uses it:
   "style_image": "art/style.png",
   "defaults": {
     "image create": { "image_type": "sprite" },
-    "animateSprite": { "model": "forge" }
+    "animateSprite": { "model": "ignis" }
   }
 }
 ```

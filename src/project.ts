@@ -17,7 +17,7 @@ import { ENGINES, type Engine } from "./tty/engines.js";
 //     "style_image": "art/style.png",       for operations with a style_image field
 //     "defaults": {                         per command ("group command" or API id)
 //       "image create": { "image_type": "sprite" },
-//       "animateSprite": { "model": "forge" }
+//       "animateSprite": { "model": "ignis" }
 //     }
 //   }
 //
