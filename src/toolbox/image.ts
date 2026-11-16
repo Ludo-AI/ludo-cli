@@ -5,7 +5,7 @@ import { printJson, type Ctx } from "../generate.js";
 import { MAX_TOOLBOX_PIXELS, type Image } from "../tty/png.js";
 import { keepLoop, type Grid } from "../tty/preview.js";
 import { countFrames } from "./grid.js";
-import { baseOf, carriedChunks, engineFiles, freeName, loadImageFile, shown, writePng, type Loaded } from "./io.js";
+import { baseOf, carriedChunks, engineFiles, freeName, loadImageFile, shown, writePng, type Loaded, makeDir } from "./io.js";
 import { crop, joinFrames, sliceSheet } from "./sheet.js";
 import { gridFlag, hexColour, positiveInt, textFlag } from "./flags.js";
 import {
@@ -571,7 +571,7 @@ TOOLS.push({
     const file = freeName(ctx.outDir, ctx.globals.name || baseOf(src.file), `.${to}`);
     if (to === "png") writePng(file, src.image, carriedChunks(src, src.grid, { trim: src.trim, extrude: src.extrude }));
     else {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
+      makeDir(path.dirname(file));
       fs.writeFileSync(file, encodeWebp(src.image));
     }
     const bytes = fs.statSync(file).size;

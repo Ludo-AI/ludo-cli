@@ -23,7 +23,7 @@ import type { Grid } from "../tty/preview.js";
 import { characterOf } from "./asset.js";
 import { canvas, checkerboard, cross as drawCross, dot, drawImage, fillRect, fitText, line, scaled, strokeRect, text, textHeight, textWidth, type Rgba } from "./draw.js";
 import { backgroundOf } from "./grid.js";
-import { baseOf, freeName, loadImageFile, shown, writePng, type Loaded } from "./io.js";
+import { baseOf, freeName, loadImageFile, shown, writePng, type Loaded, makeDir } from "./io.js";
 import { pad } from "./pixels.js";
 import { crop, sliceSheet } from "./sheet.js";
 import { resolveGrid } from "./sprite.js";
@@ -1269,7 +1269,7 @@ TOOLS.push({
 });
 
 function writeJson(file: string, value: unknown) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  makeDir(path.dirname(file));
   fs.writeFileSync(file, JSON.stringify(value) + "\n");
 }
 

@@ -6,7 +6,7 @@ import { CliError, EXIT } from "../errors.js";
 import { printJson, type Ctx } from "../generate.js";
 import type { Image } from "../tty/png.js";
 import { CONFIDENT, guessGrid } from "./grid.js";
-import { loadImageFile, shown, type Loaded } from "./io.js";
+import { loadImageFile, shown, type Loaded, makeDir } from "./io.js";
 import { natural } from "./sprite.js";
 import { crop, frameRects } from "./sheet.js";
 import { contentBox, emptiness } from "./pixels.js";
@@ -1012,7 +1012,7 @@ function emit(ctx: Ctx, engine: Emit, root: string, assets: Asset[], manifest: u
   if (guessed && engine !== "json") out.notes.unshift(`The folder is outside the working folder: the URLs take it as ${base}/. Pass --base <its URL path> otherwise.`);
   const files = EMIT_FILES[engine].map((name, i) => {
     const file = path.join(ctx.outDir, ctx.globals.name ? `${ctx.globals.name}${name.slice("assets".length)}` : name);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
+    makeDir(path.dirname(file));
     fs.writeFileSync(file, out.texts[i]);
     return file;
   });

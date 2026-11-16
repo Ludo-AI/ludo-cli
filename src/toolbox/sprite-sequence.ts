@@ -4,7 +4,7 @@ import { CliError, EXIT } from "../errors.js";
 import { printJson, type Ctx } from "../generate.js";
 import { MAX_TOOLBOX_PIXELS, type Image } from "../tty/png.js";
 import { keepLoop, type Grid } from "../tty/preview.js";
-import { carriedChunks, engineFiles, freeName, shown, writePng } from "./io.js";
+import { carriedChunks, engineFiles, freeName, shown, writePng, makeDir } from "./io.js";
 import { layoutSheet } from "./sheet.js";
 import type { ArtMode } from "./pack.js";
 import { uniquifyNames } from "./packMath.js";
@@ -155,7 +155,7 @@ TOOLS.push({
     const name = ctx.globals.name ?? manifest?.name ?? "Animation Sequence";
     const slug = folderName(name, "animation-sequence");
     const dir = freeName(ctx.outDir, slug);
-    fs.mkdirSync(dir, { recursive: true });
+    makeDir(dir);
     const chunks = (i: number, grid?: Grid) => (animations[i].src ? carriedChunks(animations[i].src!, grid) : []);
     const sheetOf = (frames: Image[], cols: number, rows: number) => layoutSheet(frames, cols, rows);
 

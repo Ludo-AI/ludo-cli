@@ -4,7 +4,7 @@ import { CliError, EXIT } from "../errors.js";
 import { printJson, type Ctx } from "../generate.js";
 import { keepLoop, type Grid } from "../tty/preview.js";
 import { backgroundOf, CONFIDENT, countFrames, guessGrid } from "./grid.js";
-import { baseOf, carriedChunks, engineFiles, freeName, loadImageFile, shown, writePng, type Layout, type Loaded } from "./io.js";
+import { baseOf, carriedChunks, engineFiles, freeName, loadImageFile, shown, writePng, type Layout, type Loaded, makeDir } from "./io.js";
 import { noteFact } from "../telemetry.js";
 import { crop, joinFrames, sliceSheet } from "./sheet.js";
 import { applyFrameOps, parseFrameList, parseHolds, type FrameOps } from "./frames.js";
@@ -64,7 +64,15 @@ export const natural = new Intl.Collator(undefined, { numeric: true, sensitivity
 // taken in natural order.
 export function frameFiles(args: string[]): string[] {
   return args.flatMap(arg => {
-    const stat = fs.statSync(arg, { throwIfNoEntry: false });
+    let stat: fs.Stats | undefined;
+    try {
+      stat = fs.statSync(arg, { throwIfNoEntry: false });
+    } catch {
+      // ENAMETOOLONG and the like: not a path at all, usually several file
+      // names quoted into one argument.
+      const first = arg.trim().split(/\s+/)[0].slice(0, 60);
+      throw new CliError(`Not a file or folder name: "${first}..."${/\s/.test(arg.trim()) ? ". Pass each frame as its own argument, not one quoted list" : ""}`, EXIT.USAGE);
+    }
     if (!stat?.isDirectory()) return [arg];
     const pngs = fs.readdirSync(arg).filter(f => /\.png$/i.test(f)).sort(natural.compare);
     if (!pngs.length) throw new CliError(`No PNG files in ${arg}`, EXIT.USAGE);
@@ -552,7 +560,7 @@ TOOLS.push({
 
     const gif = makeGif(frames, { fps, alphaThreshold: threshold, matte: matte && [matte[0], matte[1], matte[2]], loop: !call.flags.has("--once") });
     const file = freeName(ctx.outDir, ctx.globals.name || baseOf(src.file), ".gif");
-    fs.mkdirSync(path.dirname(file), { recursive: true });
+    makeDir(path.dirname(file));
     fs.writeFileSync(file, gif.bytes);
 
     const next = hint("Animate another move for the same character with Ludo", `ludo sprite animate --initial-image <a frame> --motion-prompt "<what it does>"`);

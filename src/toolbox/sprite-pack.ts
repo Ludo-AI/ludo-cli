@@ -4,7 +4,7 @@ import { EXIT } from "../errors.js";
 import { printJson, type Ctx } from "../generate.js";
 import { MAX_TOOLBOX_PIXELS } from "../tty/png.js";
 import { keepLoop, type Grid } from "../tty/preview.js";
-import { carriedChunks, engineFiles, freeName, shown, writePng } from "./io.js";
+import { carriedChunks, engineFiles, freeName, shown, writePng, makeDir } from "./io.js";
 import { layoutSheet } from "./sheet.js";
 import { buildPack, type ArtMode } from "./pack.js";
 import { MAX_TARGET_FRAME_PX, uniquifyNames } from "./packMath.js";
@@ -111,7 +111,7 @@ TOOLS.push({
     const labels = uniquifyNames(names.map(n => n[n.length - 1]));
     const packName = ctx.globals.name ?? manifest?.name ?? "Animation Pack";
     const dir = freeName(ctx.outDir, folderName(packName, "animation-pack"));
-    fs.mkdirSync(dir, { recursive: true });
+    makeDir(dir);
 
     const results = animations.map((a, i) => {
       const packed = pack.animations[i];

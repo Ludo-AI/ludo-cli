@@ -4,7 +4,7 @@ import { because, CliError, EXIT } from "../errors.js";
 import { printJson, type Ctx } from "../generate.js";
 import { GRID_KEY } from "../tty/preview.js";
 import { MAX_TOOLBOX_PIXELS, textChunk, type Image } from "../tty/png.js";
-import { baseOf, engineFiles, freeName, loadImageFile, shown, writePng } from "./io.js";
+import { baseOf, engineFiles, freeName, loadImageFile, shown, writePng, makeDir } from "./io.js";
 import { crop, joinFrames, sliceSheet } from "./sheet.js";
 import { scaleUp } from "./pixels.js";
 import { gridFlag, hexColour, positiveInt, positiveNumber, textFlag } from "./flags.js";
@@ -133,7 +133,7 @@ TOOLS.push({
     if (frames[0].width * frames[0].height * frames.length * loops > MAX_TOOLBOX_PIXELS * 4) throw usage("That video would be too big: fewer --loops or a smaller --scale");
     const played = Array.from({ length: loops }, () => frames).flat();
     const out = freeName(ctx.outDir, ctx.globals.name || baseOf(src.file), `.${format}`);
-    fs.mkdirSync(path.dirname(out), { recursive: true });
+    makeDir(path.dirname(out));
     const size = encodeVideo(played, fps, format, out, [bg[0], bg[1], bg[2]]);
     const bytes = fs.statSync(out).size;
     const next = hint("Animate another move for the same character with Ludo", `ludo sprite animate --initial-image <a frame> --motion-prompt "<what it does>"`);

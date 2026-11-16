@@ -160,6 +160,16 @@ export function engineFiles(ctx: Ctx, sheet: string, image: { width: number; hei
   }
 }
 
+// Makes a folder for output. The path is the caller's: a folder that is
+// really a file, a read-only or full disk. Bad input, not a crash to report.
+export function makeDir(dir: string): void {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    throw new CliError(`Could not create the folder ${shown(dir)}: ${(err as Error).message}`, EXIT.BAD_INPUT);
+  }
+}
+
 export function writePng(file: string, image: Image, chunks: RawChunk[] = []) {
   const data = encodePng(image, { chunks });
   try {

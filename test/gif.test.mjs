@@ -555,3 +555,11 @@ test("join and the GIF reader agree on layout", () => {
   const { sheet } = joinFrames(gif.frames, 3);
   assert.equal(sha(sheet.rgba), sha(joinFrames(frames, 3).sheet.rgba));
 });
+
+test("sprite join: several frame names quoted into one argument is a usage error, not a crash", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-join-"));
+  const names = Array.from({ length: 40 }, (_, i) => `walk-frame-number-${i + 1}.png`).join(" ");
+  const r = cli(["toolbox", "sprite", "join", names, "--out", "."], dir);
+  assert.equal(r.code, 2, r.err);
+  assert.match(r.err, /each frame as its own argument/);
+});

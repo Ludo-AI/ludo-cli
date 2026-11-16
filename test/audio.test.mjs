@@ -550,3 +550,12 @@ test("audio convert writes Ogg Vorbis, MP3 and FLAC that ffmpeg reads back; MP3 
   assert.equal(mono.channels, 1);
   assert.equal((await run(["toolbox", "audio", "convert", file, "--to", "flac", "--bits", "32"], { cwd: dir })).code, EXIT.USAGE);
 });
+
+test("audio trim: an output folder that is really a file is bad input, not a crash", async () => {
+  const dir = tmp();
+  const file = sfx(dir);
+  fs.writeFileSync(path.join(dir, "blocker"), "not a folder");
+  const r = await run(["toolbox", "audio", "trim", file, "--out", "blocker/sub"], { cwd: dir });
+  assert.equal(r.code, EXIT.BAD_INPUT, r.stderr);
+  assert.match(r.stderr, /Could not create the folder/);
+});

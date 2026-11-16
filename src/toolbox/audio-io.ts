@@ -6,6 +6,7 @@ import { decodeWav, encodeWav, isWav, WavError, type Audio } from "./wav.js";
 import { decodeMp3, isMp3, Mp3Error } from "./mp3.js";
 import { FFMPEG_INSTALL, haveFfmpeg, needFfmpeg, run } from "./video.js";
 import { readInput } from "./read-file.js";
+import { makeDir } from "./io.js";
 
 // Reading and writing the audio tools' files. WAV is read and written
 // in-process and MP3 read in-process (mp3.ts); every other format crosses
@@ -119,7 +120,7 @@ function vorbis(): string {
 // Writes the file; returns how many channels it holds and what the reader
 // should know about it.
 export function writeAudio(file: string, audio: Audio, format: AudioFormat, opts: WriteOptions = {}): { channels: number; notes: string[] } {
-  fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
+  makeDir(path.dirname(path.resolve(file)));
   if (format === "wav") {
     fs.writeFileSync(file, encodeWav(audio, opts));
     return { channels: audio.channels.length, notes: [] };

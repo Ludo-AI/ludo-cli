@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { encodePng, readPng, type Image } from "../tty/png.js";
 import { readInput } from "./read-file.js";
+import { makeDir } from "./io.js";
 
 // Palettes in the files pixel artists trade (the ones Lospec exports):
 //  - .hex: one rrggbb a line (Lospec's HEX file).
@@ -136,7 +137,7 @@ export function loadPalette(spec: string): Colour[] {
 
 export function savePalette(file: string, colours: Colour[]) {
   const ext = path.extname(file).toLowerCase();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  makeDir(path.dirname(file));
   if (ext === ".png") fs.writeFileSync(file, encodePng(paletteImage(colours)));
   else fs.writeFileSync(file, formatPalette(colours, ext, path.basename(file, ext)));
 }
