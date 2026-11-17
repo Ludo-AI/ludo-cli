@@ -4,6 +4,7 @@ import path from "node:path";
 import { CliError, EXIT } from "./errors.js";
 import { isInlineFile } from "./inline.js";
 import { ENGINES, type Engine } from "./tty/engines.js";
+import { IMAGE_FORMATS, type ImageFormat } from "./args.js";
 
 // A project's `.ludo.json`, found by walking up from the current directory
 // (never above the home directory). Every agent session and teammate in the
@@ -13,6 +14,7 @@ import { ENGINES, type Engine } from "./tty/engines.js";
 //   {
 //     "out": "assets/generated",            where files are saved
 //     "engine": "godot",                    as --engine (godot, texturepacker or unity)
+//     "image_format": "png",                as --image-format (png, webp or both)
 //     "max_credits": 200,                   session budget (see budget.ts)
 //     "style_image": "art/style.png",       for operations with a style_image field
 //     "defaults": {                         per command ("group command" or API id)
@@ -29,6 +31,7 @@ export const STATE_DIR = ".ludo";
 export interface ProjectConfig {
   out?: string;
   engine?: Engine;
+  image_format?: ImageFormat;
   max_credits?: number;
   style_image?: string;
   defaults?: Record<string, Record<string, unknown>>;
@@ -40,7 +43,7 @@ export interface Project {
   config: ProjectConfig;
 }
 
-const FIELDS = ["out", "engine", "max_credits", "style_image", "defaults"];
+const FIELDS = ["out", "engine", "image_format", "max_credits", "style_image", "defaults"];
 
 export function findProjectFile(start = process.cwd()): string | undefined {
   const home = path.resolve(os.homedir());
@@ -61,6 +64,7 @@ export function validateConfig(raw: unknown, file: string): ProjectConfig {
   for (const key of Object.keys(c)) if (!FIELDS.includes(key)) throw bad(`unknown field "${key}"`);
   if (c.out !== undefined && (typeof c.out !== "string" || !c.out.trim())) throw bad(`"out" must be a folder path`);
   if (c.engine !== undefined && !(ENGINES as readonly unknown[]).includes(c.engine)) throw bad(`"engine" supports: ${ENGINES.join(", ")}`);
+  if (c.image_format !== undefined && !(IMAGE_FORMATS as readonly unknown[]).includes(c.image_format)) throw bad(`"image_format" takes: ${IMAGE_FORMATS.join(", ")}`);
   if (c.max_credits !== undefined && (typeof c.max_credits !== "number" || !(c.max_credits >= 0))) throw bad(`"max_credits" must be a number of credits`);
   if (c.style_image !== undefined && (typeof c.style_image !== "string" || !c.style_image.trim())) throw bad(`"style_image" must be a file path or URL`);
   if (c.defaults !== undefined) {

@@ -68,7 +68,7 @@ export async function init(ctx: Ctx, parsed: Parsed): Promise<number> {
         "Usage: ludo init [--force]",
         "",
         "Sets this folder up as a ludo project:",
-        `  ${CONFIG_NAME}      project settings: output folder, engine, spending budget, per-command defaults`,
+        `  ${CONFIG_NAME}      project settings: output folder, engine, file format, spending budget, per-command defaults`,
         "  AGENTS.md       a section telling coding agents how to use ludo here (Codex, Cursor, others)",
         "  .cursor/rules   the same, as a Cursor rule, when .cursor exists",
         "  .claude/skills  the Ludo skill for Claude Code, when the project uses Claude Code",

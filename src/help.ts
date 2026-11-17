@@ -222,6 +222,8 @@ ${TOOLS.map(t => `- \`ludo toolbox ${t.group} ${t.name} ${t.args}\`: ${t.summary
 - Generations block until done, then save every result file to \`./ludo-output\` (\`--out <dir>\` to change).
   Name them with \`--name <base>\` (\`--name sfx_pump\` -> \`sfx_pump.mp3\`) rather than renaming files afterwards;
   an existing file is never overwritten (the new one gets \`-2\`).
+- Results that arrive as WebP (images, spritesheets, normal maps) are saved twice, as \`.webp\` and as \`.png\` side by side.
+  \`--image-format png\` keeps the PNG only, \`--image-format webp\` the WebP only (a WebP sheet carries no grid, and \`--engine\` needs the PNG).
 - Game engines: \`--engine godot\` also writes a Godot 4 SpriteFrames \`.tres\` next to a spritesheet, \`--engine texturepacker\` a TexturePacker JSON atlas for PixiJS and Phaser, \`--engine unity\` the sheet's \`.png.meta\` (sliced into sprites) and an \`.anim\` clip (listed in \`files\`; in a Unity project, save under \`Assets/\`). In Phaser load it with \`this.load.aseprite(key, png, json)\` so \`this.anims.createFromAseprite(key)\` builds the animation. \`ludo toolbox sprite export <sheet> --engine ...\` does it for a sheet you already have.
 - Directional Sprites (a character seen from up to 8 directions that line up): make a rigged model
   (\`ludo model create --image hero.png --rig\`), pick a style (\`ludo sprite directional-styles\`), check the look
@@ -241,7 +243,7 @@ ${TOOLS.map(t => `- \`ludo toolbox ${t.group} ${t.name} ${t.args}\`: ${t.summary
 - Progress goes to stderr (\`--quiet\` silences it).
 
 ## Projects, cost and reuse
-- \`.ludo.json\` (made by \`ludo init\`) sets the output folder, engine, spending budget and per-command defaults;
+- \`.ludo.json\` (made by \`ludo init\`) sets the output folder, engine, file format, spending budget and per-command defaults;
   flags override it. Generated files are listed in \`ludo-assets.json\`.
 - Check \`ludo assets\` before generating: the asset may already exist. \`ludo assets redo <file> [flags]\` makes it
   again with changes.

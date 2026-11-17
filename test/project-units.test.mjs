@@ -133,6 +133,8 @@ test("an unwritable spend ledger warns once instead of failing the command", t =
 test("config validation names unknown fields and bad values", () => {
   assert.throws(() => validateConfig({ output: "x" }, ".ludo.json"), /unknown field "output"/);
   assert.throws(() => validateConfig({ engine: "gamemaker" }, ".ludo.json"), /"engine" supports: godot, texturepacker, unity/);
+  assert.throws(() => validateConfig({ image_format: "jpg" }, ".ludo.json"), /"image_format" takes: png, webp, both/);
+  assert.equal(validateConfig({ image_format: "png" }, ".ludo.json").image_format, "png");
   assert.throws(() => validateConfig({ max_credits: -1 }, ".ludo.json"), /max_credits/);
   assert.throws(() => validateConfig({ defaults: { "image create": 3 } }, ".ludo.json"), /must be an object/);
   assert.deepEqual(validateConfig({ out: "a", max_credits: 0 }, ".ludo.json"), { out: "a", max_credits: 0 });

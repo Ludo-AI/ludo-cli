@@ -53,6 +53,7 @@ export function makeCtx(globals: Globals, project?: Project): Ctx {
   };
   const vis = visuals({ json: jsonOut, quiet: globals.quiet, plain: globals.plain });
   if (project?.config.engine && !globals.engine) globals.engine = project.config.engine;
+  if (project?.config.image_format && !globals.format) globals.format = project.config.image_format;
   const outDir = path.resolve(globals.out || (project?.config.out ? projectPath(project, project.config.out, "out") : DEFAULT_OUT));
   return { globals, api: new Api(resolveApiUrl(globals.apiUrl), resolveApiKey(globals.apiKey)), jsonOut, vis, log, project, outDir };
 }
@@ -290,8 +291,9 @@ export async function saveResult(ctx: Ctx, job: any, label: string, naming: Nami
     }
     // WebP results also get a PNG copy side by side: engines and tools take
     // PNG everywhere, and the PNG is what carries a spritesheet's grid.
+    // `--image-format webp` keeps the WebP alone, so no copy is made.
     const pngOf = new Map<string, string>();
-    for (const f of [...downloaded]) {
+    for (const f of globals.format === "webp" ? [] : [...downloaded]) {
       if (!/\.webp$/i.test(f.path)) continue;
       const png = f.path.replace(/\.webp$/i, ".png");
       const twin = { url: f.url, path: png, variation: f.variation, ...(f.normal_map ? { normal_map: true } : {}) };
@@ -325,11 +327,27 @@ export async function saveResult(ctx: Ctx, job: any, label: string, naming: Nami
     // A WebP sheet that saved but would not convert is a sheet all the same:
     // "no spritesheet" sent agents filing API bugs over a local decode.
     const unconverted = downloaded.find(f => /\.webp$/i.test(f.path) && !pngOf.has(f.path) && sheetResults.some(r => r?.spritesheet_url === f.url));
+    const noPng = unconverted && (globals.format === "webp"
+      ? "--image-format webp keeps no PNG of the spritesheet, and engine files are made from the PNG. Use --image-format png, or leave --image-format out."
+      : `could not convert the WebP spritesheet ${path.relative(process.cwd(), unconverted.path)} to PNG, so there is nothing to export.`);
     const engineFiles = !globals.engine
       ? []
       : stamped.length
       ? (await Promise.all(stamped.map(s => engineExport(ctx, s.png, s.grid)))).flat()
-      : await engineExport(ctx, undefined, undefined, unconverted && `could not convert the WebP spritesheet ${path.relative(process.cwd(), unconverted.path)} to PNG, so there is nothing to export.`);
+      : await engineExport(ctx, undefined, undefined, noPng);
+    // `--image-format png` keeps the PNG alone: a WebP this run downloaded goes once
+    // its copy is made. One that would not convert stays (it is the only copy
+    // of the result), and so does one an earlier run saved.
+    if (globals.format === "png") {
+      for (const f of downloaded.filter(f => pngOf.has(f.path) && !f.reused)) {
+        try {
+          fs.unlinkSync(f.path);
+        } catch {
+          continue;
+        }
+        downloaded.splice(downloaded.indexOf(f), 1);
+      }
+    }
     const constant = naming.variationOf?.(-1);
     const rel = (p: string) => path.relative(process.cwd(), p) || p;
     files = [

@@ -75,6 +75,9 @@ ludo docs search --query "which animation model should I use for pixel art?"
 - `--open` opens the result in its default app (Aseprite, say), `--play` plays generated audio,
   `--copy` puts the saved file paths on the clipboard.
 - WebP results are also saved as PNG, side by side (engines and most tools want PNG).
+  `--image-format png` keeps the PNG only and `--image-format webp` the WebP only (`"image_format"` in `.ludo.json`
+  sets it for a project). A spritesheet's grid is stored in its PNG and `--engine` files are made
+  from it, so keep the PNG for sheets.
 - `--engine godot` also writes a Godot 4 `SpriteFrames` resource (`.tres`) next to a spritesheet:
   drop it on an `AnimatedSprite2D`. Inside a Godot project it uses a `res://` path.
 - `--engine texturepacker` writes a TexturePacker JSON atlas (`.json`) next to a spritesheet, with

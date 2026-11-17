@@ -1013,6 +1013,38 @@ test("a WebP spritesheet gets a PNG copy that carries the grid and feeds the God
   assert.match(fs.readFileSync(path.join(cwd, tres), "utf8"), new RegExp(`path="${path.basename(png).replace(".", "\\.")}"`));
 });
 
+test("--image-format png keeps the PNG alone, with the grid and the Godot export", async () => {
+  const { code, stdout, stderr, cwd } = await run(["sprite", "animate", "--initial-image", "https://example.com/k.png", "--motion-prompt", "webp", "--engine", "godot", "--image-format", "png", "--json"], { PATH: "" });
+  assert.equal(code, 0, stderr);
+  const files = JSON.parse(stdout).files.map(f => f.path);
+  assert.ok(!files.some(p => p.endsWith(".webp")), `no WebP is listed: ${files.join(", ")}`);
+  const png = files.find(p => p.endsWith(".png"));
+  assert.ok(png, "the PNG is listed");
+  assert.ok(!fs.existsSync(path.join(cwd, png.replace(/\.png$/, ".webp"))), "the WebP is gone from disk");
+  assert.deepEqual(readGrid(fs.readFileSync(path.join(cwd, png))), { cols: 2, rows: 2, frames: 4, fps: 8 });
+  assert.ok(files.some(p => p.endsWith(".tres")), "the Godot export was written");
+});
+
+test("--image-format webp keeps the WebP alone, and says why --engine has nothing to export", async () => {
+  const { code, stdout, stderr, cwd } = await run(["sprite", "animate", "--initial-image", "https://example.com/k.png", "--motion-prompt", "webp", "--engine", "godot", "--image-format", "webp", "--json"], { PATH: "" });
+  assert.equal(code, 0, stderr);
+  const files = JSON.parse(stdout).files.map(f => f.path);
+  assert.ok(files.some(p => p.endsWith(".webp")) && !files.some(p => /\.(png|tres)$/.test(p)), files.join(", "));
+  assert.ok(!fs.existsSync(path.join(cwd, files.find(p => p.endsWith(".webp")).replace(/\.webp$/, ".png"))), "no PNG on disk");
+  assert.match(stderr, /--engine godot: --image-format webp keeps no PNG of the spritesheet/);
+});
+
+test("--image-format png keeps a WebP that will not convert, and refuses an unknown format", async () => {
+  const broken = await run(["sprite", "animate", "--initial-image", "https://example.com/k.png", "--motion-prompt", "brokenwebp", "--image-format", "png", "--json"], { PATH: "" });
+  assert.equal(broken.code, 0, broken.stderr);
+  const kept = JSON.parse(broken.stdout).files.map(f => f.path);
+  assert.ok(kept.some(p => p.endsWith(".webp")) && !kept.some(p => p.endsWith(".png")), kept.join(", "));
+  assert.ok(fs.existsSync(path.join(broken.cwd, kept.find(p => p.endsWith(".webp")))), "the WebP is still on disk");
+  const bad = await run(["image", "create", "--prompt", "x", "--image-format", "jpg"]);
+  assert.notEqual(bad.code, 0);
+  assert.match(bad.stderr, /--image-format takes png, webp, both \(got "jpg"\)/);
+});
+
 const telemetryEvents = from => seen.slice(from).filter(s => s.path === "/api/cli/events");
 
 test("each command sends one usage event: facts and flag names, never values", async () => {

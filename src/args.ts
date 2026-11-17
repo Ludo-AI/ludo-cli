@@ -24,6 +24,7 @@ export const GLOBAL_FLAGS: Record<string, { value: boolean; description: string 
     value: true,
     description: "Also write engine files next to spritesheets: godot (a Godot 4 SpriteFrames .tres), texturepacker (a TexturePacker JSON atlas for PixiJS and Phaser) or unity (the sheet's .png.meta, sliced into sprites, and an .anim clip)"
   },
+  "--image-format": { value: true, description: "Which file to keep of a result that arrives as WebP: png, webp or both (default: both, side by side)" },
   "--name": { value: true, description: "Name the saved files: --name sfx_pump saves sfx_pump.mp3 (never overwrites; -v1..-vN with --n)" },
   "--n": { value: true, description: "Make N variations of the same request and pick the best (runs N jobs, or one when the API takes n)" },
   "--max-credits": { value: true, description: "Refuse to run if this would cost more than this many credits (all variations together)" },
@@ -32,6 +33,11 @@ export const GLOBAL_FLAGS: Record<string, { value: boolean; description: string 
   "--yes": { value: false, description: "Do not ask before spending more than 50 credits at once" },
   "--help": { value: false, description: "Show help for this command" }
 };
+
+// What is kept of a result that arrives as WebP: the WebP, a PNG made from
+// it, or both side by side (the default).
+export const IMAGE_FORMATS = ["png", "webp", "both"] as const;
+export type ImageFormat = (typeof IMAGE_FORMATS)[number];
 
 export interface Globals {
   json: boolean;
@@ -48,6 +54,7 @@ export interface Globals {
   play: boolean;
   copy: boolean;
   engine?: Engine;
+  format?: ImageFormat;
   name?: string;
   n?: number;
   maxCredits?: number;
@@ -130,6 +137,12 @@ export function parseArgv(argv: string[]): Parsed {
           const engine = takeValue().toLowerCase();
           if (!(ENGINES as readonly string[]).includes(engine)) throw new CliError(`--engine supports: ${ENGINES.join(", ")} (got "${engine}")`, EXIT.USAGE);
           globals.engine = engine as Engine;
+          break;
+        }
+        case "--image-format": {
+          const format = takeValue().toLowerCase();
+          if (!(IMAGE_FORMATS as readonly string[]).includes(format)) throw new CliError(`--image-format takes ${IMAGE_FORMATS.join(", ")} (got "${format}")`, EXIT.USAGE);
+          globals.format = format as ImageFormat;
           break;
         }
         case "--help": globals.help = true; break;
