@@ -37,7 +37,7 @@ export class Api {
       throw new CliError(
         "No API key. Run `ludo login`, set LUDO_API_KEY, or pass --api-key.",
         EXIT.AUTH,
-        "`ludo login` logs you in with your browser, and can create an account. Generating needs a paid plan: `ludo pricing` compares them."
+        "`ludo login` logs you in with your browser, and can create an account. No account yet? `ludo signup --email <address> --plan <id>` creates one and subscribes it in one payment, from the terminal. Generating needs a paid plan: `ludo pricing` compares them."
       );
     }
   }

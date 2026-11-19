@@ -20,10 +20,11 @@ import { embeddedSpecPath, loadSpec } from "./spec.js";
 import { parseGrid, previewFile, previewSkipped } from "./tty/preview.js";
 import { logo } from "./tty/flair.js";
 import { installSkill, isInstalled, refreshSkills, skillTarget, uninstallSkill } from "./skill.js";
-import { accountLine, accountSummary, agentName, billingUrlFor, browserLogin, canOpenBrowser, isAgent, openBrowser } from "./login.js";
+import { accountLine, accountSummary, agentName, billingUrlFor, browserLogin, canOpenBrowser, isAgent, openBrowser, webUrlFor } from "./login.js";
 import { assets, BATCH_HELP, init, loadBatch, spend } from "./workspace.js";
 import { toolbox } from "./toolbox/index.js";
 import { pricing } from "./pricing-guide.js";
+import { finalError, pollSignup, priceLine, showCheckout, startSignup, waitForPayment } from "./signup.js";
 
 async function promptSecret(question: string): Promise<string> {
   if (!process.stdin.isTTY) return fs.readFileSync(0, "utf8").trim();
@@ -82,6 +83,132 @@ async function login(ctx: Ctx, parsed: Parsed, words: string[]): Promise<number>
     const claudeHome = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
     if (fs.existsSync(claudeHome) && !isInstalled()) process.stderr.write("Using Claude Code? Teach it the CLI: ludo skill install\n");
   }
+  return EXIT.OK;
+}
+
+// `ludo signup --email <address> --plan <id>`: an account and a plan in one
+// payment (signup.ts). It prints a Stripe checkout link and waits for it to be
+// paid; then the address is emailed a connect code, which a person types here
+// or an agent passes with `ludo signup --continue --code <code>`. --no-wait
+// prints the link and returns at once.
+async function signup(ctx: Ctx, parsed: Parsed): Promise<number> {
+  const flag = (name: string) => parsed.flags.get(name)?.find(v => v !== "\u0000flag");
+  const log = (msg: string) => process.stderr.write(msg + "\n");
+  const forget = () => {
+    const rest = { ...readConfig() };
+    delete rest.pending_signup;
+    writeConfig(rest);
+  };
+  let pending = readConfig().pending_signup;
+  const continuing = flagSet(parsed, "--continue");
+
+  // A machine that is already logged in would end up with a second,
+  // separately billed account, and its saved key replaced.
+  if (resolveApiKey(parsed.globals.apiKey)) {
+    throw new CliError("This CLI is already logged in to a Ludo account", EXIT.USAGE, "`ludo account` shows it. To create a different account, run `ludo logout` first (and unset LUDO_API_KEY).");
+  }
+
+  if (continuing) {
+    if (!pending) throw new CliError("There is no signup waiting", EXIT.USAGE, "Start one with `ludo signup --email <address> --plan <id>`.");
+  } else {
+    // A second link for the same person is how they end up paying twice.
+    // The server keeps the first one's place for a day after it is paid.
+    if (pending && !flagSet(parsed, "--restart")) {
+      throw new CliError(
+        `A signup for ${pending.email} is already waiting`,
+        EXIT.USAGE,
+        `Its checkout link: ${pending.checkout_url}\nRun \`ludo signup --continue\` once it is paid, or \`ludo signup --restart ...\` to drop it and start again.`
+      );
+    }
+    const email = flag("--email");
+    const plan = flag("--plan");
+    if (!email || !plan) {
+      throw new CliError("ludo signup needs --email and --plan", EXIT.USAGE, "`ludo pricing` lists the plans. Already have an account? Run `ludo login`.");
+    }
+    const apiUrl = resolveApiUrl(parsed.globals.apiUrl);
+    const started = await startSignup(apiUrl, { email, plan, interval: flag("--interval"), name: flag("--full-name") });
+    pending = {
+      device_code: started.device_code,
+      checkout_url: started.checkout_url,
+      email: started.email,
+      expires_at: Date.now() + started.expires_in * 1000,
+      interval: started.interval,
+      // Always recorded: --continue must reach the server that holds the
+      // signup, wherever LUDO_API_URL points by then.
+      api_url: apiUrl
+    };
+    writeConfig({ ...readConfig(), pending_signup: pending });
+    showCheckout(started, { log, openBrowser: parsed.globals.wait && !flagSet(parsed, "--no-browser") && canOpenBrowser() });
+    if (!parsed.globals.wait) {
+      if (ctx.jsonOut) {
+        printJson({ ok: true, status: "pending", checkout_url: started.checkout_url, email: started.email, plan: started.plan, expires_in: started.expires_in }, false);
+      } else {
+        process.stdout.write(`${started.checkout_url}\n`);
+      }
+      log("When it is paid, run `ludo signup --continue --code <code>` with the code we email to that address.");
+      return EXIT.OK;
+    }
+    log(`Waiting for the payment (${priceLine(started.plan)})…`);
+  }
+
+  const apiUrl = pending!.api_url || resolveApiUrl(parsed.globals.apiUrl);
+  const deviceCode = pending!.device_code;
+  const interactive = canOpenBrowser() || (!!process.stdin.isTTY && !!process.stderr.isTTY && !isAgent() && !process.env.CI);
+  let code = flag("--code");
+
+  // Where is it? With a code in hand, try it straight away.
+  let state = code ? await pollSignup(apiUrl, deviceCode, code) : continuing && !parsed.globals.wait ? await pollSignup(apiUrl, deviceCode) : await waitForPayment(apiUrl, pending!);
+
+  for (;;) {
+    if (state.status === "completed") break;
+    if (state.status === "expired") {
+      forget();
+      throw finalError(
+        "This signup is no longer waiting",
+        EXIT.TIMEOUT,
+        "If the link was never paid, run `ludo signup` again. If it was, the account exists: use the set-your-password link we emailed, then run `ludo login`."
+      );
+    }
+    if (state.status === "failed") {
+      forget();
+      throw finalError(state.message || "The signup could not be completed", EXIT.ERROR);
+    }
+    if (state.status === "pending") {
+      if (code) throw new CliError("The checkout link has not been paid yet", EXIT.ERROR, `Pay it first: ${pending!.checkout_url}`);
+      if (ctx.jsonOut) printJson({ ok: true, status: "pending", checkout_url: pending!.checkout_url, email: pending!.email }, false);
+      else process.stdout.write(`Not paid yet: ${pending!.checkout_url}\n`);
+      log("Run `ludo signup --continue` again once it is paid.");
+      return EXIT.OK;
+    }
+    if (state.status === "code_wrong") {
+      const left = state.attempts_left;
+      const hint = typeof left === "number" ? `${left} attempt${left === 1 ? "" : "s"} left.` : undefined;
+      if (!interactive) throw new CliError("That is not the code we emailed", EXIT.USAGE, [hint, "Check the email and run `ludo signup --continue --code <code>` again."].filter(Boolean).join(" "));
+      log(`That is not the code we emailed. ${hint || ""}`);
+    }
+    // code_required, or a wrong code at a terminal: ask for it.
+    const where = (state.status === "code_required" && state.email_hint) || pending!.email;
+    if (!interactive) {
+      if (ctx.jsonOut) printJson({ ok: true, status: "code_required", email: pending!.email }, false);
+      else process.stdout.write(`Paid. The account exists.\n`);
+      log(`We emailed a connect code to ${where}. Run \`ludo signup --continue --code <code>\` to finish.`);
+      return EXIT.OK;
+    }
+    if (state.status === "code_required") log(`Paid. We emailed a connect code to ${where}.`);
+    code = await promptSecret("Code from the email: ");
+    if (!code) throw new CliError("No code given", EXIT.USAGE, "Run `ludo signup --continue --code <code>` when you have it.");
+    state = await pollSignup(apiUrl, deviceCode, code);
+  }
+
+  const saved = { ...readConfig(), api_key: state.api_key, key_source: "login" as const, ...(pending!.api_url && pending!.api_url !== resolveApiUrl(undefined) ? { api_url: pending!.api_url } : {}) };
+  delete saved.pending_signup;
+  const file = writeConfig(saved);
+  const account = await fetchAccount(apiUrl, state.api_key).catch(() => undefined);
+  ctx.log(`Saved to ${file}`);
+  const email = state.email || pending!.email;
+  if (ctx.jsonOut) printJson({ ok: true, status: "completed", config: file, email, account }, false);
+  else process.stdout.write(account ? `✓ Account created. Player 1 ready: ${accountLine(account)}\n` : "✓ Account created\n");
+  log(`The same email has a link to set a password for the web app (${webUrlFor(apiUrl)}).`);
   return EXIT.OK;
 }
 
@@ -301,7 +428,7 @@ async function main(argv: string[]): Promise<number> {
   const { globals, words } = parsed;
   const ctx = makeCtx(globals);
   const [first, second] = words;
-  if (["version", "login", "logout", "billing", "pricing", "update", "spec", "help", "agent-help", "preview", "skill", "feedback", "init", "assets", "spend", "batch"].includes(first)) commandLabel = first;
+  if (["version", "login", "signup", "logout", "billing", "pricing", "update", "spec", "help", "agent-help", "preview", "skill", "feedback", "init", "assets", "spend", "batch"].includes(first)) commandLabel = first;
 
   if (globals.help && BUILTIN_HELP[first]) {
     process.stdout.write(BUILTIN_HELP[first]);
@@ -312,6 +439,7 @@ async function main(argv: string[]): Promise<number> {
     return EXIT.OK;
   }
   if (first === "login") return login(ctx, parsed, words.slice(1));
+  if (first === "signup") return signup(ctx, parsed);
   if (first === "logout") return logout(ctx);
   if (first === "billing") return billing(ctx);
   if (first === "pricing") return pricing(ctx);

@@ -40,6 +40,7 @@ export function agentInstructions(): string {
     "- `--n 4` makes four variations; look at them, keep the best, delete the rest.",
     "- Several assets at once: write a jobs file and run `ludo batch jobs.json`.",
     "- Never ask the user to paste an API key; ask them to run `ludo login` themselves.",
+    "- No Ludo account yet? `ludo signup --help`: an account and a plan in one payment, from the terminal.",
     "- Hit a limitation or a bug? `ludo feedback \"...\" --category limitation`."
   ].join("\n");
 }

@@ -48,6 +48,10 @@ interface StoredConfig {
   // `ludo logout` knows it may revoke it on the server.
   key_source?: "login";
   api_url?: string;
+  // A `ludo signup` that is not finished: its link is not paid yet, or it is
+  // paid and waits for the emailed connect code. Kept so that
+  // `ludo signup --continue` can pick it up. expires_at (ms) is the link's.
+  pending_signup?: { device_code: string; checkout_url: string; email: string; expires_at: number; interval?: number; api_url?: string };
 }
 
 function configFile(): string {

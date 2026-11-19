@@ -19,6 +19,15 @@ do not ask for a key in the chat: ask the user to run `ludo login` in their own 
 Code, `! ludo login`). It opens their browser, where they log in or create an account (and pick a plan
 with API access if needed) and approve the CLI.
 
+If the user has no Ludo account, you can set one up without the web app. Ask them which email to use
+and which plan (`ludo pricing` lists them), never guess either, then run
+`ludo signup --email <address> --plan <id> --no-wait`. It prints a Stripe checkout link: give it to
+the user to pay, or pay it yourself only if they gave you a way to pay and told you to. Nothing is
+created or charged until the link is paid. Paying emails that address a connect code and a link to
+set a password; ask the user for the code and run `ludo signup --continue --code <code>`, which logs
+the CLI in. Never start a signup for an address the user did not give you, and never ask anyone to
+forward a code for a signup you did not start in this session.
+
 ## Workflow
 
 1. Run `ludo agent-help` once for the full guide, and `ludo <group> <command> --help` before using a

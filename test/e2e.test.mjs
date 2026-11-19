@@ -27,6 +27,8 @@ let polls = 0;
 const SHEET = encodePng({ width: 4, height: 4, rgba: new Uint8Array(64).fill(200) });
 let loginPolls = 0;
 let loginOutcome = "approved";
+let signupPolls = 0;
+let signupOutcome = "paid";
 let flakyPolls = 0;
 let flakyUploads = 0;
 let flakyJobGets = 0;
@@ -159,6 +161,30 @@ before(async () => {
       if (loginOutcome === "denied") return json(res, 200, { status: "denied" });
       if (loginPolls < 2) return json(res, 200, { status: "pending" });
       return json(res, 200, { status: "approved", api_key: "ludo_minted" });
+    }
+    if (req.method === "POST" && url.pathname === "/api/cli/signup/start") {
+      const body = JSON.parse(raw);
+      signupPolls = 0;
+      if (body.email === "taken@example.test") return json(res, 409, { message: "Error: An account with this email already exists. Run `ludo login` to connect it." });
+      return json(res, 200, {
+        device_code: "signup-device",
+        checkout_url: "https://checkout.stripe.test/c/pay/cs_test_1",
+        email: body.email.toLowerCase(),
+        plan: { id: body.plan, name: "Indie", interval: body.interval || "month", amount: 15, currency: "usd" },
+        expires_in: 3600,
+        interval: 0.01
+      });
+    }
+    if (req.method === "POST" && url.pathname === "/api/cli/signup/token") {
+      const body = JSON.parse(raw);
+      signupPolls++;
+      if (signupOutcome === "expired") return json(res, 200, { status: "expired" });
+      if (signupOutcome === "failed") return json(res, 200, { status: "failed", message: "Error: Contact support" });
+      if (signupOutcome === "proxy403") return json(res, 403, { message: "Forbidden by proxy" });
+      if (signupOutcome === "unpaid" || (signupPolls < 2 && !body.code)) return json(res, 200, { status: "pending" });
+      if (!body.code) return json(res, 200, { status: "code_required", email_hint: "n**@example.test" });
+      if (String(body.code).toUpperCase().replace(/[^A-Z]/g, "") !== "WDJBMJHT") return json(res, 200, { status: "code_wrong", attempts_left: 4, message: "Error: That code is not the one we emailed." });
+      return json(res, 200, { status: "completed", api_key: "ludo_minted", email: "new@example.test", plan_name: "Indie" });
     }
     if (req.method === "GET" && url.pathname === "/api/pricing") {
       // Open with or without a key, like the server.
@@ -655,6 +681,163 @@ test("login runs the browser flow and saves the CLI key", async () => {
   assert.equal(configOf(cwd).key_source, "login");
   const start = seen.filter(s => s.path === "/api/cli/auth/start").pop();
   assert.equal(JSON.parse(start.raw).platform, process.platform);
+});
+
+const START = ["signup", "--email", "New@Example.test", "--plan", "indie"];
+const startsSeen = () => seen.filter(s => s.path === "/api/cli/signup/start").length;
+const lastPoll = () => JSON.parse(seen.filter(s => s.path === "/api/cli/signup/token").pop().raw);
+
+test("signup prints a checkout link, waits for the payment, then asks for the emailed code", async () => {
+  signupOutcome = "paid";
+  const { code, stdout, stderr, cwd } = await run([...START, "--full-name", "Ana Silva", "--json"], { LUDO_API_KEY: "" });
+  assert.equal(code, 0, stderr);
+  assert.match(stderr, /https:\/\/checkout\.stripe\.test\/c\/pay\/cs_test_1/);
+  assert.match(stderr, /Indie plan, \$15\.00 per month/);
+  assert.match(stderr, /emailed a connect code to n\*\*@example\.test/);
+  assert.match(stderr, /ludo signup --continue --code <code>/);
+  // Paid, but nothing is logged in until the code from the mailbox is given.
+  assert.equal(JSON.parse(stdout).status, "code_required");
+  const config = configOf(cwd);
+  assert.equal(config.api_key, undefined);
+  assert.equal(config.pending_signup.device_code, "signup-device");
+  const start = JSON.parse(seen.filter(s => s.path === "/api/cli/signup/start").pop().raw);
+  assert.equal(start.email, "New@Example.test");
+  assert.equal(start.plan, "indie");
+  assert.equal(start.name, "Ana Silva");
+  assert.equal(start.platform, process.platform);
+
+  const done = await run(["signup", "--continue", "--code", "WDJB-MJHT", "--json"], { LUDO_API_KEY: "" }, cwd);
+  assert.equal(done.code, 0, done.stderr);
+  const out = JSON.parse(done.stdout);
+  assert.equal(out.status, "completed");
+  assert.equal(out.email, "new@example.test");
+  assert.equal(out.account.plan.name, "Pro");
+  assert.match(done.stderr, /link to set a password/);
+  assert.deepEqual(lastPoll(), { device_code: "signup-device", code: "WDJB-MJHT" });
+  assert.equal(configOf(cwd).api_key, "ludo_minted");
+  assert.equal(configOf(cwd).key_source, "login");
+  assert.equal(configOf(cwd).pending_signup, undefined);
+});
+
+test("signup --no-wait prints the link and returns without polling or printing the device code", async () => {
+  signupOutcome = "paid";
+  const pollsBefore = seen.filter(s => s.path === "/api/cli/signup/token").length;
+  const first = await run([...START, "--interval", "year", "--no-wait", "--json"], { LUDO_API_KEY: "" });
+  assert.equal(first.code, 0, first.stderr);
+  const out = JSON.parse(first.stdout);
+  assert.equal(out.status, "pending");
+  assert.equal(out.checkout_url, "https://checkout.stripe.test/c/pay/cs_test_1");
+  assert.equal(out.plan.interval, "year");
+  assert.ok(!first.stdout.includes("signup-device") && !first.stderr.includes("signup-device"));
+  assert.equal(seen.filter(s => s.path === "/api/cli/signup/token").length, pollsBefore);
+  // The server that holds the signup is remembered, whatever the env says later.
+  assert.equal(configOf(first.cwd).pending_signup.api_url, base);
+  const later = await run(["signup", "--continue", "--code", "wdjb mjht"], { LUDO_API_KEY: "", LUDO_API_URL: "http://127.0.0.1:9" }, first.cwd);
+  assert.equal(later.code, 0, later.stderr);
+  assert.equal(configOf(first.cwd).api_key, "ludo_minted");
+});
+
+test("signup --continue reports an unpaid link and keeps waiting for next time", async () => {
+  signupOutcome = "paid";
+  const first = await run([...START, "--no-wait"], { LUDO_API_KEY: "" });
+  signupOutcome = "unpaid";
+  const check = await run(["signup", "--continue", "--no-wait", "--json"], { LUDO_API_KEY: "" }, first.cwd);
+  assert.equal(check.code, 0, check.stderr);
+  assert.equal(JSON.parse(check.stdout).status, "pending");
+  const early = await run(["signup", "--continue", "--code", "WDJB-MJHT"], { LUDO_API_KEY: "" }, first.cwd);
+  signupOutcome = "paid";
+  assert.equal(early.code, 1);
+  assert.match(early.stderr, /has not been paid yet/);
+  assert.equal(configOf(first.cwd).pending_signup.device_code, "signup-device");
+});
+
+test("a wrong connect code is refused, says how many tries are left, and keeps the signup", async () => {
+  signupOutcome = "paid";
+  const first = await run(START, { LUDO_API_KEY: "" });
+  assert.equal(first.code, 0, first.stderr);
+  const wrong = await run(["signup", "--continue", "--code", "BBBB-BBBB"], { LUDO_API_KEY: "" }, first.cwd);
+  assert.equal(wrong.code, 2);
+  assert.match(wrong.stderr, /not the code we emailed/);
+  assert.match(wrong.stderr, /4 attempts left/);
+  assert.equal(configOf(first.cwd).api_key, undefined);
+  assert.equal(configOf(first.cwd).pending_signup.device_code, "signup-device");
+});
+
+test("signup will not hand out a second link while one is waiting, unless --restart", async () => {
+  signupOutcome = "paid";
+  const first = await run([...START, "--no-wait"], { LUDO_API_KEY: "" });
+  const before = startsSeen();
+  const again = await run([...START, "--no-wait"], { LUDO_API_KEY: "" }, first.cwd);
+  assert.equal(again.code, 2);
+  assert.match(again.stderr, /already waiting/);
+  assert.match(again.stderr, /checkout\.stripe\.test/);
+  assert.equal(startsSeen(), before);
+  const restarted = await run([...START, "--no-wait", "--restart"], { LUDO_API_KEY: "" }, first.cwd);
+  assert.equal(restarted.code, 0, restarted.stderr);
+  assert.equal(startsSeen(), before + 1);
+});
+
+test("signup refuses to start without an email and a plan, or to continue with nothing pending", async () => {
+  const missing = await run(["signup", "--email", "new@example.test"], { LUDO_API_KEY: "" });
+  assert.equal(missing.code, 2);
+  assert.match(missing.stderr, /--email and --plan/);
+  const nothing = await run(["signup", "--continue"], { LUDO_API_KEY: "" });
+  assert.equal(nothing.code, 2);
+  assert.match(nothing.stderr, /no signup waiting/);
+});
+
+test("signup for an email that has an account points at ludo login and keeps nothing", async () => {
+  const { code, stderr, cwd } = await run(["signup", "--email", "taken@example.test", "--plan", "indie"], { LUDO_API_KEY: "" });
+  assert.notEqual(code, 0);
+  assert.match(stderr, /ludo login/);
+  assert.ok(!fs.existsSync(path.join(cwd, ".config", "config.json")));
+});
+
+test("an expired or failed signup exits with an error and forgets the pending link", async () => {
+  signupOutcome = "expired";
+  const expired = await run(START, { LUDO_API_KEY: "" });
+  assert.equal(expired.code, 9);
+  assert.match(expired.stderr, /no longer waiting/);
+  assert.equal(configOf(expired.cwd).pending_signup, undefined);
+  signupOutcome = "failed";
+  const failed = await run(START, { LUDO_API_KEY: "" });
+  signupOutcome = "paid";
+  assert.equal(failed.code, 1);
+  assert.match(failed.stderr, /Contact support/);
+  assert.equal(configOf(failed.cwd).pending_signup, undefined);
+});
+
+test("an answer that is not about the signup (a proxy's 403) never discards a signup that may be paid", async () => {
+  signupOutcome = "paid";
+  const first = await run([...START, "--no-wait"], { LUDO_API_KEY: "" });
+  signupOutcome = "proxy403";
+  const blocked = await run(["signup", "--continue", "--code", "WDJB-MJHT"], { LUDO_API_KEY: "" }, first.cwd);
+  signupOutcome = "paid";
+  assert.equal(blocked.code, 1);
+  assert.match(blocked.stderr, /Forbidden by proxy/);
+  assert.equal(configOf(first.cwd).pending_signup.device_code, "signup-device");
+  const retry = await run(["signup", "--continue", "--code", "WDJB-MJHT"], { LUDO_API_KEY: "" }, first.cwd);
+  assert.equal(retry.code, 0, retry.stderr);
+});
+
+test("signup refuses to make a second account on a CLI that is already logged in, also on --continue", async () => {
+  const before = startsSeen();
+  const { code, stderr, cwd } = await run(START);
+  assert.equal(code, 2);
+  assert.match(stderr, /already logged in/);
+  assert.equal(startsSeen(), before);
+  const cont = await run(["signup", "--continue", "--code", "WDJB-MJHT"], {}, cwd);
+  assert.equal(cont.code, 2);
+  assert.match(cont.stderr, /already logged in/);
+});
+
+test("signup --help prints usage and starts nothing", async () => {
+  const before = startsSeen();
+  const { code, stdout } = await run(["signup", "--help"], { LUDO_API_KEY: "" });
+  assert.equal(code, 0);
+  assert.match(stdout, /Usage: ludo signup --email/);
+  assert.match(stdout, /--continue \[--code <code>\]/);
+  assert.equal(startsSeen(), before);
 });
 
 test("a denied login exits with the auth code and saves nothing", async () => {

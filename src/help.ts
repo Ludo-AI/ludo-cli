@@ -52,6 +52,7 @@ export function mainHelp(commands: Command[]): string {
     "Other commands:",
     table([
       ["login", "Log in with your browser (--with-key to paste an API key instead)"],
+      ["signup", "Create an account and subscribe in one payment (--email, --plan)"],
       ["logout", "Log out and revoke this CLI login"],
       ["billing", "Open the billing page: buy credits, change plan or auto top-up"],
       ["pricing", "Plans, what each includes, what calls cost (no login needed)"],
@@ -91,6 +92,23 @@ export const BUILTIN_HELP: Record<string, string> = {
     "Logs in through the browser: it opens a page where you log in (or create an account) and approve",
     "this CLI, and waits up to 10 minutes. --no-browser prints the page instead of opening it.",
     "--with-key saves an existing API key instead, for CI and machines without a browser.",
+    ""
+  ].join("\n"),
+  signup: [
+    "Usage: ludo signup --email <address> --plan <id> [--interval month|year] [--full-name <name>]",
+    "       ludo signup --continue [--code <code>]",
+    "",
+    "Creates a Ludo account and subscribes it to a plan in one payment, with no web login. It prints a",
+    "Stripe checkout link for that email and plan, and waits up to an hour for it to be paid: by you, or",
+    "by an agent with a wallet of its own. Nothing is created or charged before that. Paying creates the",
+    "account, and the address is emailed a connect code and a link to set a password for the web app.",
+    "Type the code when asked, or pass it with `ludo signup --continue --code <code>` (it works for a",
+    "day), and this CLI is logged in. `ludo pricing` lists the plans; only single-user plans with API",
+    "access can be bought here.",
+    "",
+    "--no-wait prints the link and returns. --no-browser prints the link instead of opening it.",
+    "--restart drops a signup that is still waiting and starts a new one. Already have an account?",
+    "`ludo login`.",
     ""
   ].join("\n"),
   logout: ["Usage: ludo logout", "", "Forgets the saved key, and revokes it when `ludo login` created it.", ""].join("\n"),
@@ -270,6 +288,13 @@ input it cannot use.
   pick a plan with API access if needed. It waits up to 10 minutes for them to approve.
 - Every generation costs credits; \`--help\` shows the price. \`ludo account\` shows the balance, plan and
   auto top-up; check it before an expensive batch.
+- A user with no Ludo account can get one without the web app: \`ludo signup --email <address> --plan <id>
+  --no-wait\` prints a Stripe checkout link for the plan (\`ludo pricing\` lists them). Ask the user for the
+  email and which plan first, and never guess either. Give them the link to pay, or pay it yourself only if
+  the user has given you a way to pay and told you to. Paying emails that address a connect code: ask the
+  user for it (or read it from their mail only if they gave you access), then
+  \`ludo signup --continue --code <code>\` logs this CLI in. Never start a signup for an address the user
+  did not give you.
 - On exit code 5, do not retry. Tell the user they are out of credits (or their plan lacks API access) and
   that \`ludo billing\` opens the page to buy credits or change plan.
 - Before advising a user to sign up, upgrade or buy credits, run \`ludo pricing\` (free, no login): the plans,

@@ -7,6 +7,7 @@ effects, music and voices.
 ```sh
 npm install -g @ludoai/cli      # or run without installing: npx @ludoai/cli ...
 ludo login                      # log in with your browser (you can create an account there)
+# no account yet? ludo signup --email you@example.com --plan indie   (see "Signing up from the terminal")
 ludo image create --prompt "a knight with a red cape" --image-type sprite
 ```
 
@@ -327,6 +328,29 @@ logout` revokes it too.
 
 On a machine without a browser, open the printed link on any device. For CI, set `LUDO_API_KEY`, or
 save a key with `ludo login --with-key` (it reads the key from a prompt or stdin).
+
+## Signing up from the terminal
+
+No Ludo account yet? `ludo signup` creates one and subscribes it to a plan in one payment, without
+opening the web app. It is made for coding agents setting Ludo up for someone, and works the same
+for a person.
+
+```sh
+ludo pricing                                         # the plans and what they include
+ludo signup --email you@example.com --plan indie     # add --interval year for annual billing
+```
+
+1. It prints a Stripe checkout link for that email and plan, and waits. Nothing is created or
+   charged until the link is paid.
+2. Pay the link (you, or an agent with a wallet of its own). Cards only.
+3. We email that address a connect code and a link to set a password for the web app.
+4. Type the code when the CLI asks, or pass it later with `ludo signup --continue --code <code>`.
+   The CLI is then logged in.
+
+The key is only issued for the code from the mailbox, so starting a signup for someone else's
+address gets you nothing. For an agent that works in turns, `--no-wait` prints the link and returns;
+`ludo signup --continue` checks on it, and `--restart` drops a signup that is still waiting. Only
+single-user plans with API access can be bought here; team plans are bought in the web app.
 
 Keys are used in this order: `--api-key`, the `LUDO_API_KEY` environment variable, then the key saved
 by `ludo login` (in `~/.config/ludo/config.json`, readable only by you).
