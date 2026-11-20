@@ -128,9 +128,15 @@ async function signup(ctx: Ctx, parsed: Parsed): Promise<number> {
   // The token is as good as money for whoever holds it, so it can also come
   // from stdin (`--payment-token -`) or LUDO_PAYMENT_TOKEN, and stay out of
   // the shell history.
+  const tokenFlag = parsed.flags.has("--payment-token");
   let paymentToken = flag("--payment-token") || process.env.LUDO_PAYMENT_TOKEN || undefined;
   // From a pipe it reads stdin; at a terminal it asks.
   if (paymentToken === "-") paymentToken = await promptSecret("Link payment token (spt_...): ");
+  // Asked to pay with a token and given none (an empty pipe or variable):
+  // never fall back to a checkout link the caller did not ask for.
+  if ((tokenFlag || process.env.LUDO_PAYMENT_TOKEN !== undefined) && !paymentToken) {
+    throw new CliError("No payment token was given", EXIT.USAGE, "Pass the spt_... token from `link-cli spend-request retrieve <id> --include shared_payment_token`, on stdin with `--payment-token -`, or in LUDO_PAYMENT_TOKEN.");
+  }
   if (paymentToken) {
     if (continuing) throw new CliError("--payment-token starts a signup; it cannot continue one", EXIT.USAGE);
     if (pending && !flagSet(parsed, "--restart")) {

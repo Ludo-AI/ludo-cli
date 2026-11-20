@@ -730,6 +730,16 @@ test("signup --quote prints the Link command for a payment token, with no accoun
   assert.equal(new URLSearchParams(quoted.search).get("email"), "owner@studio.test");
 });
 
+test("signup with an empty payment token stops, and never opens a checkout link instead", async () => {
+  const startsBefore = startsSeen();
+  const piped = await run(["signup", "--email", "a@example.test", "--plan", "indie", "--payment-token", "-"], { LUDO_API_KEY: "" }, undefined, "\n");
+  assert.equal(piped.code, 2);
+  assert.match(piped.stderr, /No payment token was given/);
+  const env = await run(["signup", "--email", "a@example.test", "--plan", "indie"], { LUDO_API_KEY: "", LUDO_PAYMENT_TOKEN: "" });
+  assert.equal(env.code, 2);
+  assert.equal(startsSeen(), startsBefore);
+});
+
 test("signup reads the payment token from stdin or LUDO_PAYMENT_TOKEN, keeping it out of argv", async () => {
   const piped = await run(["signup", "--email", "a@example.test", "--plan", "indie", "--payment-token", "-", "--json"], { LUDO_API_KEY: "" }, undefined, "spt_fromstdin1\n");
   assert.equal(piped.code, 0, piped.stderr);
