@@ -217,7 +217,8 @@ async function signup(ctx: Ctx, parsed: Parsed): Promise<number> {
     if (!parsed.globals.wait) {
       if (ctx.jsonOut) {
         printJson({ ok: true, status: "pending", checkout_url: started.checkout_url, email: started.email, plan: started.plan, expires_in: started.expires_in }, false);
-      } else {
+      } else if (!process.stdout.isTTY) {
+        // For a script reading stdout; a person already saw it above.
         process.stdout.write(`${started.checkout_url}\n`);
       }
       log("When it is paid, run `ludo signup --continue --code <code>` with the code we email to that address.");
@@ -510,7 +511,7 @@ async function topup(ctx: Ctx, parsed: Parsed): Promise<number> {
   log(`${started.credits} credits for ${money(started.amount, started.currency)}. ${open ? "Opened the payment page" : "Pay here"}: ${started.checkout_url}`);
   if (!parsed.globals.wait) {
     if (ctx.jsonOut) printJson({ ok: true, status: "open", ...started }, false);
-    else process.stdout.write(`${started.checkout_url}\n`);
+    else if (!process.stdout.isTTY) process.stdout.write(`${started.checkout_url}\n`);
     log("When it is paid, `ludo topup --continue` confirms the credits are in.");
     return EXIT.OK;
   }
