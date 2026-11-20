@@ -157,7 +157,7 @@ async function signup(ctx: Ctx, parsed: Parsed): Promise<number> {
       throw new CliError(
         `A signup for ${pending.email} is already waiting for its checkout link to be paid`,
         EXIT.USAGE,
-        "Run `ludo signup --continue` for that one. --restart drops it here, but the server keeps that address's checkout open until it expires (an hour after it was made), so the token can pay for that address only after that."
+        "Run `ludo signup --continue` for that one, or add --restart to drop it and pay with the token instead (its checkout link is ended if it was not paid)."
       );
     }
     const email = flag("--email");
