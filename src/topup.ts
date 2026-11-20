@@ -1,6 +1,8 @@
 import type { Api } from "./api.js";
 
-// `ludo topup`: extra credits for the logged-in account, with the holder's
+// `ludo topup`: extra credits for the logged-in account, through the same
+// public endpoints MCP agents use (getTopupQuote, createTopupLink,
+// getTopupLink, payTopup), with the holder's
 // approval every time and never on the card saved on the account. Two ways
 // to pay: a one-time Link Shared Payment Token (`--quote`, then
 // `--payment-token`), charged at once with the credits in the account when
@@ -51,22 +53,22 @@ export function money(amount: number, currency: string): string {
 }
 
 export async function quoteTopup(api: Api, credits: number): Promise<TopupQuote> {
-  return (await api.call("GET", "/cli/topup/quote", { query: { credits } })).body;
+  return (await api.call("GET", "/assets/topup/quote", { query: { credits } })).body;
 }
 
 export async function payTopup(api: Api, credits: number, paymentToken: string): Promise<TopupPaid> {
   // One attempt only: a retried payment could charge twice.
-  return (await api.call("POST", "/cli/topup/pay", { body: { credits, payment_token: paymentToken }, retry: false, timeoutMs: 300_000 })).body;
+  return (await api.call("POST", "/assets/topup/pay", { body: { credits, payment_token: paymentToken }, retry: false, timeoutMs: 300_000 })).body;
 }
 
 // `replace` ends the account's open payment page first, so two cannot both
 // be paid.
 export async function checkoutTopup(api: Api, credits: number, replace = false): Promise<TopupCheckout> {
-  return (await api.call("POST", "/cli/topup/checkout", { body: { credits, ...(replace ? { replace: true } : {}) }, retry: false })).body;
+  return (await api.call("POST", "/assets/topup/link", { body: { credits, ...(replace ? { replace: true } : {}) }, retry: false })).body;
 }
 
 export async function topupStatus(api: Api, sessionId: string): Promise<TopupState> {
-  return (await api.call("GET", "/cli/topup/status", { query: { session: sessionId } })).body;
+  return (await api.call("GET", `/assets/topup/link/${encodeURIComponent(sessionId)}`)).body;
 }
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));

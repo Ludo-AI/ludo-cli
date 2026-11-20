@@ -219,25 +219,25 @@ before(async () => {
         message: body.payment_token === "spt_once" ? "Subscribed for one month." : "Subscribed. Each month is charged to the same Link token."
       });
     }
-    if (url.pathname.startsWith("/api/cli/topup/")) {
+    if (url.pathname.startsWith("/api/assets/topup")) {
       if (!["ApiKey ludo_minted", "ApiKey test-key"].includes(req.headers.authorization)) return json(res, 403, { message: "Unauthorized" });
       const q = url.searchParams;
-      if (req.method === "GET" && url.pathname === "/api/cli/topup/quote") {
+      if (req.method === "GET" && url.pathname === "/api/assets/topup/quote") {
         const credits = Number(q.get("credits"));
         if (credits % 50) return json(res, 400, { message: "Error: Top-up amount must be a multiple of 50" });
         return json(res, 200, { credits, amount: credits * 0.06, amount_minor: credits * 6, currency: "usd", tier: "indie", min_credits: 250, max_credits: 17000, step_credits: 50, network_id: "profile_test_ludo", test_mode: true, link_cli_command: `link-cli spend-request create --credential-type shared_payment_token --network-id profile_test_ludo --amount ${credits * 6} --currency usd --request-approval --test` });
       }
-      if (req.method === "POST" && url.pathname === "/api/cli/topup/pay") {
+      if (req.method === "POST" && url.pathname === "/api/assets/topup/pay") {
         const body = JSON.parse(raw);
         if (body.payment_token === "spt_small") return json(res, 402, { message: "Error: The token allows 1.00, and 1000 credits cost 60.00 USD.", code: "PAYMENT_TOKEN_TOO_SMALL" });
         return json(res, 200, { status: "completed", credits: body.credits, amount: body.credits * 0.06, currency: "usd", invoice_id: "in_test_1", extra_credits: body.credits });
       }
-      if (req.method === "POST" && url.pathname === "/api/cli/topup/checkout") {
+      if (req.method === "POST" && url.pathname === "/api/assets/topup/link") {
         const body = JSON.parse(raw);
         topupPolls = 0;
         return json(res, 200, { checkout_url: "https://checkout.stripe.test/c/pay/cs_test_topup", session_id: "cs_test_topup1", credits: body.credits, amount: body.credits * 0.06, currency: "usd", expires_in: 3600 });
       }
-      if (req.method === "GET" && url.pathname === "/api/cli/topup/status") {
+      if (req.method === "GET" && url.pathname.startsWith("/api/assets/topup/link/")) {
         topupPolls++;
         if (topupOutcome === "expired") return json(res, 200, { status: "expired", credits: 1000 });
         if (topupOutcome === "unpaid" || topupPolls < 2) return json(res, 200, { status: "open", credits: 1000, checkout_url: "https://checkout.stripe.test/c/pay/cs_test_topup" });
@@ -871,7 +871,7 @@ test("topup never takes a token from LUDO_PAYMENT_TOKEN: without --payment-token
   const { code, stdout } = await run(["topup", "--credits", "1000", "--no-wait"], { LUDO_API_KEY: "test-key", LUDO_PAYMENT_TOKEN: "spt_leftover" });
   assert.equal(code, 0);
   assert.equal(JSON.parse(stdout).status, "open");
-  assert.ok(!seen.some(s => s.path === "/api/cli/topup/pay" && s.raw.includes("spt_leftover")));
+  assert.ok(!seen.some(s => s.path === "/api/assets/topup/pay" && s.raw.includes("spt_leftover")));
 });
 
 test("topup waiting past the link's life exits non-zero", async () => {
@@ -886,7 +886,7 @@ test("topup --payment-token pays at once, from stdin, and reports a token that i
   const { code, stdout, stderr } = await run(["topup", "--credits", "1000", "--payment-token", "-"], { LUDO_API_KEY: "test-key" }, undefined, "spt_topup123\n");
   assert.equal(code, 0, stderr);
   assert.equal(JSON.parse(stdout).credits, 1000);
-  const pay = JSON.parse(seen.filter(s => s.path === "/api/cli/topup/pay").pop().raw);
+  const pay = JSON.parse(seen.filter(s => s.path === "/api/assets/topup/pay").pop().raw);
   assert.deepEqual(pay, { credits: 1000, payment_token: "spt_topup123" });
   const small = await run(["topup", "--credits", "1000", "--payment-token", "spt_small"], { LUDO_API_KEY: "test-key" });
   assert.notEqual(small.code, 0);
@@ -916,7 +916,7 @@ test("topup --no-wait returns the link, refuses a second one, and --continue fin
   assert.match(second.stderr, /still open/);
   // --restart asks the server to end the open link.
   await run(["topup", "--credits", "500", "--no-wait", "--restart"], { LUDO_API_KEY: "test-key" }, first.cwd);
-  assert.equal(JSON.parse(seen.filter(s => s.path === "/api/cli/topup/checkout").pop().raw).replace, true);
+  assert.equal(JSON.parse(seen.filter(s => s.path === "/api/assets/topup/link").pop().raw).replace, true);
   const check = await run(["topup", "--continue", "--no-wait"], { LUDO_API_KEY: "test-key" }, first.cwd);
   assert.equal(JSON.parse(check.stdout).status, "open");
   topupOutcome = "paid";
