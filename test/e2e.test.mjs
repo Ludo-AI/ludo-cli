@@ -78,7 +78,7 @@ before(async () => {
     for await (const c of req) chunks.push(c);
     const raw = Buffer.concat(chunks);
     const url = new URL(req.url, base);
-    seen.push({ method: req.method, path: url.pathname, headers: req.headers, raw });
+    seen.push({ method: req.method, path: url.pathname, search: url.search, headers: req.headers, raw });
 
     if (req.method === "GET" && url.pathname === "/api-documentation/openapi.json") {
       if (slowSpecMs) await new Promise(r => setTimeout(r, slowSpecMs));
@@ -724,6 +724,19 @@ test("signup --quote prints the Link command for a payment token, with no accoun
   assert.match(JSON.parse(yearly.stdout).link_cli_command, /--recurring-interval year/);
   const noPlan = await run(["signup", "--quote"], { LUDO_API_KEY: "" });
   assert.equal(noPlan.code, 2);
+  // --email is passed on, for the approval text the holder reads in Link.
+  await run(["signup", "--plan", "indie", "--email", "owner@studio.test", "--quote"], { LUDO_API_KEY: "" });
+  const quoted = seen.filter(s => s.path === "/api/cli/signup/quote").pop();
+  assert.equal(new URLSearchParams(quoted.search).get("email"), "owner@studio.test");
+});
+
+test("signup reads the payment token from stdin or LUDO_PAYMENT_TOKEN, keeping it out of argv", async () => {
+  const piped = await run(["signup", "--email", "a@example.test", "--plan", "indie", "--payment-token", "-", "--json"], { LUDO_API_KEY: "" }, undefined, "spt_fromstdin1\n");
+  assert.equal(piped.code, 0, piped.stderr);
+  assert.equal(JSON.parse(seen.filter(s => s.path === "/api/cli/signup/pay").pop().raw).payment_token, "spt_fromstdin1");
+  const env = await run(["signup", "--email", "b@example.test", "--plan", "indie", "--json"], { LUDO_API_KEY: "", LUDO_PAYMENT_TOKEN: "spt_fromenv22" });
+  assert.equal(env.code, 0, env.stderr);
+  assert.equal(JSON.parse(seen.filter(s => s.path === "/api/cli/signup/pay").pop().raw).payment_token, "spt_fromenv22");
 });
 
 test("signup --payment-token pays, saves the key and logs in at once, without polling", async () => {

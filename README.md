@@ -358,17 +358,19 @@ An agent with [Link](https://link.com/agents)'s CLI (`link-cli`, Stripe's agent 
 buyers) can pay with a Shared Payment Token instead of a checkout link:
 
 ```sh
-ludo signup --plan indie --quote        # prints the price and the link-cli command to run
+ludo signup --plan indie --email you@example.com --quote   # the price and the link-cli command to run
 # run that command; the account holder approves the spend in Link, then:
 link-cli spend-request retrieve <lsrq_id> --include shared_payment_token --format json
-ludo signup --email you@example.com --plan indie --payment-token spt_...
+ludo signup --email you@example.com --plan indie --payment-token -   # reads the spt_... token from stdin
 ```
 
 Ludo charges the token, creates the account and logs the CLI in, in one step: no checkout page and
 no emailed code. The address still gets a link to set a password. A token created with
 `--recurring-interval` (as the quoted command does) pays each renewal within the limit its holder
 approved; revoking it in Link stops that, and the web app then asks for a card. A one-time token buys
-one period, and the plan ends after it.
+one period, and the plan ends after it. A token buys one account, and is as good as money to whoever
+holds it: keep it out of logs and shell history (`--payment-token -` reads it from stdin, or set
+`LUDO_PAYMENT_TOKEN`).
 
 Keys are used in this order: `--api-key`, the `LUDO_API_KEY` environment variable, then the key saved
 by `ludo login` (in `~/.config/ludo/config.json`, readable only by you).

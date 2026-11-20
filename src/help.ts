@@ -111,15 +111,17 @@ export const BUILTIN_HELP: Record<string, string> = {
     "`ludo login`.",
     "",
     "Paying without a browser, with Link (Stripe's agent wallet, US and Canada):",
-    "       ludo signup --plan <id> [--interval month|year] --quote",
-    "       ludo signup --email <address> --plan <id> --payment-token <spt_...>",
+    "       ludo signup --plan <id> [--interval month|year] [--email <address>] --quote",
+    "       ludo signup --email <address> --plan <id> --payment-token <spt_...|->",
     "",
     "--quote prints the price and the `link-cli spend-request create` command that asks the account",
     "holder to approve a payment to Ludo. Once approved, `link-cli spend-request retrieve <id> --include",
     "shared_payment_token` gives the token (spt_...). --payment-token charges it, creates the account",
     "and logs this CLI in at once: no checkout link and no emailed code. A token made with",
     "--recurring-interval pays the renewals too, within the limit the holder approved; a one-time",
-    "token buys one period, and the plan then ends unless a card is added in the web app.",
+    "token buys one period, and the plan then ends unless a card is added in the web app. A token buys",
+    "one account. With --email, --quote names the address in what the holder approves. The token is as",
+    "good as money: pass `--payment-token -` to read it from stdin, or set LUDO_PAYMENT_TOKEN.",
     ""
   ].join("\n"),
   logout: ["Usage: ludo logout", "", "Forgets the saved key, and revokes it when `ludo login` created it.", ""].join("\n"),
@@ -307,7 +309,7 @@ input it cannot use.
   \`ludo signup --continue --code <code>\` logs this CLI in. Never start a signup for an address the user
   did not give you.
 - With Link (Stripe's agent wallet, \`link-cli\`) you can pay without a browser, but only if the user told
-  you to pay: \`ludo signup --plan <id> --quote\` prints the \`link-cli spend-request create\` command
+  you to pay: \`ludo signup --plan <id> --email <address> --quote\` prints the \`link-cli spend-request create\` command
   (Ludo's network id, the amount, a monthly or yearly limit). The user approves it in Link; then
   \`link-cli spend-request retrieve <id> --include shared_payment_token\` gives the token, and
   \`ludo signup --email <address> --plan <id> --payment-token <spt_...>\` creates the account and logs this

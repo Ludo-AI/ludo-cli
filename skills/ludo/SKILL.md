@@ -29,7 +29,7 @@ the CLI in. Never start a signup for an address the user did not give you, and n
 forward a code for a signup you did not start in this session.
 
 If the user has told you to pay and uses Link (Stripe's agent wallet, `link-cli`), you can pay without a
-browser: `ludo signup --plan <id> --quote` prints the `link-cli spend-request create` command to run. The
+browser: `ludo signup --plan <id> --email <address> --quote` prints the `link-cli spend-request create` command to run. The
 user approves the spend in Link; `link-cli spend-request retrieve <id> --include shared_payment_token`
 then gives the token, and `ludo signup --email <address> --plan <id> --payment-token <spt_...>` creates the
 account and logs the CLI in at once. Use the quoted amount and cadence as they are.

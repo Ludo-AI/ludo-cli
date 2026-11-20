@@ -90,9 +90,9 @@ export interface SignupPaid {
   message?: string;
 }
 
-export async function quoteSignup(apiUrl: string, plan: string, interval?: string): Promise<SignupQuote> {
+export async function quoteSignup(apiUrl: string, plan: string, interval?: string, email?: string): Promise<SignupQuote> {
   const { body } = await new Api(apiUrl, undefined).call("GET", "/cli/signup/quote", {
-    query: { plan, ...(interval ? { interval } : {}) }
+    query: { plan, ...(interval ? { interval } : {}), ...(email ? { email } : {}) }
   });
   return body;
 }
@@ -102,7 +102,9 @@ export async function paySignup(apiUrl: string, request: SignupRequest & { payme
   const { body } = await new Api(apiUrl, undefined).call("POST", "/cli/signup/pay", {
     body: { ...request, platform: process.platform, client_version: VERSION },
     retry: false,
-    timeoutMs: 120_000
+    // The server makes several Stripe calls, each retried; never give up on
+    // a payment before it has answered.
+    timeoutMs: 300_000
   });
   return body;
 }

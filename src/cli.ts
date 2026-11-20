@@ -106,7 +106,7 @@ async function signup(ctx: Ctx, parsed: Parsed): Promise<number> {
   if (flagSet(parsed, "--quote")) {
     const plan = flag("--plan");
     if (!plan) throw new CliError("ludo signup --quote needs --plan", EXIT.USAGE, "`ludo pricing` lists the plans.");
-    const quote = await quoteSignup(resolveApiUrl(parsed.globals.apiUrl), plan, flag("--interval"));
+    const quote = await quoteSignup(resolveApiUrl(parsed.globals.apiUrl), plan, flag("--interval"), flag("--email"));
     if (ctx.jsonOut) {
       printJson({ ok: true, ...quote }, false);
       return EXIT.OK;
@@ -125,14 +125,19 @@ async function signup(ctx: Ctx, parsed: Parsed): Promise<number> {
   }
 
   // Paid with a Link token: one request, and the key comes back with it.
-  const paymentToken = flag("--payment-token");
+  // The token is as good as money for whoever holds it, so it can also come
+  // from stdin (`--payment-token -`) or LUDO_PAYMENT_TOKEN, and stay out of
+  // the shell history.
+  let paymentToken = flag("--payment-token") || process.env.LUDO_PAYMENT_TOKEN || undefined;
+  // From a pipe it reads stdin; at a terminal it asks.
+  if (paymentToken === "-") paymentToken = await promptSecret("Link payment token (spt_...): ");
   if (paymentToken) {
     if (continuing) throw new CliError("--payment-token starts a signup; it cannot continue one", EXIT.USAGE);
     if (pending && !flagSet(parsed, "--restart")) {
       throw new CliError(
         `A signup for ${pending.email} is already waiting for its checkout link to be paid`,
         EXIT.USAGE,
-        "Run `ludo signup --continue` for that one, or add --restart to drop it and pay with the token instead."
+        "Run `ludo signup --continue` for that one. --restart drops it here, but the server keeps that address's checkout open until it expires (an hour after it was made), so the token can pay for that address only after that."
       );
     }
     const email = flag("--email");
