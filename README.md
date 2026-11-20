@@ -396,7 +396,7 @@ ludo topup --credits 1000 --quote      # the price, and a one-time link-cli comm
 ludo topup --credits 1000 --payment-token -   # pays with the approved Link token, read from stdin
 ```
 
-With a Link token the credits are in the account when the command returns, and a token buys one
+With a Link token the credits are added at once (the command says if they are still on their way), and a token buys one
 top-up.
 ## Feedback
 
