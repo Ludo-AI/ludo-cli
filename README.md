@@ -383,6 +383,21 @@ each includes, what each call costs, and the billing rules: generating through t
 a paid plan, and costs credits on every plan. When a generation fails for lack of credits (exit
 code 5) at a terminal, the CLI offers to open that page.
 
+### Buying credits from the terminal
+
+`ludo topup` buys extra credits for the logged-in account, at your plan's top-up price. Someone
+approves every purchase; it never charges the card saved on the account (auto top-up, set in the web
+app, is for that).
+
+```sh
+ludo topup --credits 1000              # prints a Stripe payment link and waits for it to be paid
+ludo topup --credits 1000 --no-wait    # prints the link and returns; `ludo topup --continue` checks later
+ludo topup --credits 1000 --quote      # the price, and a one-time link-cli command for Link
+ludo topup --credits 1000 --payment-token -   # pays with the approved Link token, read from stdin
+```
+
+With a Link token the credits are in the account when the command returns, and a token buys one
+top-up.
 ## Feedback
 
 `ludo feedback "<message>"` sends a note to the Ludo team: a limitation you hit, a bug, something

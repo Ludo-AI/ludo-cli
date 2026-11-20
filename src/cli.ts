@@ -24,6 +24,7 @@ import { accountLine, accountSummary, agentName, billingUrlFor, browserLogin, ca
 import { assets, BATCH_HELP, init, loadBatch, spend } from "./workspace.js";
 import { toolbox } from "./toolbox/index.js";
 import { pricing } from "./pricing-guide.js";
+import { checkoutTopup, money, payTopup, quoteTopup, topupStatus, waitForTopup, type TopupState } from "./topup.js";
 import { finalError, paySignup, pollSignup, priceLine, quoteSignup, showCheckout, startSignup, waitForPayment } from "./signup.js";
 
 async function promptSecret(question: string): Promise<string> {
@@ -367,6 +368,114 @@ async function preview(ctx: Ctx, parsed: Parsed, words: string[]): Promise<numbe
   return EXIT.OK;
 }
 
+// `ludo topup` (src/topup.ts): extra credits, paid with a one-time Link token
+// or on a Stripe payment page that someone pays.
+async function topup(ctx: Ctx, parsed: Parsed): Promise<number> {
+  const flag = (name: string) => parsed.flags.get(name)?.find(v => v !== "\u0000flag");
+  const log = (msg: string) => process.stderr.write(msg + "\n");
+  ctx.api.requireKey();
+  const forget = () => {
+    const rest = { ...readConfig() };
+    delete rest.pending_topup;
+    writeConfig(rest);
+  };
+  const pollMs = process.env.LUDO_TOPUP_POLL_MS ? Number(process.env.LUDO_TOPUP_POLL_MS) : 5000;
+  const report = (state: TopupState, extra: Record<string, unknown> = {}) => {
+    if (ctx.jsonOut) printJson({ ok: true, ...state, ...extra }, false);
+    else if (state.status === "completed") process.stdout.write(`✓ ${state.credits} credits added\n`);
+    else if (state.status === "paid") process.stdout.write(`Paid. The ${state.credits} credits are being added; \`ludo account\` shows them shortly.\n`);
+    else if (state.status === "open") process.stdout.write(`Not paid yet: ${(state as { checkout_url?: string }).checkout_url || readConfig().pending_topup?.checkout_url || ""}\n`);
+  };
+
+  // A payment-page top-up started earlier.
+  if (flagSet(parsed, "--continue")) {
+    const pending = readConfig().pending_topup;
+    if (!pending) throw new CliError("There is no top-up waiting", EXIT.USAGE, "Start one with `ludo topup --credits <n>`.");
+    const state = parsed.globals.wait ? await waitForTopup(ctx.api, pending.session_id, pending.expires_at, pollMs) : await topupStatus(ctx.api, pending.session_id);
+    if (state.status === "expired") {
+      forget();
+      throw new CliError("That payment link expired unpaid", EXIT.TIMEOUT, "Run `ludo topup --credits <n>` for a new one.");
+    }
+    if (state.status !== "open") forget();
+    report(state);
+    if (state.status === "open") log("Run `ludo topup --continue` again once it is paid.");
+    return EXIT.OK;
+  }
+
+  const raw = flag("--credits");
+  const credits = Number(raw);
+  if (!raw || !Number.isInteger(credits) || credits <= 0) {
+    throw new CliError("ludo topup needs --credits <n>", EXIT.USAGE, "`ludo topup --credits 1000 --quote` shows the price; `ludo pricing` lists the top-up prices.");
+  }
+
+  if (flagSet(parsed, "--quote")) {
+    const quote = await quoteTopup(ctx.api, credits);
+    if (ctx.jsonOut) {
+      printJson({ ok: true, ...quote }, false);
+      return EXIT.OK;
+    }
+    log(`${quote.credits} credits: ${money(quote.amount, quote.currency)} on your plan.`);
+    if (quote.link_cli_command) {
+      log("To pay with Link, without a browser: create this spend request, have it approved, then");
+      log("`link-cli spend-request retrieve <lsrq_id> --include shared_payment_token` gives the token, and");
+      log(`\`ludo topup --credits ${credits} --payment-token -\` reads it from stdin. Or run \`ludo topup --credits ${credits}\` for a payment link.`);
+      process.stdout.write(`${quote.link_cli_command}\n`);
+    }
+    return EXIT.OK;
+  }
+
+  // Paid with a one-time Link token: the credits are in when this returns.
+  const tokenFlag = parsed.flags.has("--payment-token");
+  let paymentToken = flag("--payment-token") || process.env.LUDO_PAYMENT_TOKEN || undefined;
+  if (paymentToken === "-") paymentToken = await promptSecret("Link payment token (spt_...): ");
+  if ((tokenFlag || process.env.LUDO_PAYMENT_TOKEN !== undefined) && !paymentToken) {
+    throw new CliError("No payment token was given", EXIT.USAGE, "Pass a one-time spt_... token for the quoted amount (`ludo topup --credits <n> --quote`), on stdin with `--payment-token -`, or in LUDO_PAYMENT_TOKEN.");
+  }
+  if (paymentToken) {
+    log("Paying with the Link token…");
+    const paid = await payTopup(ctx.api, credits, paymentToken);
+    if (ctx.jsonOut) printJson({ ok: true, ...paid }, false);
+    else process.stdout.write(`✓ ${paid.credits} credits added (${money(paid.amount, paid.currency)})\n`);
+    return EXIT.OK;
+  }
+
+  // A payment page for someone to pay. One at a time.
+  const waiting = readConfig().pending_topup;
+  if (waiting && waiting.expires_at > Date.now() && !flagSet(parsed, "--restart")) {
+    throw new CliError(
+      `A payment link for ${waiting.credits} credits is still open`,
+      EXIT.USAGE,
+      `Pay it (${waiting.checkout_url}) and run \`ludo topup --continue\`, or add --restart for a new link (pay only one of them).`
+    );
+  }
+  const started = await checkoutTopup(ctx.api, credits);
+  const pending = {
+    session_id: started.session_id,
+    checkout_url: started.checkout_url,
+    credits: started.credits,
+    expires_at: Date.now() + started.expires_in * 1000,
+    api_url: resolveApiUrl(parsed.globals.apiUrl)
+  };
+  writeConfig({ ...readConfig(), pending_topup: pending });
+  const open = parsed.globals.wait && !flagSet(parsed, "--no-browser") && canOpenBrowser() && openBrowser(started.checkout_url);
+  log(`${started.credits} credits for ${money(started.amount, started.currency)}. ${open ? "Opened the payment page" : "Pay here"}: ${started.checkout_url}`);
+  if (!parsed.globals.wait) {
+    if (ctx.jsonOut) printJson({ ok: true, status: "open", ...started }, false);
+    else process.stdout.write(`${started.checkout_url}\n`);
+    log("When it is paid, `ludo topup --continue` confirms the credits are in.");
+    return EXIT.OK;
+  }
+  log("Waiting for the payment…");
+  const state = await waitForTopup(ctx.api, started.session_id, pending.expires_at, pollMs);
+  if (state.status === "expired") {
+    forget();
+    throw new CliError("The payment link expired unpaid", EXIT.TIMEOUT, "Run `ludo topup --credits <n>` for a new one.");
+  }
+  if (state.status !== "open") forget();
+  report(state);
+  return EXIT.OK;
+}
+
 // Opens the web app's billing page: buy credits, change plan or auto top-up.
 async function billing(ctx: Ctx): Promise<number> {
   const apiUrl = resolveApiUrl(ctx.globals.apiUrl);
@@ -489,7 +598,7 @@ async function main(argv: string[]): Promise<number> {
   const { globals, words } = parsed;
   const ctx = makeCtx(globals);
   const [first, second] = words;
-  if (["version", "login", "signup", "logout", "billing", "pricing", "update", "spec", "help", "agent-help", "preview", "skill", "feedback", "init", "assets", "spend", "batch"].includes(first)) commandLabel = first;
+  if (["version", "login", "signup", "logout", "billing", "topup", "pricing", "update", "spec", "help", "agent-help", "preview", "skill", "feedback", "init", "assets", "spend", "batch"].includes(first)) commandLabel = first;
 
   if (globals.help && BUILTIN_HELP[first]) {
     process.stdout.write(BUILTIN_HELP[first]);
@@ -503,6 +612,7 @@ async function main(argv: string[]): Promise<number> {
   if (first === "signup") return signup(ctx, parsed);
   if (first === "logout") return logout(ctx);
   if (first === "billing") return billing(ctx);
+  if (first === "topup") return topup(ctx, parsed);
   if (first === "pricing") return pricing(ctx);
   if (first === "feedback") return feedback(ctx, parsed, words.slice(1));
   if (first === "update") return update(ctx);

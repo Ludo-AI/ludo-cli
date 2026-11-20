@@ -34,6 +34,12 @@ user approves the spend in Link; `link-cli spend-request retrieve <id> --include
 then gives the token, and `ludo signup --email <address> --plan <id> --payment-token <spt_...>` creates the
 account and logs the CLI in at once. Use the quoted amount and cadence as they are.
 
+Out of credits (exit code 5)? Tell the user, and offer a top-up rather than buying one: ask how many
+credits, then `ludo topup --credits <n> --no-wait` prints a payment link for them to pay (`ludo topup
+--continue` confirms the credits are in). If they told you to pay and use Link, `ludo topup --credits <n>
+--quote` prints a one-time `link-cli` command; once they approve it, `ludo topup --credits <n>
+--payment-token -` pays it and the credits are in at once. Never buy credits the user did not ask for.
+
 ## Workflow
 
 1. Run `ludo agent-help` once for the full guide, and `ludo <group> <command> --help` before using a

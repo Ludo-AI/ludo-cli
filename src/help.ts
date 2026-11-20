@@ -55,6 +55,7 @@ export function mainHelp(commands: Command[]): string {
       ["signup", "Create an account and subscribe in one payment (--email, --plan)"],
       ["logout", "Log out and revoke this CLI login"],
       ["billing", "Open the billing page: buy credits, change plan or auto top-up"],
+      ["topup", "Buy extra credits: a payment link, or a Link token without a browser (--credits)"],
       ["pricing", "Plans, what each includes, what calls cost (no login needed)"],
       ["feedback <message>", "Tell the Ludo team about a limitation, bug, idea or win"],
       ["init", "Set this folder up as a project: .ludo.json, agent instructions"],
@@ -126,6 +127,26 @@ export const BUILTIN_HELP: Record<string, string> = {
   ].join("\n"),
   logout: ["Usage: ludo logout", "", "Forgets the saved key, and revokes it when `ludo login` created it.", ""].join("\n"),
   billing: ["Usage: ludo billing", "", "Opens the billing page (buy credits, change plan or auto top-up), or prints its URL.", ""].join("\n"),
+  topup: [
+    "Usage: ludo topup --credits <n>                       a payment link, and wait for it",
+    "       ludo topup --credits <n> --quote               the price, and the Link command for a token",
+    "       ludo topup --credits <n> --payment-token <spt_...|->",
+    "       ludo topup --continue",
+    "",
+    "Buys extra credits for the account this CLI is logged in to, at your plan's top-up price (`ludo",
+    "pricing` lists them; amounts go in steps, from the minimum to the maximum the quote shows). Someone",
+    "approves every purchase: never the card saved on the account (that is what auto top-up is for).",
+    "",
+    "Without a token it prints a Stripe payment page for the amount and waits up to an hour for it to",
+    "be paid; --no-wait prints it and returns, and `ludo topup --continue` checks on it later.",
+    "",
+    "With Link (Stripe's agent wallet, US and Canada), no browser: --quote prints a one-time",
+    "`link-cli spend-request create` command for exactly that amount. Once the holder approves it,",
+    "`link-cli spend-request retrieve <id> --include shared_payment_token` gives the token, and",
+    "--payment-token charges it: the credits are in when the command returns. A token buys one top-up.",
+    "`--payment-token -` reads it from stdin, or set LUDO_PAYMENT_TOKEN.",
+    ""
+  ].join("\n"),
   pricing: [
     "Usage: ludo pricing",
     "",
@@ -315,7 +336,10 @@ input it cannot use.
   \`ludo signup --email <address> --plan <id> --payment-token <spt_...>\` creates the account and logs this
   CLI in at once. Never change the amount or the cadence the quote gives.
 - On exit code 5, do not retry. Tell the user they are out of credits (or their plan lacks API access) and
-  that \`ludo billing\` opens the page to buy credits or change plan.
+  that \`ludo billing\` opens the page to buy credits or change plan. You can also prepare a top-up:
+  \`ludo topup --credits <n> --no-wait\` prints a payment link for the user to pay, or, if the user told you
+  to pay and uses Link, \`ludo topup --credits <n> --quote\` prints the one-time \`link-cli\` command and
+  \`ludo topup --credits <n> --payment-token -\` pays it. Ask how many credits; never buy unasked.
 - Before advising a user to sign up, upgrade or buy credits, run \`ludo pricing\` (free, no login): the plans,
   what each includes, what calls cost, and the rules (generating here needs a paid plan, and costs credits
   on every plan). Quote it rather than guessing prices.
