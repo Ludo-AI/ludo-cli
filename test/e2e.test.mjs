@@ -835,6 +835,22 @@ test("topup needs a logged-in CLI", async () => {
   assert.equal(code, 3);
 });
 
+test("topup never takes a token from LUDO_PAYMENT_TOKEN: without --payment-token it makes a payment link", async () => {
+  topupOutcome = "unpaid";
+  const { code, stdout } = await run(["topup", "--credits", "1000", "--no-wait"], { LUDO_API_KEY: "test-key", LUDO_PAYMENT_TOKEN: "spt_leftover" });
+  assert.equal(code, 0);
+  assert.equal(JSON.parse(stdout).status, "open");
+  assert.ok(!seen.some(s => s.path === "/api/cli/topup/pay" && s.raw.includes("spt_leftover")));
+});
+
+test("topup waiting past the link's life exits non-zero", async () => {
+  topupOutcome = "expired";
+  const { code, stderr } = await run(["topup", "--credits", "1000"], { LUDO_API_KEY: "test-key", LUDO_TOPUP_POLL_MS: "10" });
+  assert.equal(code, 9);
+  assert.match(stderr, /expired unpaid/);
+  topupOutcome = "paid";
+});
+
 test("topup --payment-token pays at once, from stdin, and reports a token that is too small", async () => {
   const { code, stdout, stderr } = await run(["topup", "--credits", "1000", "--payment-token", "-"], { LUDO_API_KEY: "test-key" }, undefined, "spt_topup123\n");
   assert.equal(code, 0, stderr);
@@ -867,6 +883,9 @@ test("topup --no-wait returns the link, refuses a second one, and --continue fin
   const second = await run(["topup", "--credits", "500", "--no-wait"], { LUDO_API_KEY: "test-key" }, first.cwd);
   assert.equal(second.code, 2);
   assert.match(second.stderr, /still open/);
+  // --restart asks the server to end the open link.
+  await run(["topup", "--credits", "500", "--no-wait", "--restart"], { LUDO_API_KEY: "test-key" }, first.cwd);
+  assert.equal(JSON.parse(seen.filter(s => s.path === "/api/cli/topup/checkout").pop().raw).replace, true);
   const check = await run(["topup", "--continue", "--no-wait"], { LUDO_API_KEY: "test-key" }, first.cwd);
   assert.equal(JSON.parse(check.stdout).status, "open");
   topupOutcome = "paid";

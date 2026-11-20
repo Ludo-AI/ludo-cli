@@ -379,7 +379,8 @@ async function topup(ctx: Ctx, parsed: Parsed): Promise<number> {
     delete rest.pending_topup;
     writeConfig(rest);
   };
-  const pollMs = process.env.LUDO_TOPUP_POLL_MS ? Number(process.env.LUDO_TOPUP_POLL_MS) : 5000;
+  const envPoll = Number(process.env.LUDO_TOPUP_POLL_MS);
+  const pollMs = Number.isFinite(envPoll) && envPoll >= 10 ? envPoll : 5000;
   const report = (state: TopupState, extra: Record<string, unknown> = {}) => {
     if (ctx.jsonOut) printJson({ ok: true, ...state, ...extra }, false);
     else if (state.status === "completed") process.stdout.write(`✓ ${state.credits} credits added\n`);
@@ -391,14 +392,29 @@ async function topup(ctx: Ctx, parsed: Parsed): Promise<number> {
   if (flagSet(parsed, "--continue")) {
     const pending = readConfig().pending_topup;
     if (!pending) throw new CliError("There is no top-up waiting", EXIT.USAGE, "Start one with `ludo topup --credits <n>`.");
-    const state = parsed.globals.wait ? await waitForTopup(ctx.api, pending.session_id, pending.expires_at, pollMs) : await topupStatus(ctx.api, pending.session_id);
+    // The server that made the link, whatever LUDO_API_URL says now.
+    const api = pending.api_url ? new Api(pending.api_url, resolveApiKey(parsed.globals.apiKey)) : ctx.api;
+    let state: TopupState;
+    try {
+      state = parsed.globals.wait ? await waitForTopup(api, pending.session_id, pending.expires_at, pollMs) : await topupStatus(api, pending.session_id);
+    } catch (err) {
+      // Another account's link (logged in as someone else since): not ours to wait on.
+      if (err instanceof CliError && /No such top-up/.test(err.message)) {
+        forget();
+        throw new CliError("The waiting payment link belongs to another account", EXIT.USAGE, "It was forgotten here. Run `ludo topup --credits <n>` for a new one.");
+      }
+      throw err;
+    }
     if (state.status === "expired") {
       forget();
       throw new CliError("That payment link expired unpaid", EXIT.TIMEOUT, "Run `ludo topup --credits <n>` for a new one.");
     }
     if (state.status !== "open") forget();
     report(state);
-    if (state.status === "open") log("Run `ludo topup --continue` again once it is paid.");
+    if (state.status === "open") {
+      log("Run `ludo topup --continue` again once it is paid.");
+      if (parsed.globals.wait) return EXIT.TIMEOUT;
+    }
     return EXIT.OK;
   }
 
@@ -425,11 +441,14 @@ async function topup(ctx: Ctx, parsed: Parsed): Promise<number> {
   }
 
   // Paid with a one-time Link token: the credits are in when this returns.
+  // Only a token passed here, for this purchase: never one left in the
+  // environment (LUDO_PAYMENT_TOKEN is signup's), which its holder approved
+  // for something else.
   const tokenFlag = parsed.flags.has("--payment-token");
-  let paymentToken = flag("--payment-token") || process.env.LUDO_PAYMENT_TOKEN || undefined;
+  let paymentToken = flag("--payment-token") || undefined;
   if (paymentToken === "-") paymentToken = await promptSecret("Link payment token (spt_...): ");
-  if ((tokenFlag || process.env.LUDO_PAYMENT_TOKEN !== undefined) && !paymentToken) {
-    throw new CliError("No payment token was given", EXIT.USAGE, "Pass a one-time spt_... token for the quoted amount (`ludo topup --credits <n> --quote`), on stdin with `--payment-token -`, or in LUDO_PAYMENT_TOKEN.");
+  if (tokenFlag && !paymentToken) {
+    throw new CliError("No payment token was given", EXIT.USAGE, "Pass the one-time spt_... token for the quoted amount (`ludo topup --credits <n> --quote`), or `--payment-token -` to read it from stdin.");
   }
   if (paymentToken) {
     log("Paying with the Link token…");
@@ -441,14 +460,16 @@ async function topup(ctx: Ctx, parsed: Parsed): Promise<number> {
 
   // A payment page for someone to pay. One at a time.
   const waiting = readConfig().pending_topup;
-  if (waiting && waiting.expires_at > Date.now() && !flagSet(parsed, "--restart")) {
+  const restart = flagSet(parsed, "--restart");
+  if (waiting && waiting.expires_at > Date.now() && !restart) {
     throw new CliError(
       `A payment link for ${waiting.credits} credits is still open`,
       EXIT.USAGE,
-      `Pay it (${waiting.checkout_url}) and run \`ludo topup --continue\`, or add --restart for a new link (pay only one of them).`
+      `Pay it (${waiting.checkout_url}) and run \`ludo topup --continue\`, or add --restart to end it and get a new one.`
     );
   }
-  const started = await checkoutTopup(ctx.api, credits);
+  // --restart ends the open link on the server too, so only one can be paid.
+  const started = await checkoutTopup(ctx.api, credits, restart);
   const pending = {
     session_id: started.session_id,
     checkout_url: started.checkout_url,
@@ -473,6 +494,10 @@ async function topup(ctx: Ctx, parsed: Parsed): Promise<number> {
   }
   if (state.status !== "open") forget();
   report(state);
+  if (state.status === "open") {
+    log("Still not paid. `ludo topup --continue` checks again.");
+    return EXIT.TIMEOUT;
+  }
   return EXIT.OK;
 }
 

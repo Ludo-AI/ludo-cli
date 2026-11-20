@@ -143,8 +143,9 @@ export const BUILTIN_HELP: Record<string, string> = {
     "With Link (Stripe's agent wallet, US and Canada), no browser: --quote prints a one-time",
     "`link-cli spend-request create` command for exactly that amount. Once the holder approves it,",
     "`link-cli spend-request retrieve <id> --include shared_payment_token` gives the token, and",
-    "--payment-token charges it: the credits are in when the command returns. A token buys one top-up.",
-    "`--payment-token -` reads it from stdin, or set LUDO_PAYMENT_TOKEN.",
+    "--payment-token charges it: the credits are in when the command returns. The token must be for",
+    "exactly the quoted amount, and buys one top-up. `--payment-token -` reads it from stdin.",
+    "One payment link is open at a time; --restart ends it and makes a new one.",
     ""
   ].join("\n"),
   pricing: [

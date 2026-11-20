@@ -58,8 +58,10 @@ export async function payTopup(api: Api, credits: number, paymentToken: string):
   return (await api.call("POST", "/cli/topup/pay", { body: { credits, payment_token: paymentToken }, retry: false, timeoutMs: 300_000 })).body;
 }
 
-export async function checkoutTopup(api: Api, credits: number): Promise<TopupCheckout> {
-  return (await api.call("POST", "/cli/topup/checkout", { body: { credits }, retry: false })).body;
+// `replace` ends the account's open payment page first, so two cannot both
+// be paid.
+export async function checkoutTopup(api: Api, credits: number, replace = false): Promise<TopupCheckout> {
+  return (await api.call("POST", "/cli/topup/checkout", { body: { credits, ...(replace ? { replace: true } : {}) }, retry: false })).body;
 }
 
 export async function topupStatus(api: Api, sessionId: string): Promise<TopupState> {
