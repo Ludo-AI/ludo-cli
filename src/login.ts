@@ -177,6 +177,9 @@ export function accountSummary(account: any): string {
   } else if (c.team_pool) {
     lines.push("Auto top-up: managed by your team owner");
   }
-  if (account?.billing_url) lines.push(`Buy credits, change plan or auto top-up: ${account.billing_url}`);
+  if (account?.billing_url) {
+    lines.push("Buy credits: `ludo topup --credits <n>`");
+    lines.push(`Change plan or auto top-up: ${account.billing_url}`);
+  }
   return lines.join("\n");
 }
