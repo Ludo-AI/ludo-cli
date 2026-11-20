@@ -119,9 +119,14 @@ const RETRY_DELAY_MS = process.env.LUDO_RETRY_DELAY_MS ? Number(process.env.LUDO
 
 export function apiError(res: ApiResponse): CliError {
   const b = res.body;
-  const message = (b && typeof b === "object" && (b.message || b.error)) || (typeof b === "string" && b.slice(0, 300)) || `HTTP ${res.status}`;
+  // An HTML error page (a route this server does not have yet, a proxy) says
+  // nothing useful as text; its <pre> or <title> line does.
+  const html = typeof b === "string" && /^\s*</.test(b) ? (b.match(/<pre>([^<]{1,200})<\/pre>/i)?.[1] || b.match(/<title>([^<]{1,200})<\/title>/i)?.[1] || "") : undefined;
+  const fromHtml = html !== undefined ? `HTTP ${res.status}${html ? `: ${html.trim()}` : ""}` : undefined;
+  const message = (b && typeof b === "object" && (b.message || b.error)) || fromHtml || (typeof b === "string" && b.slice(0, 300)) || `HTTP ${res.status}`;
   let hint: string | undefined;
   if (res.status === 401 || res.status === 403) hint = "Your API key was rejected. Log in again with `ludo login`.";
+  if (fromHtml && res.status === 404) hint = "This server does not have that endpoint (yet). `ludo update` gets the CLI that matches it, or check LUDO_API_URL.";
   if (res.status === 402) {
     hint = /API access/i.test(String(message))
       ? "Your plan does not include API access (every paid plan does): `ludo pricing` compares the plans, `ludo billing` changes plan."

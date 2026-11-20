@@ -244,6 +244,10 @@ before(async () => {
         return json(res, 200, { status: "completed", credits: 1000, invoice_id: "in_test_2" });
       }
     }
+    if (url.pathname === "/api/html-404-probe") {
+      res.writeHead(404, { "Content-Type": "text/html" });
+      return res.end('<!DOCTYPE html><html><head><title>Error</title></head><body><pre>Cannot GET /api/html-404-probe</pre></body></html>');
+    }
     if (req.method === "GET" && url.pathname === "/api/pricing") {
       // Open with or without a key, like the server.
       return json(res, 200, PRICING);
@@ -859,6 +863,13 @@ test("topup --quote prints the price and a one-time Link command", async () => {
   assert.match(bad.stderr, /multiple of 50/);
   const none = await run(["topup", "--quote"], { LUDO_API_KEY: "test-key" });
   assert.equal(none.code, 2);
+});
+
+test("an HTML error page from the server is summarized, not printed", async () => {
+  const { apiError } = await import(new URL("../dist/api.js", import.meta.url));
+  const err = apiError({ status: 404, body: '<!DOCTYPE html><html><head><title>Error</title></head><body><pre>Cannot GET /api/assets/topup/quote</pre></body></html>' });
+  assert.equal(err.message, "HTTP 404: Cannot GET /api/assets/topup/quote");
+  assert.match(err.hint, /does not have that endpoint/);
 });
 
 test("topup needs a logged-in CLI", async () => {
