@@ -186,6 +186,33 @@ before(async () => {
       if (String(body.code).toUpperCase().replace(/[^A-Z]/g, "") !== "WDJBMJHT") return json(res, 200, { status: "code_wrong", attempts_left: 4, message: "Error: That code is not the one we emailed." });
       return json(res, 200, { status: "completed", api_key: "ludo_minted", email: "new@example.test", plan_name: "Indie" });
     }
+    if (req.method === "GET" && url.pathname === "/api/cli/signup/quote") {
+      const plan = url.searchParams.get("plan");
+      if (plan !== "indie") return json(res, 400, { message: "Error: Unknown plan. Choose one of: indie, pro" });
+      const interval = url.searchParams.get("interval") || "month";
+      return json(res, 200, {
+        plan: { id: "indie", name: "Indie", interval, amount: 15, currency: "usd" },
+        amount_minor: 1500,
+        network_id: "profile_test_ludo",
+        test_mode: true,
+        link_cli_command: `link-cli spend-request create --credential-type shared_payment_token --network-id profile_test_ludo --amount 1500 --currency usd --recurring-interval ${interval} --request-approval --test`,
+        steps: ["Install Link's CLI.", "Create the spend request.", "link-cli spend-request retrieve <lsrq_id> --include shared_payment_token", "Pay with --payment-token."]
+      });
+    }
+    if (req.method === "POST" && url.pathname === "/api/cli/signup/pay") {
+      const body = JSON.parse(raw);
+      if (body.payment_token === "spt_small") {
+        return json(res, 402, { message: "Error: The token allows 10.00, and the plan costs 15.00 USD.", code: "PAYMENT_TOKEN_TOO_SMALL" });
+      }
+      return json(res, 200, {
+        status: "completed",
+        api_key: "ludo_minted",
+        email: body.email.toLowerCase(),
+        plan_name: "Indie",
+        renews: body.payment_token !== "spt_once",
+        message: body.payment_token === "spt_once" ? "Subscribed for one month." : "Subscribed. Each month is charged to the same Link token."
+      });
+    }
     if (req.method === "GET" && url.pathname === "/api/pricing") {
       // Open with or without a key, like the server.
       return json(res, 200, PRICING);
@@ -681,6 +708,63 @@ test("login runs the browser flow and saves the CLI key", async () => {
   assert.equal(configOf(cwd).key_source, "login");
   const start = seen.filter(s => s.path === "/api/cli/auth/start").pop();
   assert.equal(JSON.parse(start.raw).platform, process.platform);
+});
+
+test("signup --quote prints the Link command for a payment token, with no account and no key", async () => {
+  // Not a terminal here, so the answer is JSON, as an agent reads it.
+  const { code, stdout, stderr, cwd } = await run(["signup", "--plan", "indie", "--quote"], { LUDO_API_KEY: "" });
+  assert.equal(code, 0, stderr);
+  const quote = JSON.parse(stdout);
+  assert.match(quote.link_cli_command, /^link-cli spend-request create .*--network-id profile_test_ludo .*--amount 1500/);
+  assert.equal(quote.amount_minor, 1500);
+  assert.match(quote.steps.join(" "), /--include shared_payment_token/);
+  assert.ok(!fs.existsSync(path.join(cwd, ".config", "config.json")));
+  const yearly = await run(["signup", "--plan", "indie", "--interval", "year", "--quote", "--json"], { LUDO_API_KEY: "" });
+  assert.equal(yearly.code, 0, yearly.stderr);
+  assert.match(JSON.parse(yearly.stdout).link_cli_command, /--recurring-interval year/);
+  const noPlan = await run(["signup", "--quote"], { LUDO_API_KEY: "" });
+  assert.equal(noPlan.code, 2);
+});
+
+test("signup --payment-token pays, saves the key and logs in at once, without polling", async () => {
+  const pollsBefore = seen.filter(s => s.path === "/api/cli/signup/token").length;
+  const { code, stdout, stderr, cwd } = await run(["signup", "--email", "New@Example.test", "--plan", "indie", "--payment-token", "spt_123abc", "--json"], { LUDO_API_KEY: "" });
+  assert.equal(code, 0, stderr);
+  const out = JSON.parse(stdout);
+  assert.equal(out.status, "completed");
+  assert.equal(out.renews, true);
+  assert.equal(out.account.plan.name, "Pro");
+  assert.match(stderr, /Each month is charged to the same Link token/);
+  assert.match(stderr, /link to set a password/);
+  const pay = JSON.parse(seen.filter(s => s.path === "/api/cli/signup/pay").pop().raw);
+  assert.equal(pay.payment_token, "spt_123abc");
+  assert.equal(pay.email, "New@Example.test");
+  assert.equal(pay.platform, process.platform);
+  assert.equal(configOf(cwd).api_key, "ludo_minted");
+  assert.equal(configOf(cwd).key_source, "login");
+  assert.equal(seen.filter(s => s.path === "/api/cli/signup/token").length, pollsBefore);
+});
+
+test("signup --payment-token reports a token that does not cover the plan, and saves nothing", async () => {
+  const { code, stderr, cwd } = await run(["signup", "--email", "new@example.test", "--plan", "indie", "--payment-token", "spt_small"], { LUDO_API_KEY: "" });
+  assert.notEqual(code, 0);
+  assert.match(stderr, /The token allows 10\.00/);
+  assert.ok(!fs.existsSync(path.join(cwd, ".config", "config.json")));
+});
+
+test("signup --payment-token refuses while logged in, and while a checkout link is waiting", async () => {
+  const loggedIn = await run(["signup", "--email", "new@example.test", "--plan", "indie", "--payment-token", "spt_123abc"], { LUDO_API_KEY: "test-key" });
+  assert.equal(loggedIn.code, 2);
+  signupOutcome = "paid";
+  const first = await run([...START, "--no-wait"], { LUDO_API_KEY: "" });
+  const blocked = await run(["signup", "--email", "new@example.test", "--plan", "indie", "--payment-token", "spt_123abc"], { LUDO_API_KEY: "" }, first.cwd);
+  assert.equal(blocked.code, 2);
+  assert.match(blocked.stderr, /--restart/);
+  const restarted = await run(["signup", "--email", "new@example.test", "--plan", "indie", "--payment-token", "spt_once", "--restart"], { LUDO_API_KEY: "" }, first.cwd);
+  assert.equal(restarted.code, 0, restarted.stderr);
+  assert.match(restarted.stderr, /one month/);
+  assert.equal(configOf(first.cwd).pending_signup, undefined);
+  assert.equal(configOf(first.cwd).api_key, "ludo_minted");
 });
 
 const START = ["signup", "--email", "New@Example.test", "--plan", "indie"];

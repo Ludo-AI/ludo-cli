@@ -24,7 +24,7 @@ import { accountLine, accountSummary, agentName, billingUrlFor, browserLogin, ca
 import { assets, BATCH_HELP, init, loadBatch, spend } from "./workspace.js";
 import { toolbox } from "./toolbox/index.js";
 import { pricing } from "./pricing-guide.js";
-import { finalError, pollSignup, priceLine, showCheckout, startSignup, waitForPayment } from "./signup.js";
+import { finalError, paySignup, pollSignup, priceLine, quoteSignup, showCheckout, startSignup, waitForPayment } from "./signup.js";
 
 async function promptSecret(question: string): Promise<string> {
   if (!process.stdin.isTTY) return fs.readFileSync(0, "utf8").trim();
@@ -102,10 +102,60 @@ async function signup(ctx: Ctx, parsed: Parsed): Promise<number> {
   let pending = readConfig().pending_signup;
   const continuing = flagSet(parsed, "--continue");
 
+  // What to ask Link for, to pay without a browser. Free, no account needed.
+  if (flagSet(parsed, "--quote")) {
+    const plan = flag("--plan");
+    if (!plan) throw new CliError("ludo signup --quote needs --plan", EXIT.USAGE, "`ludo pricing` lists the plans.");
+    const quote = await quoteSignup(resolveApiUrl(parsed.globals.apiUrl), plan, flag("--interval"));
+    if (ctx.jsonOut) {
+      printJson({ ok: true, ...quote }, false);
+      return EXIT.OK;
+    }
+    log(`${priceLine(quote.plan)}. To pay with Link, without a browser:`);
+    quote.steps.forEach((step, i) => log(`  ${i + 1}. ${step}`));
+    log("The spend request:");
+    process.stdout.write(`${quote.link_cli_command}\n`);
+    return EXIT.OK;
+  }
+
   // A machine that is already logged in would end up with a second,
   // separately billed account, and its saved key replaced.
   if (resolveApiKey(parsed.globals.apiKey)) {
     throw new CliError("This CLI is already logged in to a Ludo account", EXIT.USAGE, "`ludo account` shows it. To create a different account, run `ludo logout` first (and unset LUDO_API_KEY).");
+  }
+
+  // Paid with a Link token: one request, and the key comes back with it.
+  const paymentToken = flag("--payment-token");
+  if (paymentToken) {
+    if (continuing) throw new CliError("--payment-token starts a signup; it cannot continue one", EXIT.USAGE);
+    if (pending && !flagSet(parsed, "--restart")) {
+      throw new CliError(
+        `A signup for ${pending.email} is already waiting for its checkout link to be paid`,
+        EXIT.USAGE,
+        "Run `ludo signup --continue` for that one, or add --restart to drop it and pay with the token instead."
+      );
+    }
+    const email = flag("--email");
+    const plan = flag("--plan");
+    if (!email || !plan) {
+      throw new CliError("ludo signup needs --email and --plan", EXIT.USAGE, "`ludo signup --plan <id> --quote` says what token to ask Link for.");
+    }
+    const apiUrl = resolveApiUrl(parsed.globals.apiUrl);
+    log("Paying with the Link token…");
+    const paid = await paySignup(apiUrl, { email, plan, interval: flag("--interval"), name: flag("--full-name"), payment_token: paymentToken });
+    const saved = { ...readConfig(), api_key: paid.api_key, key_source: "login" as const, ...(apiUrl !== resolveApiUrl(undefined) ? { api_url: apiUrl } : {}) };
+    delete saved.pending_signup;
+    const file = writeConfig(saved);
+    const account = await fetchAccount(apiUrl, paid.api_key).catch(() => undefined);
+    ctx.log(`Saved to ${file}`);
+    if (ctx.jsonOut) {
+      printJson({ ok: true, status: "completed", config: file, email: paid.email, renews: paid.renews, period_end: paid.period_end, account }, false);
+    } else {
+      process.stdout.write(account ? `✓ Account created. Player 1 ready: ${accountLine(account)}\n` : "✓ Account created\n");
+    }
+    if (paid.message) log(paid.message);
+    log(`${paid.email} has a link to set a password for the web app (${webUrlFor(apiUrl)}).`);
+    return EXIT.OK;
   }
 
   if (continuing) {

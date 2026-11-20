@@ -62,6 +62,51 @@ export async function startSignup(apiUrl: string, request: SignupRequest): Promi
   return body;
 }
 
+// --- paying with a Link token (`--quote`, `--payment-token`) ---
+//
+// The browserless way: the account holder approves a spend for Ludo in Link
+// (Stripe's agent wallet), Link gives the agent a Shared Payment Token
+// (spt_...), and Ludo charges it directly. The key comes back in the same
+// response: whoever presents a token that pays is the payer, so there is no
+// emailed code to wait for. A recurring token pays the renewals too.
+
+export interface SignupQuote {
+  plan: SignupStart["plan"];
+  amount_minor: number;
+  network_id: string;
+  test_mode: boolean;
+  link_cli_command: string;
+  steps: string[];
+}
+
+export interface SignupPaid {
+  status: "completed";
+  api_key: string;
+  email: string;
+  plan_name?: string;
+  plan?: SignupStart["plan"];
+  renews: boolean;
+  period_end?: number;
+  message?: string;
+}
+
+export async function quoteSignup(apiUrl: string, plan: string, interval?: string): Promise<SignupQuote> {
+  const { body } = await new Api(apiUrl, undefined).call("GET", "/cli/signup/quote", {
+    query: { plan, ...(interval ? { interval } : {}) }
+  });
+  return body;
+}
+
+export async function paySignup(apiUrl: string, request: SignupRequest & { payment_token: string }): Promise<SignupPaid> {
+  // One attempt only: a retried payment could charge twice.
+  const { body } = await new Api(apiUrl, undefined).call("POST", "/cli/signup/pay", {
+    body: { ...request, platform: process.platform, client_version: VERSION },
+    retry: false,
+    timeoutMs: 120_000
+  });
+  return body;
+}
+
 // One poll. `code` is the connect code from the email, when there is one to try.
 export async function pollSignup(apiUrl: string, deviceCode: string, code?: string): Promise<SignupState> {
   const res = await new Api(apiUrl, undefined).request("POST", "/cli/signup/token", {

@@ -109,6 +109,17 @@ export const BUILTIN_HELP: Record<string, string> = {
     "--no-wait prints the link and returns. --no-browser prints the link instead of opening it.",
     "--restart drops a signup that is still waiting and starts a new one. Already have an account?",
     "`ludo login`.",
+    "",
+    "Paying without a browser, with Link (Stripe's agent wallet, US and Canada):",
+    "       ludo signup --plan <id> [--interval month|year] --quote",
+    "       ludo signup --email <address> --plan <id> --payment-token <spt_...>",
+    "",
+    "--quote prints the price and the `link-cli spend-request create` command that asks the account",
+    "holder to approve a payment to Ludo. Once approved, `link-cli spend-request retrieve <id> --include",
+    "shared_payment_token` gives the token (spt_...). --payment-token charges it, creates the account",
+    "and logs this CLI in at once: no checkout link and no emailed code. A token made with",
+    "--recurring-interval pays the renewals too, within the limit the holder approved; a one-time",
+    "token buys one period, and the plan then ends unless a card is added in the web app.",
     ""
   ].join("\n"),
   logout: ["Usage: ludo logout", "", "Forgets the saved key, and revokes it when `ludo login` created it.", ""].join("\n"),
@@ -295,6 +306,12 @@ input it cannot use.
   user for it (or read it from their mail only if they gave you access), then
   \`ludo signup --continue --code <code>\` logs this CLI in. Never start a signup for an address the user
   did not give you.
+- With Link (Stripe's agent wallet, \`link-cli\`) you can pay without a browser, but only if the user told
+  you to pay: \`ludo signup --plan <id> --quote\` prints the \`link-cli spend-request create\` command
+  (Ludo's network id, the amount, a monthly or yearly limit). The user approves it in Link; then
+  \`link-cli spend-request retrieve <id> --include shared_payment_token\` gives the token, and
+  \`ludo signup --email <address> --plan <id> --payment-token <spt_...>\` creates the account and logs this
+  CLI in at once. Never change the amount or the cadence the quote gives.
 - On exit code 5, do not retry. Tell the user they are out of credits (or their plan lacks API access) and
   that \`ludo billing\` opens the page to buy credits or change plan.
 - Before advising a user to sign up, upgrade or buy credits, run \`ludo pricing\` (free, no login): the plans,

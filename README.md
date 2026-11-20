@@ -352,6 +352,24 @@ address gets you nothing. For an agent that works in turns, `--no-wait` prints t
 `ludo signup --continue` checks on it, and `--restart` drops a signup that is still waiting. Only
 single-user plans with API access can be bought here; team plans are bought in the web app.
 
+### Paying with Link, without a browser
+
+An agent with [Link](https://link.com/agents)'s CLI (`link-cli`, Stripe's agent wallet; US and Canadian
+buyers) can pay with a Shared Payment Token instead of a checkout link:
+
+```sh
+ludo signup --plan indie --quote        # prints the price and the link-cli command to run
+# run that command; the account holder approves the spend in Link, then:
+link-cli spend-request retrieve <lsrq_id> --include shared_payment_token --format json
+ludo signup --email you@example.com --plan indie --payment-token spt_...
+```
+
+Ludo charges the token, creates the account and logs the CLI in, in one step: no checkout page and
+no emailed code. The address still gets a link to set a password. A token created with
+`--recurring-interval` (as the quoted command does) pays each renewal within the limit its holder
+approved; revoking it in Link stops that, and the web app then asks for a card. A one-time token buys
+one period, and the plan ends after it.
+
 Keys are used in this order: `--api-key`, the `LUDO_API_KEY` environment variable, then the key saved
 by `ludo login` (in `~/.config/ludo/config.json`, readable only by you).
 
