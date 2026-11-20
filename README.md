@@ -354,8 +354,8 @@ single-user plans with API access can be bought here; team plans are bought in t
 
 ### Paying with Link, without a browser
 
-An agent with [Link](https://link.com/agents)'s CLI (`link-cli`, Stripe's agent wallet; US and Canadian
-buyers) can pay with a Shared Payment Token instead of a checkout link:
+An agent with [Link](https://link.com/agents)'s CLI (`link-cli`, Stripe's agent wallet;
+[where it works](https://docs.stripe.com/agentic-commerce/concepts/shared-payment-tokens)) can pay with a Shared Payment Token instead of a checkout link:
 
 ```sh
 ludo signup --plan indie --email you@example.com --quote   # the price and the link-cli command to run
