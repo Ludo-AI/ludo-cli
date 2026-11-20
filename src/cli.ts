@@ -27,8 +27,21 @@ import { pricing } from "./pricing-guide.js";
 import { checkoutTopup, money, payTopup, quoteTopup, topupStatus, waitForTopup, type TopupState } from "./topup.js";
 import { finalError, paySignup, pollSignup, resendSignupCode, priceLine, quoteSignup, showCheckout, startSignup, waitForPayment } from "./signup.js";
 
+// All of stdin, waiting for it: a synchronous read of a pipe whose writer has
+// not written yet (a token piped from `link-cli`, which takes a moment) fails
+// with EAGAIN.
+function readStdinAll(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let text = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", chunk => (text += chunk));
+    process.stdin.on("end", () => resolve(text));
+    process.stdin.on("error", reject);
+  });
+}
+
 async function promptSecret(question: string): Promise<string> {
-  if (!process.stdin.isTTY) return fs.readFileSync(0, "utf8").trim();
+  if (!process.stdin.isTTY) return (await readStdinAll()).trim();
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr, terminal: true });
   const answer = await new Promise<string>(resolve => rl.question(question, resolve));
   rl.close();

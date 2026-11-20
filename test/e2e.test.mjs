@@ -771,6 +771,33 @@ test("signup with an empty payment token stops, and never opens a checkout link 
   assert.equal(startsSeen(), startsBefore);
 });
 
+test("a payment token piped from a slow command is waited for, not read too early", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-cli-test-"));
+  const { code, stderr } = await new Promise(resolve => {
+    // A real pipe whose writer only writes after half a second, as `link-cli
+    // spend-request retrieve ... | ludo signup --payment-token -` does.
+    const child = spawn("sh", ["-c", `(sleep 0.5; echo spt_slowpipe1) | "${process.execPath}" "${CLI}" signup --email slow@example.test --plan indie --payment-token - --json`], {
+      cwd,
+      env: {
+        ...process.env,
+        LUDO_SPEC: SPEC,
+        LUDO_API_URL: base,
+        LUDO_API_KEY: "",
+        LUDO_CONFIG_DIR: path.join(cwd, ".config"),
+        LUDO_CACHE_DIR: path.join(cwd, ".cache"),
+        LUDO_TELEMETRY: "0",
+        CLAUDECODE: "",
+        CLAUDE_CODE_ENTRYPOINT: ""
+      }
+    });
+    let err = "";
+    child.stderr.on("data", d => (err += d));
+    child.on("close", c => resolve({ code: c, stderr: err }));
+  });
+  assert.equal(code, 0, stderr);
+  assert.equal(JSON.parse(seen.filter(s => s.path === "/api/cli/signup/pay").pop().raw).payment_token, "spt_slowpipe1");
+});
+
 test("signup reads the payment token from stdin or LUDO_PAYMENT_TOKEN, keeping it out of argv", async () => {
   const piped = await run(["signup", "--email", "a@example.test", "--plan", "indie", "--payment-token", "-", "--json"], { LUDO_API_KEY: "" }, undefined, "spt_fromstdin1\n");
   assert.equal(piped.code, 0, piped.stderr);
