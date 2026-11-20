@@ -97,7 +97,7 @@ export const BUILTIN_HELP: Record<string, string> = {
   ].join("\n"),
   signup: [
     "Usage: ludo signup --email <address> --plan <id> [--interval month|year] [--full-name <name>]",
-    "       ludo signup --continue [--code <code>]",
+    "       ludo signup --continue [--code <code> | --resend]",
     "",
     "Creates a Ludo account and subscribes it to a plan in one payment, with no web login. It prints a",
     "Stripe checkout link for that email and plan, and waits up to an hour for it to be paid: by you, or",
@@ -108,7 +108,8 @@ export const BUILTIN_HELP: Record<string, string> = {
     "access can be bought here.",
     "",
     "--no-wait prints the link and returns. --no-browser prints the link instead of opening it.",
-    "--restart drops a signup that is still waiting and starts a new one. Already have an account?",
+    "--resend emails the code again (a lost email; the old code stops working). --restart drops a",
+    "signup that is still waiting and starts a new one (it ends that link). Already have an account?",
     "`ludo login`.",
     "",
     "Paying without a browser, with Link (Stripe's agent wallet, US and Canada):",

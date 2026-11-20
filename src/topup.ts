@@ -22,7 +22,8 @@ export interface TopupQuote {
 }
 
 export interface TopupPaid {
-  status: "completed";
+  // "paid": the money is taken and the credits are on their way.
+  status: "completed" | "paid";
   credits: number;
   amount: number;
   currency: string;

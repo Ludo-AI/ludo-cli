@@ -109,6 +109,13 @@ export async function paySignup(apiUrl: string, request: SignupRequest & { payme
   return body;
 }
 
+// The connect code emailed again (a lost email), with a new set-password
+// link. The old code stops working.
+export async function resendSignupCode(apiUrl: string, deviceCode: string): Promise<SignupState & { resends_left?: number }> {
+  const { body } = await new Api(apiUrl, undefined).call("POST", "/cli/signup/resend", { body: { device_code: deviceCode }, retry: false });
+  return body;
+}
+
 // One poll. `code` is the connect code from the email, when there is one to try.
 export async function pollSignup(apiUrl: string, deviceCode: string, code?: string): Promise<SignupState> {
   const res = await new Api(apiUrl, undefined).request("POST", "/cli/signup/token", {

@@ -25,7 +25,7 @@ import { assets, BATCH_HELP, init, loadBatch, spend } from "./workspace.js";
 import { toolbox } from "./toolbox/index.js";
 import { pricing } from "./pricing-guide.js";
 import { checkoutTopup, money, payTopup, quoteTopup, topupStatus, waitForTopup, type TopupState } from "./topup.js";
-import { finalError, paySignup, pollSignup, priceLine, quoteSignup, showCheckout, startSignup, waitForPayment } from "./signup.js";
+import { finalError, paySignup, pollSignup, resendSignupCode, priceLine, quoteSignup, showCheckout, startSignup, waitForPayment } from "./signup.js";
 
 async function promptSecret(question: string): Promise<string> {
   if (!process.stdin.isTTY) return fs.readFileSync(0, "utf8").trim();
@@ -215,6 +215,20 @@ async function signup(ctx: Ctx, parsed: Parsed): Promise<number> {
 
   const apiUrl = pending!.api_url || resolveApiUrl(parsed.globals.apiUrl);
   const deviceCode = pending!.device_code;
+
+  // The email with the code never came (or is lost): send it again.
+  if (continuing && flagSet(parsed, "--resend")) {
+    const resent = await resendSignupCode(apiUrl, deviceCode);
+    if (resent.status === "expired") {
+      forget();
+      throw finalError("This signup is no longer waiting", EXIT.TIMEOUT, "If it was paid, the account exists: use \"Forgot password\" on the login page, then run `ludo login`.");
+    }
+    if (resent.status !== "code_required") throw new CliError("There is no emailed code to resend yet: the checkout link has not been paid", EXIT.USAGE, `Pay it first: ${pending!.checkout_url}`);
+    if (ctx.jsonOut) printJson({ ok: true, status: "code_required", email: pending!.email, resends_left: resent.resends_left }, false);
+    else process.stdout.write(`Sent a new code to ${resent.email_hint || pending!.email}. The old one no longer works.\n`);
+    log("Run `ludo signup --continue --code <code>` with the new code. Check the spam folder too.");
+    return EXIT.OK;
+  }
   const interactive = canOpenBrowser() || (!!process.stdin.isTTY && !!process.stderr.isTTY && !isAgent() && !process.env.CI);
   let code = flag("--code");
 
@@ -454,7 +468,8 @@ async function topup(ctx: Ctx, parsed: Parsed): Promise<number> {
     log("Paying with the Link token…");
     const paid = await payTopup(ctx.api, credits, paymentToken);
     if (ctx.jsonOut) printJson({ ok: true, ...paid }, false);
-    else process.stdout.write(`✓ ${paid.credits} credits added (${money(paid.amount, paid.currency)})\n`);
+    else if (paid.status === "completed") process.stdout.write(`✓ ${paid.credits} credits added (${money(paid.amount, paid.currency)})\n`);
+    else process.stdout.write(`Paid ${money(paid.amount, paid.currency)}. The ${paid.credits} credits are on their way; \`ludo account\` shows them shortly.\n`);
     return EXIT.OK;
   }
 

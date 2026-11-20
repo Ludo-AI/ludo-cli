@@ -177,6 +177,10 @@ before(async () => {
         interval: 0.01
       });
     }
+    if (req.method === "POST" && url.pathname === "/api/cli/signup/resend") {
+      if (signupOutcome === "unpaid") return json(res, 200, { status: "pending" });
+      return json(res, 200, { status: "code_required", email_hint: "n**@example.test", resends_left: 2 });
+    }
     if (req.method === "POST" && url.pathname === "/api/cli/signup/token") {
       const body = JSON.parse(raw);
       signupPolls++;
@@ -963,6 +967,20 @@ test("signup --continue reports an unpaid link and keeps waiting for next time",
   assert.equal(configOf(first.cwd).pending_signup.device_code, "signup-device");
 });
 
+test("signup --continue --resend asks for the code again, and needs a paid link", async () => {
+  signupOutcome = "paid";
+  const first = await run([...START, "--no-wait"], { LUDO_API_KEY: "" });
+  const resent = await run(["signup", "--continue", "--resend", "--json"], { LUDO_API_KEY: "" }, first.cwd);
+  assert.equal(resent.code, 0, resent.stderr);
+  assert.equal(JSON.parse(resent.stdout).resends_left, 2);
+  assert.deepEqual(JSON.parse(seen.filter(s => s.path === "/api/cli/signup/resend").pop().raw), { device_code: "signup-device" });
+  signupOutcome = "unpaid";
+  const early = await run(["signup", "--continue", "--resend"], { LUDO_API_KEY: "" }, first.cwd);
+  signupOutcome = "paid";
+  assert.equal(early.code, 2);
+  assert.match(early.stderr, /not been paid/);
+});
+
 test("a wrong connect code is refused, says how many tries are left, and keeps the signup", async () => {
   signupOutcome = "paid";
   const first = await run(START, { LUDO_API_KEY: "" });
@@ -1048,7 +1066,7 @@ test("signup --help prints usage and starts nothing", async () => {
   const { code, stdout } = await run(["signup", "--help"], { LUDO_API_KEY: "" });
   assert.equal(code, 0);
   assert.match(stdout, /Usage: ludo signup --email/);
-  assert.match(stdout, /--continue \[--code <code>\]/);
+  assert.match(stdout, /--continue \[--code <code> \| --resend\]/);
   assert.equal(startsSeen(), before);
 });
 
