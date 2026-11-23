@@ -7,7 +7,7 @@ effects, music and voices.
 ```sh
 npm install -g @ludoai/cli      # or run without installing: npx @ludoai/cli ...
 ludo login                      # log in with your browser (you can create an account there)
-# no account yet? ludo signup --email you@example.com --plan indie   (see "Signing up from the terminal")
+# no account yet? ludo signup --email you@example.com --plan pro   (see "Signing up from the terminal")
 ludo image create --prompt "a knight with a red cape" --image-type sprite
 ```
 
@@ -337,7 +337,7 @@ for a person.
 
 ```sh
 ludo pricing                                         # the plans and what they include
-ludo signup --email you@example.com --plan indie     # add --interval year for annual billing
+ludo signup --email you@example.com --plan pro     # add --interval year for annual billing
 ```
 
 1. It prints a Stripe checkout link for that email and plan, and waits. Nothing is created or
@@ -358,10 +358,10 @@ An agent with [Link](https://link.com/agents)'s CLI (`link-cli`, Stripe's agent 
 [where it works](https://docs.stripe.com/agentic-commerce/concepts/shared-payment-tokens)) can pay with a Shared Payment Token instead of a checkout link:
 
 ```sh
-ludo signup --plan indie --email you@example.com --quote   # the price and the link-cli command to run
+ludo signup --plan pro --email you@example.com --quote   # the price and the link-cli command to run
 # run that command; the account holder approves the spend in Link, then:
 link-cli spend-request retrieve <lsrq_id> --include shared_payment_token --format json
-ludo signup --email you@example.com --plan indie --payment-token -   # reads the spt_... token from stdin
+ludo signup --email you@example.com --plan pro --payment-token -   # reads the spt_... token from stdin
 ```
 
 Ludo charges the token, creates the account and logs the CLI in, in one step: no checkout page and
@@ -380,7 +380,7 @@ by `ludo login` (in `~/.config/ludo/config.json`, readable only by you).
 `ludo account` shows your balance, plan and auto top-up settings. `ludo billing` opens the page to
 buy credits, change plan or set up auto top-up. `ludo pricing` (no login needed) lists the plans, what
 each includes, what each call costs, and the billing rules: generating through the CLI, API or MCP needs
-a paid plan, and costs credits on every plan. When a generation fails for lack of credits (exit
+Pro or Studio, and costs credits on every plan. When a generation fails for lack of credits (exit
 code 5) at a terminal, the CLI offers to open that page.
 
 ### Buying credits from the terminal

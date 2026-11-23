@@ -153,7 +153,7 @@ export const BUILTIN_HELP: Record<string, string> = {
     "Usage: ludo pricing",
     "",
     "Ludo's plans: prices, credits, seats and what each includes or lacks; credit top-ups;",
-    "what each API call costs; and the billing rules (the API, MCP and CLI need a paid plan,",
+    "what each API call costs; and the billing rules (the API, MCP and CLI need Pro or Studio,",
     "and there every generation costs credits). Free, and works without logging in. JSON with",
     "--json, or when the output is not a terminal.",
     ""
@@ -343,7 +343,7 @@ input it cannot use.
   to pay and uses Link, \`ludo topup --credits <n> --quote\` prints the one-time \`link-cli\` command and
   \`ludo topup --credits <n> --payment-token -\` pays it. Ask how many credits; never buy unasked.
 - Before advising a user to sign up, upgrade or buy credits, run \`ludo pricing\` (free, no login): the plans,
-  what each includes, what calls cost, and the rules (generating here needs a paid plan, and costs credits
+  what each includes, what calls cost, and the rules (generating here needs Pro or Studio, and costs credits
   on every plan). Quote it rather than guessing prices.
 
 ## Feedback
