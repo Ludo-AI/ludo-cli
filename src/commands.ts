@@ -27,6 +27,20 @@ export interface Field {
   maximum?: number;
 }
 
+// Operations that answer at once (no job) with files. Their files are saved
+// like a job's, and --name, --out and --no-download apply. "log": an asset,
+// recorded in the asset log (pixel art, a model holding its accessories).
+// "check": frames to look at before generating (a preview, an accessory fit's
+// previews), not logged.
+export const SAVED_ANSWERS: Record<string, "log" | "check"> = {
+  convertToPixelArt: "log",
+  attachDirectionalAccessories: "log",
+  previewDirectionalSprites: "check",
+  fitDirectionalAccessory: "check"
+};
+
+export const savesFiles = (command: Command) => command.isJob || !!SAVED_ANSWERS[command.operationId];
+
 export interface Command {
   group: string;
   name: string;

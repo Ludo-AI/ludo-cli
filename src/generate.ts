@@ -7,7 +7,7 @@ import { appendAssets, logFile, readAssets, relativizeBody, updateAssets, type A
 import { checkBudget, recordEstimate, recordFinal, totalOf } from "./budget.js";
 import type { Globals, Parsed } from "./args.js";
 import { resolveFlags } from "./args.js";
-import type { Command } from "./commands.js";
+import { SAVED_ANSWERS, savesFiles, type Command } from "./commands.js";
 import { resolveApiKey, resolveApiUrl } from "./config.js";
 import { CliError, EXIT } from "./errors.js";
 import { collectUrls, downloadAll, extractInlineFiles, JobWatcher, sleep, TERMINAL, waitForJob, type Earlier, type SavedFile } from "./jobs.js";
@@ -140,6 +140,7 @@ export interface Prepared {
 
 export type DefaultsLayer = { values: Record<string, unknown>; source: string };
 
+
 export function prepare(ctx: Ctx, command: Command, parsed: Parsed, positionals: string[], extra: DefaultsLayer[] = []): Prepared {
   const layers: DefaultsLayer[] = [];
   const p = ctx.project;
@@ -169,7 +170,7 @@ export function prepare(ctx: Ctx, command: Command, parsed: Parsed, positionals:
     if (!command.isJob && !nField) throw new CliError("--n applies to generations only", EXIT.USAGE);
     if (nField) (nField.in === "query" ? resolved.query : resolved.body).n = ctx.globals.n;
   }
-  if (ctx.globals.name && !command.isJob) throw new CliError("--name applies to generations only", EXIT.USAGE);
+  if (ctx.globals.name && !savesFiles(command)) throw new CliError("--name applies only to commands that save files", EXIT.USAGE);
   return {
     command,
     body: resolved.body,
@@ -445,6 +446,12 @@ function bookkeep(ctx: Ctx, job: any, saved: SavedResult, prep?: Prepared, varia
   } catch (err) {
     ctx.log(`Could not update the spend ledger: ${(err as Error).message}`);
   }
+  logSaved(ctx, job, saved, prep, variationSet);
+}
+
+// Records the files a result saved in the asset log. `job` is the job, or for
+// an operation that answers at once, its answer as a job with no id.
+function logSaved(ctx: Ctx, job: any, saved: SavedResult, prep?: Prepared, variationSet?: string) {
   // Files an earlier run saved and logged keep their entries as they are.
   const fresh = saved.files.filter(f => !f.reused);
   if (!fresh.length) return;
@@ -461,7 +468,7 @@ function bookkeep(ctx: Ctx, job: any, saved: SavedResult, prep?: Prepared, varia
       body: prep ? relativizeBody(prep.body, fileFields, logDir) : {},
       // `ludo jobs wait` knows the job but not the request that made it.
       ...(prep ? {} : { redo: false }),
-      job_id: job.id,
+      ...(job.id ? { job_id: job.id } : {}),
       credits: typeof job.credits_charged === "number" ? job.credits_charged : undefined,
       created_at: created,
       ...madeBy(job.result, f.url),
@@ -640,6 +647,8 @@ export async function runCommand(ctx: Ctx, command: Command, parsed: Parsed, pos
     return runJobWait(ctx, response.id, prep.label, prep);
   }
   if (command.operationId === "previewDirectionalSprites") return finishPreview(ctx, response, prep);
+  if (command.operationId === "fitDirectionalAccessory") return finishFit(ctx, response, prep);
+  if (SAVED_ANSWERS[command.operationId] === "log") return finishAnswer(ctx, response, prep);
   if (command.operationId === "getAccount" && !ctx.jsonOut) {
     const c = response?.credits || {};
     if (ctx.vis.enabled && typeof c.available === "number") process.stderr.write(`  ${creditsBar(c.available, (c.plan_credits || 0) + (c.extra || 0))}\n`);
@@ -656,15 +665,39 @@ export async function runCommand(ctx: Ctx, command: Command, parsed: Parsed, pos
 // <name>-<direction>-f1..), so an agent can look at them. An empty answer
 // (204) means a newer preview of the same account replaced this one.
 async function finishPreview(ctx: Ctx, response: any, prep: Prepared): Promise<number> {
-  const { globals } = ctx;
   if (!response || !Array.isArray(response.previews)) {
     const message = "Preview replaced by a newer one: an account runs one preview at a time.";
     if (ctx.jsonOut) printJson({ status: "canceled", message }, prettyJson(ctx));
     else process.stdout.write(`✗ ${message}\n`);
     return EXIT.JOB_CANCELED;
   }
-  const urls = collectUrls(response);
-  const directions = directionsOf(response);
+  const files = await savePreviews(ctx, collectUrls(response), directionsOf(response), prep.name || "directional-preview");
+  if (ctx.jsonOut) {
+    printJson({ status: "succeeded", result: response, files }, prettyJson(ctx));
+    return EXIT.OK;
+  }
+  process.stdout.write(`✓ preview: ${response.previews.length} direction${response.previews.length === 1 ? "" : "s"} (free)\n`);
+  return showPreviews(ctx, files, response);
+}
+
+// An accessory fit answers previews of the model holding the item (unless
+// preview is false), saved as <name>-<direction>-f1.. like a preview's, and
+// added to the answer as `files`. The model it answers is a step towards
+// attachDirectionalAccessories, so it is not saved.
+async function finishFit(ctx: Ctx, response: any, prep: Prepared): Promise<number> {
+  const previews = Array.isArray(response?.previews) ? response.previews : [];
+  const files = await savePreviews(ctx, collectUrls(previews), directionsOf({ previews }), prep.name || "accessory-fit");
+  if (ctx.jsonOut) {
+    printJson({ ...response, files }, prettyJson(ctx));
+    return EXIT.OK;
+  }
+  const where = [response?.kind, response?.bone && `on ${response.bone}`].filter(Boolean).join(" ");
+  process.stdout.write(`✓ accessory fit${where ? `: ${where}` : ""} (free)\n`);
+  if (response?.preview_error) process.stdout.write(`  no previews: ${response.preview_error}\n`);
+  return showPreviews(ctx, files, response);
+}
+
+async function savePreviews(ctx: Ctx, urls: string[], directions: Map<string, string>, prefix: string) {
   const frameNo = new Map<string, number>();
   const suffix = (i: number) => {
     const direction = directions.get(urls[i]) || "frame";
@@ -672,20 +705,41 @@ async function finishPreview(ctx: Ctx, response: any, prep: Prepared): Promise<n
     frameNo.set(direction, n);
     return `-${direction}-f${n}`;
   };
-  const prefix = prep.name || "directional-preview";
-  const downloaded = globals.download && urls.length ? await downloadAll(urls, ctx.outDir, prefix, ctx.log, suffix) : [];
+  const downloaded = ctx.globals.download && urls.length ? await downloadAll(urls, ctx.outDir, prefix, ctx.log, suffix) : [];
   const rel = (p: string) => path.relative(process.cwd(), p) || p;
-  const files = downloaded.map(f => ({ url: f.url, path: rel(f.path), absolute_path: path.resolve(f.path) }));
-  if (ctx.jsonOut) {
-    printJson({ status: "succeeded", result: response, files }, prettyJson(ctx));
-    return EXIT.OK;
-  }
-  process.stdout.write(`✓ preview: ${response.previews.length} direction${response.previews.length === 1 ? "" : "s"} (free)\n`);
+  return downloaded.map(f => ({ url: f.url, path: rel(f.path), absolute_path: path.resolve(f.path) }));
+}
+
+async function showPreviews(ctx: Ctx, files: { path: string }[], response: any): Promise<number> {
   for (const f of files) process.stdout.write(`  ${f.path}\n`);
   if (!files.length) printJson(response, true);
   if (ctx.vis.enabled && files[0] && (await previewFile(files[0].path, ctx.vis)) === "unsupported") {
     process.stderr.write(`${previewSkipped()}\n`);
   }
+  return EXIT.OK;
+}
+
+// Pixel art and a model holding its accessories come back in the answer, not
+// as a job: their files are saved and logged like a job's (named
+// <operation>-<8 hex>, or --name), and the answer gets them as `files`.
+async function finishAnswer(ctx: Ctx, response: any, prep: Prepared): Promise<number> {
+  const answer = { status: "succeeded", task_type: prep.command.operationId, result: response };
+  const prefix = prep.name || `${prep.command.operationId}-${crypto.randomBytes(4).toString("hex")}`;
+  const saved = await saveResult(ctx, answer, prep.label, { prefix });
+  logSaved(ctx, answer, saved, prep);
+  const { record, files, sheet } = saved;
+  if (ctx.jsonOut) {
+    printJson(files.length ? { ...record.result, files: record.files } : record.result, prettyJson(ctx));
+  } else {
+    process.stdout.write(`✓ ${prep.label} (free)\n`);
+    for (const f of files) process.stdout.write(`  ${f.path}\n`);
+    printJson(record.result, true);
+    const still = sheet || files.find(f => IMAGE_EXT.test(f.path))?.path;
+    if (ctx.vis.enabled && still && (await previewFile(still, ctx.vis)) === "unsupported") {
+      process.stderr.write(`${previewSkipped()}\n`);
+    }
+  }
+  if (files.length) handOff(ctx, files, sheet);
   return EXIT.OK;
 }
 

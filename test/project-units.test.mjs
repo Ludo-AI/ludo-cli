@@ -14,7 +14,7 @@ import { fileBaseName } from "../dist/args.js";
 import { topUpLines } from "../dist/pricing-guide.js";
 import os from "node:os";
 import path from "node:path";
-import { appendAssets, readAssets } from "../dist/assets.js";
+import { appendAssets, readAssets, updateAssets } from "../dist/assets.js";
 
 const spec = JSON.parse(fs.readFileSync(new URL("../spec/openapi.json", import.meta.url), "utf8"));
 const byId = id => buildCommands(spec).find(c => c.operationId === id);
@@ -169,6 +169,44 @@ test("the asset log replaces an entry for the same job and file, and takes over 
   const entries = readAssets(log);
   assert.deepEqual(entries.map(e => [e.file, e.credits]), [["b.png", 1], ["a.png", 2]]);
   assert.ok(!fs.existsSync(`${log}.lock`));
+});
+
+test("the asset log keeps top-level keys of its own through appends and updates", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-log-"));
+  const log = path.join(dir, "ludo-assets.json");
+  const entry = file => ({ file, command: "c", operation_id: "o", body: {}, job_id: file, created_at: "t" });
+  const failed = [{ job_id: "abc", reason: "timeout" }];
+  fs.writeFileSync(log, JSON.stringify({ project: "demo", assets: [entry("a.png")], failed_jobs: failed }));
+  appendAssets(log, [entry("b.png")]);
+  updateAssets(log, entries => entries.map(e => (e.file === "a.png" ? { ...e, discarded: true } : e)));
+  const stored = JSON.parse(fs.readFileSync(log, "utf8"));
+  assert.deepEqual(Object.keys(stored), ["project", "assets", "failed_jobs"]);
+  assert.equal(stored.project, "demo");
+  assert.deepEqual(stored.failed_jobs, failed);
+  assert.deepEqual(stored.assets.map(e => [e.file, !!e.discarded]), [["a.png", true], ["b.png", false]]);
+});
+
+test("the asset log is written as before when it holds only its entries", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-log-"));
+  const log = path.join(dir, "ludo-assets.json");
+  const entry = file => ({ file, command: "c", operation_id: "o", body: {}, job_id: file, created_at: "t" });
+  appendAssets(log, [entry("a.png")]);
+  appendAssets(log, [entry("b.png")]);
+  assert.equal(fs.readFileSync(log, "utf8"), JSON.stringify({ assets: [entry("a.png"), entry("b.png")] }, null, 2) + "\n");
+});
+
+test("the asset log refuses to overwrite a file of another shape, and reads it as empty", () => {
+  const entry = { file: "a.png", command: "c", operation_id: "o", body: {}, job_id: "j", created_at: "t" };
+  for (const text of ["[]", "null", "3", '"x"', '{"assets": {}}', '{"assets": "a.png"}']) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-log-"));
+    const log = path.join(dir, "ludo-assets.json");
+    fs.writeFileSync(log, text);
+    assert.deepEqual(readAssets(log), [], text);
+    assert.throws(() => appendAssets(log, [entry]), /must be a JSON object whose "assets" is a list/, text);
+    assert.throws(() => updateAssets(log, e => e), /must be a JSON object/, text);
+    assert.equal(fs.readFileSync(log, "utf8"), text, text);
+    assert.ok(!fs.existsSync(`${log}.lock`), text);
+  }
 });
 
 test("the asset log keeps inline base64 once in ludo-inputs/, also for entries an older CLI wrote", () => {

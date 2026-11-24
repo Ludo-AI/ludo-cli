@@ -292,8 +292,15 @@ Every file a generation saves is recorded in `ludo-assets.json` (next to `.ludo.
 output folder): the command, its flags, the job and what it cost. `ludo assets` lists them;
 `ludo assets redo <file> --prompt "…in blue"` makes one again with changes. Files saved by
 `ludo jobs wait` are listed but can't be replayed, since the request that made them is unknown.
+`ludo image convert-to-pixel-art` and `ludo sprite accessories` answer at once rather than as a
+job; their files are saved and logged the same way, and take `--name`. The frames of
+`ludo sprite directional-preview` and `ludo sprite accessory-fit` are saved too, but not logged:
+they are checks, not assets.
 Inputs passed inline as base64 are kept once in `ludo-inputs/` beside the log (git-ignored), and
 the log points to them.
+The CLI writes only the log's `assets` list, and keeps any other top-level key as it is, so a
+project can keep notes of its own beside it (keys a later CLI adds will start with `ludo_`). Edit the
+file between runs: a generation that finishes while you edit can write over your change.
 
 ### Variations and batches
 

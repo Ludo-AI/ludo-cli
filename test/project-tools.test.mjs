@@ -87,6 +87,20 @@ before(async () => {
       res.writeHead(200);
       return res.end();
     }
+    // Operations that answer at once, with files.
+    if (req.method === "POST" && url.pathname === "/api/assets/image/pixel-art") {
+      return json(res, 200, { url: `${base}/files/pixel-${++seq}.png`, pixel_size: 4, columns: 32, rows: 48 });
+    }
+    if (req.method === "POST" && url.pathname === "/api/assets/sprite/directional-accessories") {
+      return json(res, 200, { model_url: `${base}/files/held-${++seq}.glb`, saved: false, items: [{ name: "sword", placement: { bone: "hand_r" } }] });
+    }
+    if (req.method === "POST" && url.pathname === "/api/assets/sprite/directional-accessory-fit") {
+      const n = ++seq;
+      const frames = d => [1, 2].map(f => ({ url: `${base}/files/fit-${n}-${d}-${f}.png` }));
+      return json(res, 200, JSON.parse(raw).preview === false
+        ? { kind: "weapon", bone: "hand_r", size: 1 }
+        : { kind: "weapon", bone: "hand_r", size: 1, model_url: `${base}/files/fit-${n}.glb`, previews: [{ direction: "SW", frames: frames("SW") }, { direction: "SE", frames: frames("SE") }] });
+    }
     if (req.method === "GET" && url.pathname === "/api/assets/account") {
       return json(res, 200, { credits: { available: 100 } });
     }
@@ -649,7 +663,7 @@ test("--name with --n numbers the variations -v1..-vN, one job or several", asyn
   assert.deepEqual(JSON.parse(native.stdout).files.map(f => path.basename(f.path)), [1, 2, 3, 4, 5, 6].map(v => `knight-v${v}.png`));
 });
 
-test("--name must be a plain file name, and applies to generations only", async () => {
+test("--name must be a plain file name, and applies only to commands that save files", async () => {
   const from = seen.length;
   for (const bad of ["../sfx", "sounds/sfx", "a\\b", "", ".mp3"]) {
     const { code, stderr } = await run(["audio", "sound-effect", "--description", "pump", "--name", bad]);
@@ -658,8 +672,68 @@ test("--name must be a plain file name, and applies to generations only", async 
   }
   const docs = await run(["docs", "search", "--query", "x", "--name", "x"]);
   assert.equal(docs.code, 2);
-  assert.match(docs.stderr, /--name applies to generations only/);
+  assert.match(docs.stderr, /--name applies only to commands that save files/);
   assert.equal(posts(from, "/api/audio/sound-effect").length, 0);
+});
+
+test("convert-to-pixel-art saves its image and logs it, named by --name or after the operation", async () => {
+  const cwd = tmp();
+  const named = await run(["image", "convert-to-pixel-art", "--image", "https://example.com/knight.png", "--pixel-size", "4", "--name", "knight_px"], { cwd });
+  assert.equal(named.code, 0, named.stderr);
+  const out = JSON.parse(named.stdout);
+  // The API's answer, as before, with the files added.
+  assert.equal(out.pixel_size, 4);
+  assert.match(out.url, /\/files\/pixel-\d+\.png$/);
+  assert.deepEqual(out.files.map(f => path.basename(f.path)), ["knight_px.png"]);
+  assert.ok(fs.existsSync(out.files[0].absolute_path));
+  const bare = await run(["image", "convert-to-pixel-art", "--image", "https://example.com/knight.png"], { cwd });
+  assert.equal(bare.code, 0, bare.stderr);
+  assert.match(path.basename(JSON.parse(bare.stdout).files[0].path), /^convertToPixelArt-[0-9a-f]{8}\.png$/);
+  const log = JSON.parse(fs.readFileSync(path.join(cwd, "ludo-output", "ludo-assets.json"), "utf8")).assets;
+  assert.equal(log.length, 2);
+  assert.equal(log[0].operation_id, "convertToPixelArt");
+  assert.equal(log[0].command, "image convert-to-pixel-art");
+  assert.equal(log[0].body.image, "https://example.com/knight.png");
+  assert.equal(log[0].job_id, undefined);
+  assert.equal(path.basename(log[0].file), "knight_px.png");
+});
+
+test("--no-download keeps convert-to-pixel-art's answer as it was", async () => {
+  const cwd = tmp();
+  const { code, stdout, stderr } = await run(["image", "convert-to-pixel-art", "--image", "https://example.com/knight.png", "--no-download"], { cwd });
+  assert.equal(code, 0, stderr);
+  const out = JSON.parse(stdout);
+  assert.equal(out.files, undefined);
+  assert.equal(out.columns, 32);
+  assert.ok(!fs.existsSync(path.join(cwd, "ludo-output", "ludo-assets.json")));
+});
+
+test("sprite accessories saves the model holding them and logs it", async () => {
+  const cwd = tmp();
+  const items = JSON.stringify([{ item: "https://example.com/sword.glb", name: "sword" }]);
+  const { code, stdout, stderr } = await run(["sprite", "accessories", "--model", "https://example.com/hero.glb", "--items", items, "--name", "hero_armed"], { cwd });
+  assert.equal(code, 0, stderr);
+  const out = JSON.parse(stdout);
+  assert.match(out.model_url, /\.glb$/);
+  assert.deepEqual(out.files.map(f => path.basename(f.path)), ["hero_armed.glb"]);
+  const [entry] = JSON.parse(fs.readFileSync(path.join(cwd, "ludo-output", "ludo-assets.json"), "utf8")).assets;
+  assert.equal(entry.operation_id, "attachDirectionalAccessories");
+  assert.equal(path.basename(entry.file), "hero_armed.glb");
+});
+
+test("sprite accessory-fit saves its previews per direction, but not its model, and logs nothing", async () => {
+  const cwd = tmp();
+  const args = ["sprite", "accessory-fit", "--model", "https://example.com/hero.glb", "--item", "https://example.com/sword.glb"];
+  const { code, stdout, stderr } = await run([...args, "--name", "sword_fit"], { cwd });
+  assert.equal(code, 0, stderr);
+  const out = JSON.parse(stdout);
+  assert.equal(out.bone, "hand_r");
+  assert.deepEqual(out.files.map(f => path.basename(f.path)), ["sword_fit-SW-f1.png", "sword_fit-SW-f2.png", "sword_fit-SE-f1.png", "sword_fit-SE-f2.png"]);
+  assert.ok(!fs.readdirSync(path.join(cwd, "ludo-output")).some(f => f.endsWith(".glb")));
+  assert.ok(!fs.existsSync(path.join(cwd, "ludo-output", "ludo-assets.json")));
+  const none = await run([...args, "--preview", "false"], { cwd });
+  assert.equal(none.code, 0, none.stderr);
+  assert.deepEqual(JSON.parse(none.stdout).files, []);
 });
 
 test("jobs wait takes --name too", async () => {

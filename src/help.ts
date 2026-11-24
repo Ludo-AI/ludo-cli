@@ -1,5 +1,5 @@
 import { GLOBAL_FLAGS } from "./args.js";
-import { Command, Field, GROUP_INFO, groupsOf } from "./commands.js";
+import { Command, Field, GROUP_INFO, groupsOf, SAVED_ANSWERS, savesFiles } from "./commands.js";
 import { VERSION } from "./config.js";
 import { TOOLS, toolboxSummary } from "./toolbox/index.js";
 
@@ -233,13 +233,22 @@ export function commandHelp(c: Command): string {
         0
       )
     );
+  } else if (SAVED_ANSWERS[c.operationId]) {
+    out.push(
+      "",
+      wrap(
+        "Answers at once (no job) and saves the files it answers to --out (default ./ludo-output)" +
+          (SAVED_ANSWERS[c.operationId] === "log" ? ", recorded in ludo-assets.json." : "."),
+        0
+      )
+    );
   }
   const args = c.fields.filter(f => f.in === "path");
   if (args.length) out.push("", "Arguments:", table(args.map(f => [flagLabel(f), flagDescription(f)])));
   if (required.length) out.push("", "Required flags:", table(required.map(f => [flagLabel(f), flagDescription(f)])));
   if (optional.length) out.push("", "Flags:", table(optional.map(f => [flagLabel(f), flagDescription(f)])));
   const globals = Object.entries(GLOBAL_FLAGS)
-    .filter(([name]) => c.isJob || !["--no-wait", "--no-download", "--timeout", "--out", "--name"].includes(name))
+    .filter(([name]) => (c.isJob ? true : savesFiles(c) ? !["--no-wait", "--timeout"].includes(name) : !["--no-wait", "--no-download", "--timeout", "--out", "--name"].includes(name)))
     .map(([name, g]) => [g.value ? `${name} <value>` : name, g.description] as [string, string]);
   out.push("", "Global flags:", table(globals));
   out.push("", `API operation: ${c.operationId} (${c.method} /api${c.path})`);

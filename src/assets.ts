@@ -49,19 +49,45 @@ export function logFile(project: Project | undefined, outDir: string): string {
   return path.join(project ? project.root : outDir, LOG_NAME);
 }
 
-export function readAssets(file: string): AssetEntry[] {
+// The log as stored: its entries, and every other top-level key as it is. The
+// CLI writes only `assets`, and a write keeps the other keys, so a project can
+// keep notes of its own beside the entries (keys the CLI may add later will
+// start with "ludo_"). `strict` refuses a log of another shape, which a write
+// would otherwise replace with one holding only the entries.
+interface AssetLog {
+  root: Record<string, unknown>;
+  assets: AssetEntry[];
+}
+
+function readLog(file: string, strict: boolean): AssetLog {
   let text: string;
   try {
     text = fs.readFileSync(file, "utf8");
   } catch {
-    return [];
+    return { root: {}, assets: [] };
   }
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(text);
-    return Array.isArray(parsed.assets) ? parsed.assets : [];
+    parsed = JSON.parse(text);
   } catch {
     throw new CliError(`${file} is not valid JSON; fix or remove it`, EXIT.USAGE);
   }
+  const isObject = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
+  const assets = isObject ? (parsed as Record<string, unknown>).assets : undefined;
+  if (isObject && (assets === undefined || Array.isArray(assets))) {
+    return { root: parsed as Record<string, unknown>, assets: (assets as AssetEntry[] | undefined) ?? [] };
+  }
+  if (strict) {
+    throw new CliError(
+      `${file} must be a JSON object whose "assets" is a list; fix or remove it (it was left as it is)`,
+      EXIT.USAGE
+    );
+  }
+  return { root: {}, assets: [] };
+}
+
+export function readAssets(file: string): AssetEntry[] {
+  return readLog(file, false).assets;
 }
 
 const LOCK_STALE_MS = 10_000;
@@ -147,22 +173,26 @@ function storeInlineBodies(entries: AssetEntry[], logDir: string): AssetEntry[] 
   });
 }
 
-function writeAssets(file: string, entries: AssetEntry[]) {
-  writeJsonFile(file, { assets: storeInlineBodies(entries, path.dirname(file)) });
+// Every write is a read-modify-write under the lock, and keeps the log's other
+// top-level keys (in their place: a log holding only `assets` is written as
+// before).
+function rewriteAssets(file: string, fn: (entries: AssetEntry[]) => AssetEntry[]) {
+  withLock(file, () => {
+    const { root, assets } = readLog(file, true);
+    writeJsonFile(file, { ...root, assets: storeInlineBodies(fn(assets), path.dirname(file)) });
+  });
 }
 
 // Adds entries; one already there for the same job and file is replaced.
 export function appendAssets(file: string, entries: AssetEntry[]) {
   if (!entries.length) return;
   const key = (e: AssetEntry) => `${e.job_id ?? ""}\u0000${e.file}`;
-  withLock(file, () => {
-    const incoming = new Set(entries.map(key));
-    writeAssets(file, [...readAssets(file).filter(e => !incoming.has(key(e))), ...entries]);
-  });
+  const incoming = new Set(entries.map(key));
+  rewriteAssets(file, existing => [...existing.filter(e => !incoming.has(key(e))), ...entries]);
 }
 
 export function updateAssets(file: string, fn: (entries: AssetEntry[]) => AssetEntry[]) {
-  withLock(file, () => writeAssets(file, fn(readAssets(file))));
+  rewriteAssets(file, fn);
 }
 
 // Local file paths in a request body, rewritten relative to the log (and back).
