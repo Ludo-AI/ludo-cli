@@ -53,7 +53,10 @@ credits, then `ludo topup --credits <n> --no-wait` prints a payment link for the
    `files[].absolute_path` is the same file as an absolute path). Result URLs expire after 7 days, so use the
    saved files, not the URLs, in the user's project.
 5. Every generation costs credits. Do not loop on generations or retry failures blindly; exit code 6
-   means the job failed and its credits were refunded. Before a large batch, check the balance with
+   means the job failed and its credits were refunded. Retry a failed job on the model it used, not on
+   another model as a fallback: models differ in resolution and look (a Hydra retry of a failed Griffin
+   job comes back at about half the resolution). On sprite animation, leave `--model` out unless the
+   user or `ludo docs` guidance calls for another model: the default (Hydra) is the one to start with. Before a large batch, check the balance with
    `ludo account`, and the price with `--dry-run`. Cap a command with `--max-credits <n>`.
    Exit code 11 means the spending budget is reached: stop, tell the user (`ludo spend`), and ask.
 6. Exit code 5 means not enough credits, or a plan without API access. Do not retry: tell the user, and
