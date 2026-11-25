@@ -159,10 +159,18 @@ export const BUILTIN_HELP: Record<string, string> = {
     ""
   ].join("\n"),
   update: [
-    "Usage: ludo update",
+    "Usage: ludo update [--auto on|off]",
     "",
     "Updates ludo with npm install -g @ludoai/cli@latest. Outside an interactive terminal it prints",
     "the command instead of running it.",
+    "",
+    "Automatic updates are on by default: when a newer version is out, ludo installs it in the",
+    "background after a command, and the next command runs it. This happens only for a global npm",
+    "install you can write to without sudo, never in CI, and at most once a day.",
+    "  --auto off   turn automatic updates off (saved for this user)",
+    "  --auto on    turn them back on",
+    "  --auto       say whether they are on",
+    "LUDO_AUTO_UPDATE=0 (or 1) overrides the saved setting for one shell.",
     ""
   ].join("\n"),
   spec: [

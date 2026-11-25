@@ -13,8 +13,10 @@ import { CliError, EXIT } from "./errors.js";
 //
 // Headers are collected while the command runs and printed once, on stderr,
 // when it ends, so they never interleave with a spinner or land on stdout.
-// The update line shows at most once a day and each notice at most every six
-// hours (critical ones every run), remembered in the config dir.
+// Each notice shows at most every six hours (critical ones every run),
+// remembered in the config dir. When a newer CLI is out, auto-update.ts either
+// installs it in the background (and this says so) or, where it can't, the
+// update line shows once a day at a terminal and on every run for agents.
 
 export interface Notice {
   id: string;
@@ -25,6 +27,19 @@ export interface Notice {
 
 let latest: string | undefined;
 const notices = new Map<string, Notice>();
+
+// What auto-update.ts decided this run (see UpdateInfo there).
+export interface UpdateNote {
+  started?: boolean;
+  everyRun?: boolean;
+  failed?: string;
+  updated?: string;
+}
+let update: UpdateNote = {};
+
+export function noteUpdate(info: UpdateNote) {
+  update = info;
+}
 
 const UPDATE_EVERY_MS = 24 * 60 * 60 * 1000;
 const NOTICE_EVERY_MS = 6 * 60 * 60 * 1000;
@@ -113,7 +128,12 @@ function writeState(state: State) {
 }
 
 // The lines to print now, and the state that remembers them. Pure, for tests.
-export function pendingLines(state: State, now: number, quiet: boolean, found = { latest, notices: [...notices.values()] }): { lines: string[]; state: State } {
+export function pendingLines(
+  state: State,
+  now: number,
+  quiet: boolean,
+  found: { latest?: string; notices: Notice[]; update?: UpdateNote } = { latest, notices: [...notices.values()], update }
+): { lines: string[]; state: State } {
   const next: State = { ...state, notices: { ...(state.notices || {}) } };
   const lines: string[] = [];
   for (const n of found.notices) {
@@ -124,18 +144,30 @@ export function pendingLines(state: State, now: number, quiet: boolean, found = 
   }
   // Forget notices nobody has sent for a week.
   for (const [id, at] of Object.entries(next.notices!)) if (now - at > 7 * UPDATE_EVERY_MS) delete next.notices![id];
-  if (!quiet && found.latest && compareVersions(found.latest, VERSION) > 0 && now - (state.update_notice_at || 0) >= UPDATE_EVERY_MS) {
-    lines.push(`Update available: ludo ${VERSION} → ${found.latest}. Run \`ludo update\` (npm install -g @ludoai/cli@latest).`);
-    next.update_notice_at = now;
+  const u = found.update || {};
+  if (!quiet && u.updated) lines.push(`ludo was updated to ${u.updated} automatically.`);
+  if (!quiet && found.latest && compareVersions(found.latest, VERSION) > 0) {
+    if (u.started) {
+      lines.push(`Updating ludo ${VERSION} → ${found.latest} in the background; the next command runs the new version. To turn automatic updates off: ludo update --auto off`);
+      next.update_notice_at = now;
+    } else if (u.everyRun || now - (state.update_notice_at || 0) >= UPDATE_EVERY_MS) {
+      lines.push(
+        u.failed
+          ? `Update available: ludo ${VERSION} → ${found.latest}. The automatic update failed (${u.failed}); update with: npm install -g @ludoai/cli@latest`
+          : `Update available: ludo ${VERSION} → ${found.latest}. Run \`ludo update\` (npm install -g @ludoai/cli@latest).`
+      );
+      next.update_notice_at = now;
+    }
   }
   return { lines, state: next };
 }
 
 export function flushNotes(quiet: boolean) {
-  if (!latest && !notices.size) return;
+  if (!latest && !notices.size && !update.updated) return;
   const { lines, state } = pendingLines(readState(), Date.now(), quiet);
   latest = undefined;
   notices.clear();
+  update = {};
   if (!lines.length) return;
   process.stderr.write(lines.join("\n") + "\n");
   writeState(state);

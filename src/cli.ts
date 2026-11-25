@@ -14,7 +14,8 @@ import { armTelemetry, forgetFact, noteFact, sendTelemetry, triedName } from "./
 import { CliError, EXIT, localFsError, specMismatch } from "./errors.js";
 import { makeCtx, printJson, runBatch, runCommand, runJobWait, type Ctx } from "./generate.js";
 import { agentHelp, BUILTIN_HELP, commandHelp, groupHelp, mainHelp } from "./help.js";
-import { flushNotes, latestVersion } from "./notices.js";
+import { flushNotes, latestVersion, noteUpdate } from "./notices.js";
+import { autoUpdateEnabled, backgroundInstall, maybeAutoUpdate } from "./auto-update.js";
 import { loadProject } from "./project.js";
 import { embeddedSpecPath, loadSpec } from "./spec.js";
 import { parseGrid, previewFile, previewSkipped } from "./tty/preview.js";
@@ -548,7 +549,28 @@ async function billing(ctx: Ctx): Promise<number> {
 // `ludo update`: runs the npm install for a person at a terminal; anyone else
 // (an agent, a script) gets the command, since replacing a global install can
 // need sudo and should not happen in the middle of someone else's task.
-async function update(ctx: Ctx): Promise<number> {
+// Automatic background updates (auto-update.ts) cover agents where that is safe.
+// `--auto on|off` turns those on or off; `--background-install <version>` is
+// the detached child they run.
+async function update(ctx: Ctx, parsed: Parsed): Promise<number> {
+  const flag = (name: string) => parsed.flags.get(name)?.find(v => v !== "\u0000flag");
+  const background = flag("--background-install");
+  if (background) return backgroundInstall(background);
+  if (parsed.flags.has("--auto")) {
+    const value = (flag("--auto") || "").toLowerCase();
+    if (value && !["on", "off"].includes(value)) throw new CliError("--auto takes on or off", EXIT.USAGE);
+    const config = readConfig();
+    if (value === "off") writeConfig({ ...config, auto_update: false });
+    if (value === "on") {
+      const { auto_update: _, ...rest } = config;
+      writeConfig(rest);
+    }
+    const enabled = autoUpdateEnabled();
+    const env = process.env.LUDO_AUTO_UPDATE ? ` (LUDO_AUTO_UPDATE=${process.env.LUDO_AUTO_UPDATE} decides for this shell)` : "";
+    if (ctx.jsonOut) printJson({ auto_update: enabled }, false);
+    else process.stdout.write(`Automatic updates are ${enabled ? "on" : "off"}${env}.\n`);
+    return EXIT.OK;
+  }
   const command = "npm install -g @ludoai/cli@latest";
   const human = process.stdin.isTTY && process.stdout.isTTY && !isAgent() && !process.env.CI && !ctx.globals.json;
   if (!human) {
@@ -669,7 +691,7 @@ async function main(argv: string[]): Promise<number> {
   if (first === "topup") return topup(ctx, parsed);
   if (first === "pricing") return pricing(ctx);
   if (first === "feedback") return feedback(ctx, parsed, words.slice(1));
-  if (first === "update") return update(ctx);
+  if (first === "update") return update(ctx, parsed);
   if (first === "init") return init(ctx, parsed);
   // Free and offline: dispatched before the API spec is loaded.
   if (first === "toolbox") return toolbox(ctx, parsed, argv, label => (commandLabel = label));
@@ -819,9 +841,19 @@ function finish(code: number) {
   setTimeout(() => process.exit(code), 3000).unref();
 }
 
+// Starts an automatic update when one is due; never fails the command that ran.
+function checkForUpdate() {
+  try {
+    noteUpdate(maybeAutoUpdate(commandLabel || "", latestVersion()));
+  } catch {
+    // The next run checks again.
+  }
+}
+
 run(process.argv.slice(2)).then(
   async code => {
     refreshSkills();
+    checkForUpdate();
     flushNotes(quietRun);
     await sendTelemetry(commandLabel, code, startedAt, argvForTelemetry);
     finish(code);
@@ -830,6 +862,7 @@ run(process.argv.slice(2)).then(
     err = localFsError(err) || err;
     const json = process.argv.includes("--json") || !process.stdout.isTTY;
     refreshSkills();
+    checkForUpdate();
     flushNotes(quietRun);
     if (err instanceof CliError) {
       if (json) printJson({ error: { message: err.message, exit_code: err.exitCode, hint: err.hint, details: err.details } }, false);

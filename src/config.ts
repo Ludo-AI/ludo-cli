@@ -53,6 +53,8 @@ interface StoredConfig {
   // `ludo signup --continue` can pick it up. expires_at (ms) is the link's.
   pending_signup?: { device_code: string; checkout_url: string; email: string; expires_at: number; interval?: number; api_url?: string };
   pending_topup?: { session_id: string; checkout_url: string; credits: number; expires_at: number; api_url?: string };
+  // false after `ludo update --auto off`: no automatic updates (auto-update.ts).
+  auto_update?: boolean;
 }
 
 function configFile(): string {

@@ -118,9 +118,9 @@ after(() => server.close());
 
 const tmp = (name = "ludo-proj-") => fs.mkdtempSync(path.join(os.tmpdir(), name));
 
-function run(args, { cwd = tmp(), env = {}, input } = {}) {
+function run(args, { cwd = tmp(), env = {}, input, cli = CLI } = {}) {
   return new Promise(resolve => {
-    const child = spawn(process.execPath, [CLI, ...args], {
+    const child = spawn(process.execPath, [cli, ...args], {
       cwd,
       env: {
         ...process.env,
@@ -148,7 +148,8 @@ function run(args, { cwd = tmp(), env = {}, input } = {}) {
 const posts = (from, p) => seen.slice(from).filter(s => s.method === "POST" && s.path === p);
 const reset = () => Object.assign(headers, { latest: undefined, min: undefined, notice: undefined });
 
-test("an update notice shows once a day, on stderr only, and never with --quiet", async () => {
+test("where ludo can't update itself, an agent sees the update notice on every run, on stderr only, never with --quiet", async () => {
+  // This checkout is not a global npm install, so it can't update itself.
   headers.latest = "9.0.0";
   const cwd = tmp();
   const first = await run(["audio", "sound-effect", "--description", "boom"], { cwd });
@@ -156,9 +157,135 @@ test("an update notice shows once a day, on stderr only, and never with --quiet"
   assert.match(first.stderr, new RegExp(`Update available: ludo ${esc(VERSION)} → 9\\.0\\.0`));
   assert.doesNotMatch(first.stdout, /Update available/);
   const second = await run(["audio", "sound-effect", "--description", "boom"], { cwd });
-  assert.doesNotMatch(second.stderr, /Update available/);
+  assert.match(second.stderr, /Update available/);
   const quiet = await run(["audio", "sound-effect", "--description", "boom", "--quiet"]);
   assert.doesNotMatch(quiet.stderr, /Update available/);
+  reset();
+});
+
+test("with automatic updates turned off, the update notice shows once a day", async () => {
+  headers.latest = "9.0.0";
+  const cwd = tmp();
+  const off = await run(["update", "--auto", "off"], { cwd });
+  assert.equal(off.code, 0, off.stderr);
+  assert.equal(JSON.parse(off.stdout).auto_update, false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(cwd, ".config", "config.json"), "utf8")).auto_update, false);
+  const first = await run(["audio", "sound-effect", "--description", "boom"], { cwd });
+  assert.match(first.stderr, /Update available/);
+  const second = await run(["audio", "sound-effect", "--description", "boom"], { cwd });
+  assert.doesNotMatch(second.stderr, /Update available/);
+  const on = await run(["update", "--auto", "on"], { cwd });
+  assert.equal(JSON.parse(on.stdout).auto_update, true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(cwd, ".config", "config.json"), "utf8")).auto_update, undefined);
+  assert.equal(JSON.parse((await run(["update", "--auto"], { cwd, env: { LUDO_AUTO_UPDATE: "0" } })).stdout).auto_update, false);
+  assert.equal((await run(["update", "--auto", "maybe"], { cwd })).code, 2);
+  reset();
+});
+
+// A copy of this package laid out like `npm install -g` leaves it, with a fake
+// npm on the PATH that answers `npm root -g` and "installs" by bumping the
+// copy's version, as a real update would.
+function fakeGlobalInstall() {
+  const prefix = tmp("ludo-global-");
+  const root = path.join(prefix, "lib", "node_modules", "@ludoai", "cli");
+  fs.mkdirSync(root, { recursive: true });
+  for (const name of ["dist", "spec", "skills", "package.json"]) {
+    fs.cpSync(new URL(`../${name}`, import.meta.url).pathname, path.join(root, name), { recursive: true });
+  }
+  const bin = path.join(prefix, "bin");
+  fs.mkdirSync(bin);
+  const npm = path.join(bin, "npm");
+  fs.writeFileSync(
+    npm,
+    `#!${process.execPath}
+const fs = require("fs");
+const args = process.argv.slice(2);
+if (args[0] === "root") { console.log(${JSON.stringify(path.join(prefix, "lib", "node_modules"))}); process.exit(0); }
+fs.appendFileSync(${JSON.stringify(path.join(prefix, "npm-calls.log"))}, args.join(" ") + "\\n");
+const at = args.find(a => a.startsWith("@ludoai/cli@"));
+const pkgFile = ${JSON.stringify(path.join(root, "package.json"))};
+const pkg = JSON.parse(fs.readFileSync(pkgFile, "utf8"));
+pkg.version = at.split("@").pop();
+fs.writeFileSync(pkgFile, JSON.stringify(pkg));
+console.log("added 1 package");
+`
+  );
+  fs.chmodSync(npm, 0o755);
+  return { prefix, cli: path.join(root, "dist", "cli.js"), env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, CI: "" } };
+}
+
+async function waitFor(check, ms = 15_000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    const value = check();
+    if (value) return value;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error("timed out");
+}
+
+test("a global npm install updates itself in the background, once, and says so", { skip: process.platform === "win32" }, async () => {
+  headers.latest = "9.0.0";
+  const install = fakeGlobalInstall();
+  const cwd = tmp();
+  const state = () => {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(cwd, ".config", "auto-update.json"), "utf8"));
+    } catch {
+      return undefined;
+    }
+  };
+  const first = await run(["audio", "sound-effect", "--description", "boom"], { cwd, cli: install.cli, env: install.env });
+  assert.equal(first.code, 0, first.stderr);
+  assert.match(first.stderr, new RegExp(`Updating ludo ${esc(VERSION)} → 9\\.0\\.0 in the background`));
+  assert.doesNotMatch(first.stdout, /Updating ludo/);
+  await waitFor(() => state()?.result === "ok");
+  assert.equal(fs.readFileSync(path.join(install.prefix, "npm-calls.log"), "utf8"), "install -g @ludoai/cli@9.0.0 --no-fund --no-audit\n");
+  assert.ok(!fs.existsSync(path.join(cwd, ".config", "auto-update.lock")));
+  // The next command is the new version, and says once that it was updated.
+  headers.latest = "9.0.0";
+  const next = await run(["audio", "sound-effect", "--description", "boom"], { cwd, cli: install.cli, env: install.env });
+  assert.match(next.stderr, /ludo was updated to 9\.0\.0 automatically/);
+  assert.doesNotMatch(next.stderr, /Update available|Updating ludo/);
+  const after = await run(["audio", "sound-effect", "--description", "boom"], { cwd, cli: install.cli, env: install.env });
+  assert.doesNotMatch(after.stderr, /updated to/);
+  // A newer release the same day waits for tomorrow's attempt; meanwhile it's the plain notice.
+  headers.latest = "9.1.0";
+  const sameDay = await run(["audio", "sound-effect", "--description", "boom"], { cwd, cli: install.cli, env: install.env });
+  assert.doesNotMatch(sameDay.stderr, /Updating ludo/);
+  assert.equal(fs.readFileSync(path.join(install.prefix, "npm-calls.log"), "utf8").split("\n").filter(Boolean).length, 1);
+  reset();
+});
+
+test("no automatic update in CI, when turned off, or when the npm on the PATH installs elsewhere", { skip: process.platform === "win32" }, async () => {
+  headers.latest = "9.0.0";
+  const install = fakeGlobalInstall();
+  const calls = () => (fs.existsSync(path.join(install.prefix, "npm-calls.log")) ? fs.readFileSync(path.join(install.prefix, "npm-calls.log"), "utf8") : "");
+  const ci = await run(["audio", "sound-effect", "--description", "boom"], { cli: install.cli, env: { ...install.env, CI: "1" } });
+  assert.doesNotMatch(ci.stderr, /Updating ludo/);
+  const off = await run(["audio", "sound-effect", "--description", "boom"], { cli: install.cli, env: { ...install.env, LUDO_AUTO_UPDATE: "0" } });
+  assert.doesNotMatch(off.stderr, /Updating ludo/);
+  assert.match(off.stderr, /Update available/);
+  assert.equal(calls(), "");
+  // An npm from another Node (nvm, say) would install somewhere else: the child refuses.
+  const other = tmp("ludo-other-npm-");
+  fs.writeFileSync(path.join(other, "npm"), `#!/bin/sh\nif [ "$1" = root ]; then echo /somewhere/else/node_modules; exit 0; fi\necho "$@" >> ${path.join(install.prefix, "npm-calls.log")}\n`);
+  fs.chmodSync(path.join(other, "npm"), 0o755);
+  const cwd = tmp();
+  const elsewhere = await run(["audio", "sound-effect", "--description", "boom"], { cwd, cli: install.cli, env: { ...install.env, PATH: `${other}${path.delimiter}${process.env.PATH}` } });
+  assert.match(elsewhere.stderr, /Updating ludo/);
+  const failed = await waitFor(() => {
+    try {
+      const s = JSON.parse(fs.readFileSync(path.join(cwd, ".config", "auto-update.json"), "utf8"));
+      return s.result === "failed" && s;
+    } catch {
+      return undefined;
+    }
+  });
+  assert.match(failed.error, /installs into \/somewhere\/else\/node_modules/);
+  assert.equal(calls(), "");
+  const later = await run(["audio", "sound-effect", "--description", "boom"], { cwd, cli: install.cli, env: install.env });
+  assert.match(later.stderr, /The automatic update failed \(the npm on the PATH installs into/);
   reset();
 });
 

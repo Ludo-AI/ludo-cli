@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { buildCommands } from "../dist/commands.js";
 import { estimatePrice, modelLabels, parseModelRates } from "../dist/pricing.js";
 import { compareVersions, decodeNotice, pendingLines } from "../dist/notices.js";
+import { autoUpdateEnabled, globalNodeModules, updateDue } from "../dist/auto-update.js";
 import { recordEstimate, recordFinal, totalOf } from "../dist/budget.js";
 import { validateConfig } from "../dist/project.js";
 import { upsertSection } from "../dist/workspace.js";
@@ -50,6 +51,59 @@ test("notices repeat every six hours, critical ones every run, updates once a da
   const later = pendingLines(first.state, now + 7 * 3600_000, false, found);
   assert.equal(later.lines.length, 2);
   assert.deepEqual(pendingLines({}, now, true, found).lines, ["⚠ Ludo: down"]);
+});
+
+test("update lines: a background update says so, agents get the notice every run, a failure says why", () => {
+  const now = 1_000_000_000_000;
+  const at = (update, state = {}) => pendingLines(state, now, false, { latest: "9.9.9", notices: [], update }).lines;
+  assert.match(at({ started: true })[0], /^Updating ludo .* → 9\.9\.9 in the background; .*ludo update --auto off$/);
+  const shown = { update_notice_at: now - 60_000 };
+  assert.deepEqual(at({}, shown), []);
+  assert.match(at({ everyRun: true }, shown)[0], /^Update available: /);
+  assert.match(at({ everyRun: true, failed: "npm install exited with 1" }, shown)[0], /The automatic update failed \(npm install exited with 1\); update with: npm install -g @ludoai\/cli@latest/);
+  assert.deepEqual(pendingLines({}, now, false, { notices: [], update: { updated: "9.9.9" } }).lines, ["ludo was updated to 9.9.9 automatically."]);
+  assert.deepEqual(pendingLines({}, now, true, { latest: "9.9.9", notices: [], update: { started: true, updated: "1.0.0" } }).lines, []);
+});
+
+test("automatic updates: on unless turned off, the env var wins, once a day per attempt", () => {
+  assert.equal(autoUpdateEnabled({}, {}), true);
+  assert.equal(autoUpdateEnabled({}, { auto_update: false }), false);
+  assert.equal(autoUpdateEnabled({ LUDO_AUTO_UPDATE: "0" }, {}), false);
+  assert.equal(autoUpdateEnabled({ LUDO_AUTO_UPDATE: "off" }, {}), false);
+  assert.equal(autoUpdateEnabled({ LUDO_AUTO_UPDATE: "1" }, { auto_update: false }), true);
+  const now = 1_000_000_000_000;
+  assert.equal(updateDue({}, "1.2.4", "1.2.3", now), true);
+  assert.equal(updateDue({}, "1.2.3", "1.2.3", now), false);
+  assert.equal(updateDue({}, "1.2.2", "1.2.3", now), false);
+  assert.equal(updateDue({}, "1.3.0-beta.1", "1.2.3", now), false);
+  assert.equal(updateDue({}, undefined, "1.2.3", now), false);
+  assert.equal(updateDue({ attempted_at: now - 3600_000 }, "1.2.4", "1.2.3", now), false);
+  assert.equal(updateDue({ attempted_at: now - 25 * 3600_000 }, "1.2.4", "1.2.3", now), true);
+});
+
+test("automatic updates only for a writable global npm install", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "ludo-layout-"));
+  const make = (...parts) => {
+    const dir = path.join(base, ...parts);
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  };
+  const global = make("prefix", "lib", "node_modules", "@ludoai", "cli");
+  assert.equal(globalNodeModules(global), path.join(base, "prefix", "lib", "node_modules"));
+  // A project's dependency: package.json beside node_modules.
+  const project = make("game", "node_modules", "@ludoai", "cli");
+  fs.writeFileSync(path.join(base, "game", "package.json"), "{}");
+  assert.equal(globalNodeModules(project), undefined);
+  // npx's cache.
+  assert.equal(globalNodeModules(make("npm-cache", "_npx", "abc123", "node_modules", "@ludoai", "cli")), undefined);
+  // A git checkout or any other layout.
+  assert.equal(globalNodeModules(make("src", "ludo-cli")), undefined);
+  if (process.platform !== "win32" && process.getuid?.() !== 0) {
+    const locked = make("system", "lib", "node_modules", "@ludoai", "cli");
+    fs.chmodSync(path.join(base, "system", "lib", "node_modules"), 0o555);
+    assert.equal(globalNodeModules(locked), undefined);
+    fs.chmodSync(path.join(base, "system", "lib", "node_modules"), 0o755);
+  }
 });
 
 test("model price tables parse into rates, minimums and durations", () => {
