@@ -89,6 +89,19 @@ again. An animation's `id` goes as `--animation-id` wherever `--preset-id` goes:
 `ludo sprite transfer-motion` (onto a 2D sprite, with `--perspective` and `--direction`).
 `--mirror` plays a preset or an animation on the other side, left and right swapped.
 
+## 3D models: pick the model, export for the engine
+
+`ludo model create --image <img>` takes `--model prop` (the default, low-cost), `hero` (far more
+detailed, dearer) or `low-poly` (clean quad meshes of up to 10,000 faces). `--back-image` (the
+same subject seen from directly behind) sets the back of the model on any of them, and
+`--rig true` rigs it in the same call. The result is a GLB.
+`ludo model export --model <glb> --format fbx|obj|stl|ply|off` (free) converts it: `fbx` and `obj`
+come as a zip with the texture maps, and keep the quads of a low-poly model, which a GLB stores as
+triangles. For a rigged model, `--format fbx` or `--format glb` with
+`--animations '[{"animation_url":"<clip glb_url>","name":"walk"}]'` writes the clips into the one
+file. Pass only clips `ludo model animate` or `ludo model animate-preset` made for that model: a
+clip made for another model is refused.
+
 ## Free tools: `ludo toolbox`
 
 Free and offline, with no account and no login. `ludo toolbox` lists every tool and each has `--help`.
