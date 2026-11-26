@@ -177,7 +177,11 @@ export function accountSummary(account: any): string {
   } else if (c.team_pool) {
     lines.push("Auto top-up: managed by your team owner");
   }
-  if (account?.billing_url) {
+  if (c.team_pool) {
+    // The team owner's pool: a member can neither buy credits nor set auto
+    // top-up (the top-up endpoints refuse them), so point at the owner.
+    lines.push("Credits are bought by your team owner");
+  } else if (account?.billing_url) {
     lines.push("Buy credits: `ludo topup --credits <n>`");
     lines.push(`Change plan or auto top-up: ${account.billing_url}`);
   }

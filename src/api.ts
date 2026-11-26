@@ -130,7 +130,7 @@ export function apiError(res: ApiResponse): CliError {
   if (res.status === 402) {
     hint = /API access/i.test(String(message))
       ? "Your plan does not include API access (Pro and Studio do): `ludo pricing` compares the plans, `ludo billing` changes plan."
-      : "Not enough credits. Buy credits or set up auto top-up with `ludo billing`; `ludo account` shows your balance.";
+      : "Not enough credits. Buy credits with `ludo topup` or set up auto top-up with `ludo billing` (on a team plan, your team owner does); `ludo account` shows your balance.";
   }
   if (res.status === 429) {
     if (b?.code === "PENDING_JOBS_LIMIT") hint = "Too many jobs queued at once; wait for some to finish (`ludo jobs list`).";

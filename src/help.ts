@@ -359,6 +359,7 @@ input it cannot use.
   \`ludo topup --credits <n> --no-wait\` prints a payment link for the user to pay, or, if the user told you
   to pay and uses Link, \`ludo topup --credits <n> --quote\` prints the one-time \`link-cli\` command and
   \`ludo topup --credits <n> --payment-token -\` pays it. Ask how many credits; never buy unasked.
+  If \`ludo account\` shows "(team pool)", only the team owner can buy credits: tell the user to ask them.
 - Before advising a user to sign up, upgrade or buy credits, run \`ludo pricing\` (free, no login): the plans,
   what each includes, what calls cost, and the rules (generating here needs Pro or Studio, and costs credits
   on every plan). Quote it rather than guessing prices.
