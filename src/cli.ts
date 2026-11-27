@@ -21,7 +21,7 @@ import { embeddedSpecPath, loadSpec } from "./spec.js";
 import { parseGrid, previewFile, previewSkipped } from "./tty/preview.js";
 import { logo } from "./tty/flair.js";
 import { installSkill, isInstalled, refreshSkills, skillTarget, uninstallSkill } from "./skill.js";
-import { accountLine, accountSummary, agentName, billingUrlFor, browserLogin, canOpenBrowser, isAgent, openBrowser, webUrlFor } from "./login.js";
+import { accountLine, accountSummary, agentName, billingUrlFor, browserLogin, canOpenBrowser, isAgent, openBrowser, showLogin, startLogin, waitForLogin, webUrlFor } from "./login.js";
 import { assets, BATCH_HELP, init, loadBatch, spend } from "./workspace.js";
 import { toolbox } from "./toolbox/index.js";
 import { pricing } from "./pricing-guide.js";
@@ -61,23 +61,65 @@ async function fetchAccount(apiUrl: string, key: string): Promise<any | undefine
 // `ludo login` opens the browser login. `ludo login --with-key` (key from the
 // prompt or stdin), `ludo login <key>` and `--api-key <key>` save a key
 // instead, for CI and machines without a browser.
+// `ludo login --no-wait` prints the link and returns, and `ludo login
+// --continue` collects the key once it is approved: for agents, whose user
+// sees nothing of a command until it ends, so a waiting login timed out.
 async function login(ctx: Ctx, parsed: Parsed, words: string[]): Promise<number> {
-  const apiUrl = resolveApiUrl(parsed.globals.apiUrl);
-  let key = parsed.globals.apiKey || words[0];
-  const pasted = !!key || flagSet(parsed, "--with-key");
+  let apiUrl = resolveApiUrl(parsed.globals.apiUrl);
+  const log = (msg: string) => process.stderr.write(msg + "\n");
+  const forgetPending = () => {
+    const rest = { ...readConfig() };
+    delete rest.pending_login;
+    writeConfig(rest);
+  };
+  const continuing = flagSet(parsed, "--continue");
+  if (!parsed.globals.wait && !continuing && !parsed.globals.apiKey && !words[0] && !flagSet(parsed, "--with-key")) {
+    const started = await startLogin(apiUrl);
+    const expiresIn = started.expires_in || 600;
+    writeConfig({
+      ...readConfig(),
+      // api_url always: --continue must poll the server that issued the code.
+      pending_login: { device_code: started.device_code, user_code: started.user_code, url: started.verification_url_complete, expires_at: Date.now() + expiresIn * 1000, interval: started.interval, api_url: apiUrl }
+    });
+    if (ctx.jsonOut) {
+      printJson({ ok: true, status: "pending", url: started.verification_url_complete, code: started.user_code, expires_in: expiresIn, next: "ludo login --continue" }, false);
+    } else {
+      showLogin(started, log);
+      if (!process.stdout.isTTY) process.stdout.write(`${started.verification_url_complete}\n`);
+    }
+    log(`No Ludo account yet? You can sign up on that page. Once it is approved, run \`ludo login --continue\` (the code works for ${Math.round(expiresIn / 60)} minutes).`);
+    return EXIT.OK;
+  }
+  let key = continuing ? undefined : parsed.globals.apiKey || words[0];
+  const pasted = !continuing && (!!key || flagSet(parsed, "--with-key"));
+  if (continuing) {
+    const pending = readConfig().pending_login;
+    if (!pending?.device_code) throw new CliError("There is no login waiting", EXIT.USAGE, "Start one with `ludo login --no-wait`.");
+    apiUrl = pending.api_url || apiUrl;
+    try {
+      // Approved already, as a rule: give the browser a short grace if not.
+      ({ key } = await waitForLogin(apiUrl, pending.device_code, Math.min(pending.expires_at || 0, Date.now() + 60_000), pending.interval));
+    } catch (err) {
+      if (err instanceof CliError && err.exitCode === EXIT.TIMEOUT && Date.now() < (pending.expires_at || 0)) {
+        throw new CliError("The login is not approved yet", EXIT.TIMEOUT, `Ask the user to open ${pending.url} and approve code ${pending.user_code}, then run \`ludo login --continue\` again.`);
+      }
+      if (!(err instanceof CliError && err.exitCode === EXIT.RATE_LIMITED)) forgetPending();
+      throw err;
+    }
+    forgetPending();
+  }
   if (!key && flagSet(parsed, "--with-key")) {
     const given = parsed.flags.get("--with-key")?.find(v => v !== "\u0000flag");
     key = given || (await promptSecret("Ludo API key: "));
     if (!key) throw new CliError("No key given", EXIT.USAGE);
   }
 
-  if (key) {
+  if (key && !continuing) {
     const res = await new Api(apiUrl, key).request("GET", "/auth/validate-api-key");
     if (res.status === 402) throw new CliError("That key is valid, but your plan has no API access", EXIT.CREDITS, `Change plan at ${billingUrlFor(apiUrl)}`);
     if (res.status < 200 || res.status >= 300) throw new CliError("That API key was rejected", EXIT.AUTH);
-  } else {
+  } else if (!continuing) {
     // Progress goes to stderr even with --quiet: the person needs the URL.
-    const log = (msg: string) => process.stderr.write(msg + "\n");
     const noBrowser = flagSet(parsed, "--no-browser");
     ({ key } = await browserLogin(apiUrl, { log, openBrowser: !noBrowser && canOpenBrowser() }));
   }
@@ -669,6 +711,17 @@ async function run(argv: string[]): Promise<number> {
   }
 }
 
+// What agents tried for `ludo account` before it existed under these names
+// (telemetry `tried`, Nov 19-26 2026): credits 29, whoami 16, auth status 11,
+// balance 7, account balance 5, account credits 3. Returns how many words
+// the alias takes, or 0.
+function accountAlias(words: string[]): number {
+  const [a, b] = words;
+  if ((a === "auth" && b === "status") || (a === "account" && (b === "balance" || b === "credits"))) return 2;
+  if (a === "credits" || a === "balance" || a === "whoami") return 1;
+  return 0;
+}
+
 async function main(argv: string[]): Promise<number> {
   const parsed = parseArgv(argv);
   const { globals, words } = parsed;
@@ -681,6 +734,8 @@ async function main(argv: string[]): Promise<number> {
     return EXIT.OK;
   }
   if (first === "version" || argv.includes("--version") || argv.includes("-v")) {
+    // Named for `ludo --version` too: it went out as "unknown" until 0.4.3.
+    commandLabel = "version";
     process.stdout.write(`${VERSION}\n`);
     return EXIT.OK;
   }
@@ -773,6 +828,12 @@ async function main(argv: string[]): Promise<number> {
 
   const groups = groupsOf(commands);
   let { command, consumed } = findCommand(commands, words);
+  // Names agents guess for the balance: `account show`.
+  if (!command) {
+    const alias = accountAlias(words);
+    const show = alias ? findCommand(commands, ["account", "show"]).command : undefined;
+    if (show) ({ command, consumed } = { command: show, consumed: alias! });
+  }
   // A group with a single command runs it by name alone: `ludo account`.
   if (!command && groups.includes(first) && !second) {
     const only = commands.filter(c => c.group === first && !c.hidden);

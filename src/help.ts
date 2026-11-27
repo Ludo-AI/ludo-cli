@@ -88,10 +88,13 @@ export function mainHelp(commands: Command[]): string {
 export const BUILTIN_HELP: Record<string, string> = {
   login: [
     "Usage: ludo login [--no-browser]",
+    "       ludo login --no-wait            then, once approved: ludo login --continue",
     "       ludo login --with-key [<key>]   (or pipe the key on stdin)",
     "",
     "Logs in through the browser: it opens a page where you log in (or create an account) and approve",
     "this CLI, and waits up to 10 minutes. --no-browser prints the page instead of opening it.",
+    "--no-wait prints the page and code and returns at once; `ludo login --continue` then saves the key",
+    "once the login is approved. That is the way for an agent, whose user sees nothing until a command ends.",
     "--with-key saves an existing API key instead, for CI and machines without a browser.",
     ""
   ].join("\n"),
@@ -339,6 +342,9 @@ input it cannot use.
 - On exit code 3 (no or rejected key), do not ask the user to paste a key into the chat. Ask them to run
   \`ludo login\` in their own terminal: it opens the browser, where they log in or create an account and
   pick a plan with API access if needed. It waits up to 10 minutes for them to approve.
+- If you run the login yourself, never run a bare \`ludo login\`: your user cannot see its link while it
+  waits. Run \`ludo login --no-wait\`, give the user the link and code it prints, and once they say they
+  approved it, run \`ludo login --continue\` to save the key.
 - Every generation costs credits; \`--help\` shows the price. \`ludo account\` shows the balance, plan and
   auto top-up; check it before an expensive batch.
 - A user with no Ludo account can get one without the web app: \`ludo signup --email <address> --plan <id>

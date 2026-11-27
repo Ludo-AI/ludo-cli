@@ -1108,6 +1108,57 @@ test("signup --help prints usage and starts nothing", async () => {
   assert.equal(startsSeen(), before);
 });
 
+test("login --no-wait prints the link and returns; --continue saves the key once approved", async () => {
+  loginOutcome = "approved";
+  const started = await run(["login", "--no-wait", "--json"], { LUDO_API_KEY: "" });
+  assert.equal(started.code, 0, started.stderr);
+  const out = JSON.parse(started.stdout);
+  assert.deepEqual([out.status, out.url, out.code, out.next], ["pending", "http://web.test/cli?code=WDJB-MJHT", "WDJB-MJHT", "ludo login --continue"]);
+  assert.equal(configOf(started.cwd).api_key, undefined);
+  assert.equal(configOf(started.cwd).pending_login.device_code, `dev-${process.platform}`);
+  const done = await run(["login", "--continue", "--json"], { LUDO_API_KEY: "" }, started.cwd);
+  assert.equal(done.code, 0, done.stderr);
+  assert.equal(JSON.parse(done.stdout).ok, true);
+  assert.equal(configOf(done.cwd).api_key, "ludo_minted");
+  assert.equal(configOf(done.cwd).key_source, "login");
+  assert.equal(configOf(done.cwd).pending_login, undefined);
+});
+
+test("login --continue with no login waiting is a usage error", async () => {
+  const { code, stderr } = await run(["login", "--continue"], { LUDO_API_KEY: "" });
+  assert.equal(code, 2);
+  assert.match(stderr, /ludo login --no-wait/);
+});
+
+test("a denied login --continue drops the waiting login", async () => {
+  const started = await run(["login", "--no-wait"], { LUDO_API_KEY: "" });
+  assert.equal(started.code, 0, started.stderr);
+  assert.match(started.stderr, /ludo login --continue/);
+  loginOutcome = "denied";
+  const { code, cwd } = await run(["login", "--continue"], { LUDO_API_KEY: "" }, started.cwd);
+  loginOutcome = "approved";
+  assert.equal(code, 3);
+  assert.equal(configOf(cwd).pending_login, undefined);
+  assert.equal(configOf(cwd).api_key, undefined);
+});
+
+test("credits, balance, whoami, auth status, account balance and account credits run account show", async () => {
+  for (const words of [["credits"], ["balance"], ["whoami"], ["auth", "status"], ["account", "balance"], ["account", "credits"]]) {
+    const { code, stdout, stderr } = await run([...words, "--json"]);
+    assert.equal(code, 0, `${words.join(" ")}: ${stderr}`);
+    assert.equal(JSON.parse(stdout).plan.name, "Pro", words.join(" "));
+  }
+});
+
+test("ludo --version is reported as the version command", async () => {
+  const from = seen.length;
+  const { code, stdout } = await run(["--version"], { LUDO_TELEMETRY: "1" });
+  assert.equal(code, 0);
+  assert.match(stdout, /^\d+\.\d+\.\d+/);
+  const [sent] = telemetryEvents(from).map(s => JSON.parse(s.raw).events[0]);
+  assert.equal(sent.command, "version");
+});
+
 test("a denied login exits with the auth code and saves nothing", async () => {
   loginOutcome = "denied";
   const { code, stderr, cwd } = await run(["login"], { LUDO_API_KEY: "" });

@@ -348,6 +348,10 @@ logout` revokes it too.
 On a machine without a browser, open the printed link on any device. For CI, set `LUDO_API_KEY`, or
 save a key with `ludo login --with-key` (it reads the key from a prompt or stdin).
 
+A coding agent logs in in two steps, because you see nothing of a command it runs until the command
+ends: `ludo login --no-wait` prints the link and code and returns, and after you approve it,
+`ludo login --continue` saves the key. The code works for 10 minutes.
+
 ## Signing up from the terminal
 
 No Ludo account yet? `ludo signup` creates one and subscribes it to a plan in one payment, without

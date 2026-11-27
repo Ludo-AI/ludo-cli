@@ -83,32 +83,42 @@ export interface LoginResult {
   key: string;
 }
 
-// Runs the browser login and resolves with the new CLI key.
-export async function browserLogin(apiUrl: string, opts: { log: (msg: string) => void; openBrowser: boolean }): Promise<LoginResult> {
+export interface LoginStart {
+  device_code: string;
+  user_code: string;
+  verification_url_complete: string;
+  expires_in?: number;
+  interval?: number;
+}
+
+// Asks the API for a login code. Nothing waits on it yet.
+export async function startLogin(apiUrl: string): Promise<LoginStart> {
   const api = new Api(apiUrl, undefined);
-  const { body: started } = await api.call("POST", "/cli/auth/start", {
+  const { body } = await api.call("POST", "/cli/auth/start", {
     body: { platform: process.platform, client_version: VERSION }
   });
+  return body;
+}
 
-  opts.log("To log in, open this page and check the code matches:");
-  opts.log(`\n  ${started.verification_url_complete}\n\n  Code: ${started.user_code}\n`);
-  if (opts.openBrowser && openBrowser(started.verification_url_complete)) {
-    opts.log("Opened it in your browser. Waiting for you to approve…");
-  } else {
-    opts.log("Waiting for you to approve…");
-  }
-  opts.log("No Ludo account yet? You can sign up on that page.");
+export function showLogin(started: LoginStart, log: (msg: string) => void) {
+  log("To log in, open this page and check the code matches:");
+  log(`\n  ${started.verification_url_complete}\n\n  Code: ${started.user_code}\n`);
+}
 
-  const deadline = Date.now() + (started.expires_in || 600) * 1000;
-  const baseInterval = Math.max(0.01, started.interval || 3) * 1000;
+// Polls a login code until it is approved (resolves with the key), denied,
+// or past its deadline. The person may still be in the browser meanwhile.
+export async function waitForLogin(apiUrl: string, deviceCode: string, deadline: number, intervalS?: number): Promise<LoginResult> {
+  const api = new Api(apiUrl, undefined);
+  const baseInterval = Math.max(0.01, intervalS || 3) * 1000;
   let interval = baseInterval;
   let rateLimited = 0;
   let unreachable = 0;
-  while (Date.now() < deadline) {
+  // At least one poll, even on a deadline that has just passed.
+  do {
     await sleep(interval);
     let res;
     try {
-      res = await api.request("POST", "/cli/auth/token", { body: { device_code: started.device_code } });
+      res = await api.request("POST", "/cli/auth/token", { body: { device_code: deviceCode } });
     } catch (err) {
       // Wi-Fi handoff, sleep, DNS blip: the person is still in the browser,
       // and the key waits for us until the code expires.
@@ -134,8 +144,29 @@ export async function browserLogin(apiUrl: string, opts: { log: (msg: string) =>
     if (status === "approved" && api_key) return { key: api_key };
     if (status === "denied") throw new CliError("The login was denied in the browser", EXIT.AUTH);
     if (status === "expired") break;
+  } while (Date.now() < deadline);
+  // About a fifth of logins ended here in Nov 2026, many of them run by an
+  // agent whose user never saw the link while the command waited.
+  throw new CliError(
+    "The login code expired before it was approved",
+    EXIT.TIMEOUT,
+    isAgent()
+      ? "Run `ludo login --no-wait`: it prints the link and returns. Give the link to the user, and once they approve it, run `ludo login --continue`."
+      : "Run `ludo login` again."
+  );
+}
+
+// Runs the browser login and resolves with the new CLI key.
+export async function browserLogin(apiUrl: string, opts: { log: (msg: string) => void; openBrowser: boolean }): Promise<LoginResult> {
+  const started = await startLogin(apiUrl);
+  showLogin(started, opts.log);
+  if (opts.openBrowser && openBrowser(started.verification_url_complete)) {
+    opts.log("Opened it in your browser. Waiting for you to approve…");
+  } else {
+    opts.log("Waiting for you to approve…");
   }
-  throw new CliError("The login code expired before it was approved", EXIT.TIMEOUT, "Run `ludo login` again.");
+  opts.log("No Ludo account yet? You can sign up on that page.");
+  return waitForLogin(apiUrl, started.device_code, Date.now() + (started.expires_in || 600) * 1000, started.interval);
 }
 
 // "1,840.5"

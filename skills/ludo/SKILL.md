@@ -17,7 +17,10 @@ It has two kinds of commands:
 Generating needs a prior `ludo login` or an API key in `LUDO_API_KEY`. If a command exits with code 3,
 do not ask for a key in the chat: ask the user to run `ludo login` in their own terminal (in Claude
 Code, `! ludo login`). It opens their browser, where they log in or create an account (and pick a plan
-with API access if needed) and approve the CLI.
+with API access if needed) and approve the CLI. If you run the login yourself, use
+`ludo login --no-wait`: it prints a link and a code and returns, since the user sees nothing of a
+command that is still waiting. Give them the link and, once they say they approved it, run
+`ludo login --continue`. `ludo account` (or `ludo credits`) shows the plan and balance.
 
 If the user has no Ludo account, you can set one up without the web app. Ask them which email to use
 and which plan (`ludo pricing` lists them), never guess either, then run
