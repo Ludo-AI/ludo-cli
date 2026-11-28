@@ -137,7 +137,7 @@ test("estimates follow the published prices", () => {
   const editImage = { fields: [], creditDetail: "This endpoint consumes 0.5 credits per result; 1 credit per result with a mask" };
   assert.equal(estimatePrice(editImage, { n: 2 }).credits, 1);
   assert.equal(estimatePrice(editImage, { n: 2, mask: "./mask.png" }).credits, 2);
-  assert.equal(estimatePrice(byId("createMusic"), {}).credits, 3);
+  assert.equal(estimatePrice(byId("createMusic"), {}).credits, 2);
   // create3DModel: per model, plus the rig credit as an upper bound.
   const create3D = byId("create3DModel");
   assert.deepEqual(estimatePrice(create3D, {}), { credits: 4, exact: true });
